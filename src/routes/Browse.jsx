@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { searchShows } from '../lib/tmdb'
 import { supabase } from '../lib/supabase'
 
-const POSTER_BASE = 'https://image.tmdb.org/t/p/w200'
+const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 const DEBOUNCE_MS = 400
 const UNIQUE_VIOLATION = '23505'
 
