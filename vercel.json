@@ -1,3 +1,6 @@
 {
-  "rewrites": [{ "source": "/:path((?!api/).*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/api/tmdb/:path*", "destination": "/api/tmdb?path=:path*" },
+    { "source": "/:path((?!api/).*)", "destination": "/index.html" }
+  ]
 }
