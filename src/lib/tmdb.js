@@ -1,5 +1,4 @@
-const API_KEY = import.meta.env.VITE_TMDB_API_KEY
-const BASE_URL = 'https://api.themoviedb.org/3'
+const BASE_URL = '/api/tmdb'
 const CACHE_PREFIX = 'tmdb_cache:'
 
 function readCache(key) {
@@ -24,8 +23,7 @@ async function tmdbFetch(path, params = {}) {
   const cached = readCache(cacheKey)
   if (cached) return cached
 
-  const url = new URL(BASE_URL + path)
-  url.searchParams.set('api_key', API_KEY)
+  const url = new URL(BASE_URL + path, window.location.origin)
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value)
   }
