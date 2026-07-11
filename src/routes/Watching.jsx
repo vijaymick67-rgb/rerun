@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 function episodeKey(seasonNumber, episodeNumber) {
   return `${seasonNumber}:${episodeNumber}`
@@ -14,6 +15,10 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
 
+function hasAired(episode) {
+  return Boolean(episode.air_date && episode.air_date <= todayISO())
+}
+
 function formatDate(dateString) {
   if (!dateString) return null
   const date = new Date(dateString + 'T00:00:00')
@@ -22,7 +27,6 @@ function formatDate(dateString) {
 
 // First unwatched episode that has already aired, scanning seasons in order.
 function computeNextUp(episodesBySeason, watched) {
-  const today = todayISO()
   const seasonNumbers = Object.keys(episodesBySeason)
     .map(Number)
     .sort((a, b) => a - b)
@@ -30,7 +34,7 @@ function computeNextUp(episodesBySeason, watched) {
   for (const seasonNumber of seasonNumbers) {
     for (const ep of episodesBySeason[seasonNumber]) {
       const key = episodeKey(seasonNumber, ep.episode_number)
-      if (!watched.has(key) && ep.air_date && ep.air_date <= today) {
+      if (!watched.has(key) && hasAired(ep)) {
         return {
           season_number: seasonNumber,
           episode_number: ep.episode_number,
@@ -48,10 +52,11 @@ export default function Watching() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
-  const [expandedSeasons, setExpandedSeasons] = useState(new Set())
+  const [expandedSeasonByShow, setExpandedSeasonByShow] = useState({})
   const [busyEpisodes, setBusyEpisodes] = useState(new Set())
   const [busySeasons, setBusySeasons] = useState(new Set())
   const [removingIds, setRemovingIds] = useState(new Set())
+  const [confirmingShow, setConfirmingShow] = useState(null)
 
   useEffect(() => {
     let ignore = false
@@ -207,7 +212,9 @@ export default function Watching() {
     if (busySeasons.has(key)) return
     setBusySeasons((prev) => new Set(prev).add(key))
 
-    const episodes = show.episodesBySeason[seasonNumber] ?? []
+    // Only aired episodes can be marked watched — same rule the individual
+    // per-episode toggle enforces.
+    const episodes = (show.episodesBySeason[seasonNumber] ?? []).filter(hasAired)
     const now = new Date().toISOString()
     const rows = episodes.map((ep) => ({
       tmdb_show_id: show.tmdb_id,
@@ -219,10 +226,12 @@ export default function Watching() {
     }))
 
     try {
-      const { error: upsertError } = await supabase
-        .from('watched_episodes')
-        .upsert(rows, { onConflict: 'tmdb_show_id,season_number,episode_number' })
-      if (upsertError) throw upsertError
+      if (rows.length > 0) {
+        const { error: upsertError } = await supabase
+          .from('watched_episodes')
+          .upsert(rows, { onConflict: 'tmdb_show_id,season_number,episode_number' })
+        if (upsertError) throw upsertError
+      }
 
       updateShowWatched(show.tmdb_id, (watched) => {
         const next = new Set(watched)
@@ -238,11 +247,14 @@ export default function Watching() {
     }
   }
 
-  async function handleRemove(show) {
-    const confirmed = window.confirm(
-      `Remove "${show.name}" from Watching? Your watch history won't be deleted.`,
-    )
-    if (!confirmed) return
+  function handleRemove(show) {
+    setConfirmingShow(show)
+  }
+
+  async function confirmRemove() {
+    const show = confirmingShow
+    if (!show) return
+    setConfirmingShow(null)
 
     setRemovingIds((prev) => new Set(prev).add(show.id))
     const { error: deleteError } = await supabase
@@ -267,20 +279,21 @@ export default function Watching() {
       return
     }
     setExpandedId(show.id)
-    const openKey = show.nextUp
-      ? seasonKey(show.tmdb_id, show.nextUp.season_number)
-      : seasonKey(show.tmdb_id, Object.keys(show.episodesBySeason).map(Number).sort((a, b) => a - b)[0])
-    setExpandedSeasons((prev) => new Set(prev).add(openKey))
+    setExpandedSeasonByShow((prev) => {
+      if (prev[show.tmdb_id] !== undefined) return prev
+      const defaultSeason = show.nextUp
+        ? show.nextUp.season_number
+        : Object.keys(show.episodesBySeason).map(Number).sort((a, b) => a - b)[0]
+      return { ...prev, [show.tmdb_id]: defaultSeason }
+    })
   }
 
+  // Accordion: at most one season open per show at a time.
   function toggleSeason(show, seasonNumber) {
-    const key = seasonKey(show.tmdb_id, seasonNumber)
-    setExpandedSeasons((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+    setExpandedSeasonByShow((prev) => ({
+      ...prev,
+      [show.tmdb_id]: prev[show.tmdb_id] === seasonNumber ? null : seasonNumber,
+    }))
   }
 
   return (
@@ -305,17 +318,18 @@ export default function Watching() {
             const seasonNumbers = Object.keys(show.episodesBySeason)
               .map(Number)
               .sort((a, b) => a - b)
+            const expandedSeason = expandedSeasonByShow[show.tmdb_id]
 
             return (
               <div
                 key={show.id}
-                className="overflow-hidden rounded-lg bg-(--color-surface)"
+                className="overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)"
               >
                 <div className="flex gap-3 p-3">
                   <button
                     type="button"
                     onClick={() => toggleExpanded(show)}
-                    className="flex flex-1 gap-3 text-left"
+                    className="flex flex-1 items-center gap-3 text-left"
                   >
                     {show.poster_path ? (
                       <img
@@ -345,6 +359,15 @@ export default function Watching() {
                         <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
                       )}
                     </div>
+
+                    <span
+                      aria-hidden="true"
+                      className={`shrink-0 text-(--color-text-muted) transition-transform ${
+                        isExpanded ? 'rotate-90' : ''
+                      }`}
+                    >
+                      ›
+                    </span>
                   </button>
 
                   <button
@@ -358,9 +381,9 @@ export default function Watching() {
                 </div>
 
                 {isExpanded && (
-                  <div className="border-t border-(--color-border) px-3 pb-3">
+                  <div className="flex flex-col gap-2 border-t border-(--color-border) p-3">
                     {show.loadError && seasonNumbers.length === 0 && (
-                      <p className="pt-3 text-sm text-red-400">
+                      <p className="text-sm text-red-400">
                         Couldn't load episode data for this show.
                       </p>
                     )}
@@ -370,21 +393,36 @@ export default function Watching() {
                       const watchedCount = episodes.filter((ep) =>
                         show.watched.has(episodeKey(seasonNumber, ep.episode_number)),
                       ).length
-                      const isSeasonExpanded = expandedSeasons.has(
-                        seasonKey(show.tmdb_id, seasonNumber),
-                      )
+                      const isSeasonExpanded = expandedSeason === seasonNumber
                       const isSeasonBusy = busySeasons.has(seasonKey(show.tmdb_id, seasonNumber))
-                      const isFullyWatched = watchedCount === episodes.length
+                      const hasUnwatchedAiredEpisodes = episodes.some(
+                        (ep) =>
+                          hasAired(ep) &&
+                          !show.watched.has(episodeKey(seasonNumber, ep.episode_number)),
+                      )
 
                       return (
-                        <div key={seasonNumber} className="border-b border-(--color-border) py-2 last:border-b-0">
+                        <div
+                          key={seasonNumber}
+                          className="overflow-hidden rounded-md bg-(--color-surface-raised)"
+                        >
                           <button
                             type="button"
                             onClick={() => toggleSeason(show, seasonNumber)}
-                            className="flex w-full items-center justify-between py-1 text-left"
+                            className="flex w-full items-center justify-between px-3 py-2 text-left"
                           >
-                            <span className="text-sm font-medium text-(--color-text)">
-                              Season {seasonNumber}
+                            <span className="flex items-center gap-2">
+                              <span
+                                aria-hidden="true"
+                                className={`text-xs text-(--color-text-muted) transition-transform ${
+                                  isSeasonExpanded ? 'rotate-90' : ''
+                                }`}
+                              >
+                                ›
+                              </span>
+                              <span className="text-sm font-medium text-(--color-text)">
+                                Season {seasonNumber}
+                              </span>
                             </span>
                             <span className="text-xs text-(--color-text-muted)">
                               {watchedCount}/{episodes.length}
@@ -392,8 +430,8 @@ export default function Watching() {
                           </button>
 
                           {isSeasonExpanded && (
-                            <div className="mt-2 flex flex-col gap-2">
-                              {!isFullyWatched && (
+                            <div className="flex flex-col gap-2 border-t border-(--color-border) p-2">
+                              {hasUnwatchedAiredEpisodes && (
                                 <button
                                   type="button"
                                   onClick={() => markSeasonWatched(show, seasonNumber)}
@@ -404,46 +442,48 @@ export default function Watching() {
                                 </button>
                               )}
 
-                              {episodes.map((ep) => {
-                                const epKey = episodeKey(seasonNumber, ep.episode_number)
-                                const isWatched = show.watched.has(epKey)
-                                const busyKey = `${show.tmdb_id}:${seasonNumber}:${ep.episode_number}`
-                                const isBusy = busyEpisodes.has(busyKey)
-                                const hasAired = ep.air_date && ep.air_date <= todayISO()
+                              <div className="flex flex-col gap-2 border-l-2 border-(--color-border) pl-2">
+                                {episodes.map((ep) => {
+                                  const epKey = episodeKey(seasonNumber, ep.episode_number)
+                                  const isWatched = show.watched.has(epKey)
+                                  const busyKey = `${show.tmdb_id}:${seasonNumber}:${ep.episode_number}`
+                                  const isBusy = busyEpisodes.has(busyKey)
+                                  const episodeHasAired = hasAired(ep)
 
-                                return (
-                                  <div
-                                    key={ep.episode_number}
-                                    className="flex items-center gap-2 rounded-md bg-(--color-surface-raised) px-3 py-2"
-                                  >
-                                    <div className="min-w-0 flex-1">
-                                      <p className="truncate text-sm text-(--color-text)">
-                                        {ep.episode_number}. {ep.name || 'Untitled'}
-                                      </p>
-                                      <p className="text-xs text-(--color-text-muted)">
-                                        {hasAired
-                                          ? formatDate(ep.air_date)
-                                          : ep.air_date
-                                            ? `Airs ${formatDate(ep.air_date)}`
-                                            : 'No air date'}
-                                      </p>
-                                    </div>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleEpisode(show, seasonNumber, ep)}
-                                      disabled={isBusy || !hasAired}
-                                      className={`shrink-0 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-60 ${
-                                        isWatched
-                                          ? 'bg-(--color-accent) text-(--color-bg)'
-                                          : 'bg-(--color-surface) text-(--color-text-muted)'
-                                      }`}
+                                  return (
+                                    <div
+                                      key={ep.episode_number}
+                                      className="flex items-center gap-2 rounded-md bg-(--color-bg) px-3 py-2"
                                     >
-                                      {isWatched ? 'Watched' : 'Mark watched'}
-                                    </button>
-                                  </div>
-                                )
-                              })}
+                                      <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm text-(--color-text)">
+                                          {ep.episode_number}. {ep.name || 'Untitled'}
+                                        </p>
+                                        <p className="text-xs text-(--color-text-muted)">
+                                          {episodeHasAired
+                                            ? formatDate(ep.air_date)
+                                            : ep.air_date
+                                              ? `Airs ${formatDate(ep.air_date)}`
+                                              : 'No air date'}
+                                        </p>
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleEpisode(show, seasonNumber, ep)}
+                                        disabled={isBusy || !episodeHasAired}
+                                        className={`shrink-0 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-60 ${
+                                          isWatched
+                                            ? 'bg-(--color-accent) text-(--color-bg)'
+                                            : 'bg-(--color-surface-raised) text-(--color-text-muted)'
+                                        }`}
+                                      >
+                                        {isWatched ? 'Watched' : 'Mark watched'}
+                                      </button>
+                                    </div>
+                                  )
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -456,6 +496,21 @@ export default function Watching() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmingShow !== null}
+        title="Remove show?"
+        message={
+          confirmingShow
+            ? `Remove "${confirmingShow.name}" from Watching? Your watch history won't be deleted.`
+            : ''
+        }
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={confirmRemove}
+        onCancel={() => setConfirmingShow(null)}
+      />
     </div>
   )
 }
