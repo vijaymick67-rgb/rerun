@@ -63,9 +63,9 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
 
 ## Current Status
 _(update this after every merge)_
-- [ ] Repo scaffolded
+- [x] Repo scaffolded
 - [ ] TMDB integration working
-- [ ] Search/Browse UI
+- [x] Search/Browse UI
 - [ ] Watched toggle + Supabase
 - [ ] Log view
 - [ ] Stats
