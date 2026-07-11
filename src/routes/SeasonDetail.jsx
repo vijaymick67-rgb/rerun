@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, hasAired, formatDate } from '../lib/watchHelpers'
+import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 
 export default function SeasonDetail() {
   const { tmdbId, seasonNumber } = useParams()
@@ -10,6 +11,7 @@ export default function SeasonDetail() {
   const numericSeasonNumber = Number(seasonNumber)
 
   const [showName, setShowName] = useState('')
+  const [dayShift, setDayShift] = useState(0)
   const [episodes, setEpisodes] = useState(null)
   const [watched, setWatched] = useState(new Set())
   const [loading, setLoading] = useState(true)
@@ -37,6 +39,7 @@ export default function SeasonDetail() {
         if (ignore) return
 
         setShowName(details.name ?? '')
+        setDayShift(dayShiftForNetworks(details.networks))
         setEpisodes(seasonData.episodes)
         setWatched(
           new Set((watchedRows ?? []).map((row) => episodeKey(numericSeasonNumber, row.episode_number))),
@@ -106,7 +109,7 @@ export default function SeasonDetail() {
 
     // Only aired episodes can be marked watched — same rule the individual
     // per-episode toggle enforces (see hasAired() in lib/watchHelpers.js).
-    const airedEpisodes = (episodes ?? []).filter(hasAired)
+    const airedEpisodes = (episodes ?? []).filter((ep) => hasAired(ep, dayShift))
     const now = new Date().toISOString()
     const rows = airedEpisodes.map((ep) => ({
       tmdb_show_id: numericTmdbId,
@@ -136,7 +139,7 @@ export default function SeasonDetail() {
   }
 
   const hasUnwatchedAiredEpisodes = (episodes ?? []).some(
-    (ep) => hasAired(ep) && !watched.has(episodeKey(numericSeasonNumber, ep.episode_number)),
+    (ep) => hasAired(ep, dayShift) && !watched.has(episodeKey(numericSeasonNumber, ep.episode_number)),
   )
 
   return (
@@ -180,7 +183,7 @@ export default function SeasonDetail() {
             const epKey = episodeKey(numericSeasonNumber, ep.episode_number)
             const isWatched = watched.has(epKey)
             const isBusy = busyEpisodes.has(ep.episode_number)
-            const episodeHasAired = hasAired(ep)
+            const episodeHasAired = hasAired(ep, dayShift)
 
             return (
               <div
@@ -193,9 +196,9 @@ export default function SeasonDetail() {
                   </p>
                   <p className="text-xs text-(--color-text-muted)">
                     {episodeHasAired
-                      ? formatDate(ep.air_date)
+                      ? formatDate(ep.air_date, dayShift)
                       : ep.air_date
-                        ? `Airs ${formatDate(ep.air_date)}`
+                        ? `Airs ${formatDate(ep.air_date, dayShift)}`
                         : 'No air date'}
                   </p>
                 </div>

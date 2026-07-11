@@ -1,3 +1,5 @@
+import { shiftAirDate } from './networkReleaseTiming.js'
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export function episodeKey(seasonNumber, episodeNumber) {
@@ -19,19 +21,23 @@ function localTodayISO() {
 // was never validated as a full YYYY-MM-DD before the comparison, so a
 // partial/malformed date (e.g. "2026-07") could sort as "already aired"
 // against a full date even when the real day hadn't happened yet.
-export function hasAired(episode) {
+//
+// dayShift (from networkReleaseTiming.js) corrects TMDB's US air_date to the
+// IST-effective release day for networks/platforms where those differ.
+export function hasAired(episode, dayShift = 0) {
   const airDate = episode.air_date
-  return Boolean(airDate && ISO_DATE_RE.test(airDate) && airDate <= localTodayISO())
+  if (!airDate || !ISO_DATE_RE.test(airDate)) return false
+  return shiftAirDate(airDate, dayShift) <= localTodayISO()
 }
 
-export function formatDate(dateString) {
+export function formatDate(dateString, dayShift = 0) {
   if (!dateString) return null
-  const date = new Date(dateString + 'T00:00:00')
+  const date = new Date(shiftAirDate(dateString, dayShift) + 'T00:00:00')
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 // First unwatched episode that has already aired, scanning seasons in order.
-export function computeNextUp(episodesBySeason, watched) {
+export function computeNextUp(episodesBySeason, watched, dayShift = 0) {
   const seasonNumbers = Object.keys(episodesBySeason)
     .map(Number)
     .sort((a, b) => a - b)
@@ -39,12 +45,12 @@ export function computeNextUp(episodesBySeason, watched) {
   for (const seasonNumber of seasonNumbers) {
     for (const ep of episodesBySeason[seasonNumber]) {
       const key = episodeKey(seasonNumber, ep.episode_number)
-      if (!watched.has(key) && hasAired(ep)) {
+      if (!watched.has(key) && hasAired(ep, dayShift)) {
         return {
           season_number: seasonNumber,
           episode_number: ep.episode_number,
           name: ep.name,
-          air_date: ep.air_date,
+          air_date: shiftAirDate(ep.air_date, dayShift),
         }
       }
     }
