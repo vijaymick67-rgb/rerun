@@ -1,60 +1,14 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
+import { episodeKey, computeNextUp } from '../lib/watchHelpers'
 import ConfirmDialog from '../components/ConfirmDialog'
-
-function episodeKey(seasonNumber, episodeNumber) {
-  return `${seasonNumber}:${episodeNumber}`
-}
-
-function seasonKey(tmdbId, seasonNumber) {
-  return `${tmdbId}:${seasonNumber}`
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function hasAired(episode) {
-  return Boolean(episode.air_date && episode.air_date <= todayISO())
-}
-
-function formatDate(dateString) {
-  if (!dateString) return null
-  const date = new Date(dateString + 'T00:00:00')
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-// First unwatched episode that has already aired, scanning seasons in order.
-function computeNextUp(episodesBySeason, watched) {
-  const seasonNumbers = Object.keys(episodesBySeason)
-    .map(Number)
-    .sort((a, b) => a - b)
-
-  for (const seasonNumber of seasonNumbers) {
-    for (const ep of episodesBySeason[seasonNumber]) {
-      const key = episodeKey(seasonNumber, ep.episode_number)
-      if (!watched.has(key) && hasAired(ep)) {
-        return {
-          season_number: seasonNumber,
-          episode_number: ep.episode_number,
-          name: ep.name,
-          air_date: ep.air_date,
-        }
-      }
-    }
-  }
-  return null
-}
 
 export default function Watching() {
   const [shows, setShows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [expandedId, setExpandedId] = useState(null)
-  const [expandedSeasonByShow, setExpandedSeasonByShow] = useState({})
-  const [busyEpisodes, setBusyEpisodes] = useState(new Set())
-  const [busySeasons, setBusySeasons] = useState(new Set())
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
 
@@ -115,8 +69,6 @@ export default function Watching() {
 
             return {
               ...show,
-              watched,
-              episodesBySeason,
               loadError,
               nextUp: computeNextUp(episodesBySeason, watched),
             }
@@ -146,107 +98,6 @@ export default function Watching() {
     }
   }, [])
 
-  function updateShowWatched(tmdbId, updater) {
-    setShows((prev) =>
-      prev.map((show) => {
-        if (show.tmdb_id !== tmdbId) return show
-        const nextWatched = updater(show.watched)
-        return {
-          ...show,
-          watched: nextWatched,
-          nextUp: computeNextUp(show.episodesBySeason, nextWatched),
-        }
-      }),
-    )
-  }
-
-  async function toggleEpisode(show, seasonNumber, episode) {
-    const key = `${show.tmdb_id}:${seasonNumber}:${episode.episode_number}`
-    if (busyEpisodes.has(key)) return
-    setBusyEpisodes((prev) => new Set(prev).add(key))
-
-    const wasWatched = show.watched.has(episodeKey(seasonNumber, episode.episode_number))
-
-    try {
-      if (wasWatched) {
-        const { error: deleteError } = await supabase
-          .from('watched_episodes')
-          .delete()
-          .eq('tmdb_show_id', show.tmdb_id)
-          .eq('season_number', seasonNumber)
-          .eq('episode_number', episode.episode_number)
-        if (deleteError) throw deleteError
-      } else {
-        const { error: upsertError } = await supabase.from('watched_episodes').upsert(
-          {
-            tmdb_show_id: show.tmdb_id,
-            season_number: seasonNumber,
-            episode_number: episode.episode_number,
-            episode_name: episode.name,
-            runtime_minutes: episode.runtime,
-            watched_at: new Date().toISOString(),
-          },
-          { onConflict: 'tmdb_show_id,season_number,episode_number' },
-        )
-        if (upsertError) throw upsertError
-      }
-
-      updateShowWatched(show.tmdb_id, (watched) => {
-        const next = new Set(watched)
-        const wKey = episodeKey(seasonNumber, episode.episode_number)
-        if (wasWatched) next.delete(wKey)
-        else next.add(wKey)
-        return next
-      })
-    } finally {
-      setBusyEpisodes((prev) => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
-      })
-    }
-  }
-
-  async function markSeasonWatched(show, seasonNumber) {
-    const key = seasonKey(show.tmdb_id, seasonNumber)
-    if (busySeasons.has(key)) return
-    setBusySeasons((prev) => new Set(prev).add(key))
-
-    // Only aired episodes can be marked watched — same rule the individual
-    // per-episode toggle enforces.
-    const episodes = (show.episodesBySeason[seasonNumber] ?? []).filter(hasAired)
-    const now = new Date().toISOString()
-    const rows = episodes.map((ep) => ({
-      tmdb_show_id: show.tmdb_id,
-      season_number: seasonNumber,
-      episode_number: ep.episode_number,
-      episode_name: ep.name,
-      runtime_minutes: ep.runtime,
-      watched_at: now,
-    }))
-
-    try {
-      if (rows.length > 0) {
-        const { error: upsertError } = await supabase
-          .from('watched_episodes')
-          .upsert(rows, { onConflict: 'tmdb_show_id,season_number,episode_number' })
-        if (upsertError) throw upsertError
-      }
-
-      updateShowWatched(show.tmdb_id, (watched) => {
-        const next = new Set(watched)
-        for (const ep of episodes) next.add(episodeKey(seasonNumber, ep.episode_number))
-        return next
-      })
-    } finally {
-      setBusySeasons((prev) => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
-      })
-    }
-  }
-
   function handleRemove(show) {
     setConfirmingShow(show)
   }
@@ -264,36 +115,12 @@ export default function Watching() {
 
     if (!deleteError) {
       setShows((prev) => prev.filter((s) => s.id !== show.id))
-      if (expandedId === show.id) setExpandedId(null)
     }
     setRemovingIds((prev) => {
       const next = new Set(prev)
       next.delete(show.id)
       return next
     })
-  }
-
-  function toggleExpanded(show) {
-    if (expandedId === show.id) {
-      setExpandedId(null)
-      return
-    }
-    setExpandedId(show.id)
-    setExpandedSeasonByShow((prev) => {
-      if (prev[show.tmdb_id] !== undefined) return prev
-      const defaultSeason = show.nextUp
-        ? show.nextUp.season_number
-        : Object.keys(show.episodesBySeason).map(Number).sort((a, b) => a - b)[0]
-      return { ...prev, [show.tmdb_id]: defaultSeason }
-    })
-  }
-
-  // Accordion: at most one season open per show at a time.
-  function toggleSeason(show, seasonNumber) {
-    setExpandedSeasonByShow((prev) => ({
-      ...prev,
-      [show.tmdb_id]: prev[show.tmdb_id] === seasonNumber ? null : seasonNumber,
-    }))
   }
 
   return (
@@ -313,184 +140,59 @@ export default function Watching() {
       {!loading && !error && shows.length > 0 && (
         <div className="mt-4 flex flex-col gap-3">
           {shows.map((show) => {
-            const isExpanded = expandedId === show.id
             const isRemoving = removingIds.has(show.id)
-            const seasonNumbers = Object.keys(show.episodesBySeason)
-              .map(Number)
-              .sort((a, b) => a - b)
-            const expandedSeason = expandedSeasonByShow[show.tmdb_id]
 
             return (
               <div
                 key={show.id}
-                className="overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)"
+                className="flex gap-3 overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface) p-3"
               >
-                <div className="flex gap-3 p-3">
-                  <button
-                    type="button"
-                    onClick={() => toggleExpanded(show)}
-                    className="flex flex-1 items-center gap-3 text-left"
-                  >
-                    {show.poster_path ? (
-                      <img
-                        src={POSTER_BASE + show.poster_path}
-                        alt={show.name}
-                        className="h-24 w-16 shrink-0 rounded-md object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-24 w-16 shrink-0 items-center justify-center rounded-md bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-                        No poster
-                      </div>
-                    )}
-
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-(--color-text)">
-                        {show.name}
-                      </p>
-
-                      {show.nextUp ? (
-                        <p className="mt-1 text-xs text-(--color-accent)">
-                          Up next: S{show.nextUp.season_number}E{show.nextUp.episode_number}
-                          {show.nextUp.name ? ` · ${show.nextUp.name}` : ''}
-                        </p>
-                      ) : show.loadError ? (
-                        <p className="mt-1 text-xs text-red-400">Couldn't load episodes</p>
-                      ) : (
-                        <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
-                      )}
+                <Link
+                  to={`/watching/${show.tmdb_id}`}
+                  className="flex flex-1 items-center gap-3 text-left"
+                >
+                  {show.poster_path ? (
+                    <img
+                      src={POSTER_BASE + show.poster_path}
+                      alt={show.name}
+                      className="h-24 w-16 shrink-0 rounded-md object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-24 w-16 shrink-0 items-center justify-center rounded-md bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
+                      No poster
                     </div>
+                  )}
 
-                    <span
-                      aria-hidden="true"
-                      className={`shrink-0 text-(--color-text-muted) transition-transform ${
-                        isExpanded ? 'rotate-90' : ''
-                      }`}
-                    >
-                      ›
-                    </span>
-                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-(--color-text)">
+                      {show.name}
+                    </p>
 
-                  <button
-                    type="button"
-                    onClick={() => handleRemove(show)}
-                    disabled={isRemoving}
-                    className="h-fit shrink-0 rounded-md px-2 py-1.5 text-xs font-medium text-(--color-text-muted) disabled:opacity-60"
-                  >
-                    {isRemoving ? 'Removing…' : 'Remove'}
-                  </button>
-                </div>
-
-                {isExpanded && (
-                  <div className="flex flex-col gap-2 border-t border-(--color-border) p-3">
-                    {show.loadError && seasonNumbers.length === 0 && (
-                      <p className="text-sm text-red-400">
-                        Couldn't load episode data for this show.
+                    {show.nextUp ? (
+                      <p className="mt-1 text-xs text-(--color-accent)">
+                        Up next: S{show.nextUp.season_number}E{show.nextUp.episode_number}
+                        {show.nextUp.name ? ` · ${show.nextUp.name}` : ''}
                       </p>
+                    ) : show.loadError ? (
+                      <p className="mt-1 text-xs text-red-400">Couldn't load episodes</p>
+                    ) : (
+                      <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
                     )}
-
-                    {seasonNumbers.map((seasonNumber) => {
-                      const episodes = show.episodesBySeason[seasonNumber]
-                      const watchedCount = episodes.filter((ep) =>
-                        show.watched.has(episodeKey(seasonNumber, ep.episode_number)),
-                      ).length
-                      const isSeasonExpanded = expandedSeason === seasonNumber
-                      const isSeasonBusy = busySeasons.has(seasonKey(show.tmdb_id, seasonNumber))
-                      const hasUnwatchedAiredEpisodes = episodes.some(
-                        (ep) =>
-                          hasAired(ep) &&
-                          !show.watched.has(episodeKey(seasonNumber, ep.episode_number)),
-                      )
-
-                      return (
-                        <div
-                          key={seasonNumber}
-                          className="overflow-hidden rounded-md bg-(--color-surface-raised)"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => toggleSeason(show, seasonNumber)}
-                            className="flex w-full items-center justify-between px-3 py-2 text-left"
-                          >
-                            <span className="flex items-center gap-2">
-                              <span
-                                aria-hidden="true"
-                                className={`text-xs text-(--color-text-muted) transition-transform ${
-                                  isSeasonExpanded ? 'rotate-90' : ''
-                                }`}
-                              >
-                                ›
-                              </span>
-                              <span className="text-sm font-medium text-(--color-text)">
-                                Season {seasonNumber}
-                              </span>
-                            </span>
-                            <span className="text-xs text-(--color-text-muted)">
-                              {watchedCount}/{episodes.length}
-                            </span>
-                          </button>
-
-                          {isSeasonExpanded && (
-                            <div className="flex flex-col gap-2 border-t border-(--color-border) p-2">
-                              {hasUnwatchedAiredEpisodes && (
-                                <button
-                                  type="button"
-                                  onClick={() => markSeasonWatched(show, seasonNumber)}
-                                  disabled={isSeasonBusy}
-                                  className="self-start rounded-md bg-(--color-accent-muted) px-3 py-1.5 text-xs font-medium text-(--color-accent) disabled:opacity-60"
-                                >
-                                  {isSeasonBusy ? 'Marking…' : 'Mark season watched'}
-                                </button>
-                              )}
-
-                              <div className="flex flex-col gap-2 border-l-2 border-(--color-border) pl-2">
-                                {episodes.map((ep) => {
-                                  const epKey = episodeKey(seasonNumber, ep.episode_number)
-                                  const isWatched = show.watched.has(epKey)
-                                  const busyKey = `${show.tmdb_id}:${seasonNumber}:${ep.episode_number}`
-                                  const isBusy = busyEpisodes.has(busyKey)
-                                  const episodeHasAired = hasAired(ep)
-
-                                  return (
-                                    <div
-                                      key={ep.episode_number}
-                                      className="flex items-center gap-2 rounded-md bg-(--color-bg) px-3 py-2"
-                                    >
-                                      <div className="min-w-0 flex-1">
-                                        <p className="truncate text-sm text-(--color-text)">
-                                          {ep.episode_number}. {ep.name || 'Untitled'}
-                                        </p>
-                                        <p className="text-xs text-(--color-text-muted)">
-                                          {episodeHasAired
-                                            ? formatDate(ep.air_date)
-                                            : ep.air_date
-                                              ? `Airs ${formatDate(ep.air_date)}`
-                                              : 'No air date'}
-                                        </p>
-                                      </div>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => toggleEpisode(show, seasonNumber, ep)}
-                                        disabled={isBusy || !episodeHasAired}
-                                        className={`shrink-0 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-60 ${
-                                          isWatched
-                                            ? 'bg-(--color-accent) text-(--color-bg)'
-                                            : 'bg-(--color-surface-raised) text-(--color-text-muted)'
-                                        }`}
-                                      >
-                                        {isWatched ? 'Watched' : 'Mark watched'}
-                                      </button>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
                   </div>
-                )}
+
+                  <span aria-hidden="true" className="shrink-0 text-(--color-text-muted)">
+                    ›
+                  </span>
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => handleRemove(show)}
+                  disabled={isRemoving}
+                  className="h-fit shrink-0 rounded-md px-2 py-1.5 text-xs font-medium text-(--color-text-muted) disabled:opacity-60"
+                >
+                  {isRemoving ? 'Removing…' : 'Remove'}
+                </button>
               </div>
             )
           })}
