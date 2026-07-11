@@ -19,7 +19,8 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
 - GitHub: vijaymick67-rgb/rerun (private)
 - Supabase project ref: umzeszalktyudjtnvmus
 - Vercel project: rerun-nine.vercel.app, connected to `main`
-- Env vars (set in Vercel Production + Preview): VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_TMDB_API_KEY
+- Env vars (set in Vercel Production + Preview): VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, TMDB_API_KEY
+  (server-only, no VITE_ prefix — used by the api/tmdb proxy, never exposed to the client)
 
 ## Data Model
 - `tracked_shows`: id, tmdb_id (unique), name, poster_path, added_at
