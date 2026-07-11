@@ -1,6 +1,8 @@
 const BASE_URL = '/api/tmdb'
 const CACHE_PREFIX = 'tmdb_cache:'
 
+export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
+
 function readCache(key) {
   try {
     const raw = localStorage.getItem(CACHE_PREFIX + key)
