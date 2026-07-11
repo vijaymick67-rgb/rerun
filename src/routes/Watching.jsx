@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey, computeNextUp } from '../lib/watchHelpers'
+import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
 
 export default function Watching() {
@@ -53,8 +54,10 @@ export default function Watching() {
             const episodesBySeason = {}
             let loadError = false
 
+            let dayShift = 0
             try {
               const details = await getShowDetails(show.tmdb_id)
+              dayShift = dayShiftForNetworks(details.networks)
               const seasons = (details.seasons ?? [])
                 .filter((season) => season.season_number > 0)
                 .sort((a, b) => a.season_number - b.season_number)
@@ -70,7 +73,7 @@ export default function Watching() {
             return {
               ...show,
               loadError,
-              nextUp: computeNextUp(episodesBySeason, watched),
+              nextUp: computeNextUp(episodesBySeason, watched, dayShift),
             }
           }),
         )

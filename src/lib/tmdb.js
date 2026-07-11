@@ -59,9 +59,16 @@ export async function searchShows(query) {
   return cacheResult(cacheKey, trimmed)
 }
 
-// Full show details including season list (not individual episodes — see getSeasonEpisodes).
+// Full show details including season list (not individual episodes — see
+// getSeasonEpisodes) and network names (used to correct TMDB's US air_date
+// to the IST-effective release day — see lib/networkReleaseTiming.js).
+//
+// Cache key bumped to :v2 so shows cached before `networks` was added here
+// get re-trimmed from the underlying tmdbFetch response (already cached raw
+// — TMDB's /tv/{id} always includes networks — so this is not a new network
+// call) instead of silently missing the field forever.
 export async function getShowDetails(tmdbId) {
-  const cacheKey = `/tv/${tmdbId}`
+  const cacheKey = `/tv/${tmdbId}:v2`
   const cached = readCache(cacheKey)
   if (cached) return cached
 
@@ -75,6 +82,7 @@ export async function getShowDetails(tmdbId) {
     status: data.status,
     number_of_seasons: data.number_of_seasons,
     number_of_episodes: data.number_of_episodes,
+    networks: (data.networks ?? []).map((network) => network.name),
     seasons: (data.seasons ?? []).map((season) => ({
       season_number: season.season_number,
       name: season.name,
