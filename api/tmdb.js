@@ -1,5 +1,10 @@
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
+// Flat function mounted at exactly /api/tmdb. vercel.json rewrites every
+// /api/tmdb/<sub/path> request here, passing the TMDB sub-path in the `path`
+// query param (see the explicit rewrite in vercel.json). `path` may arrive as
+// a string ("search/tv") or, if a native catch-all ever feeds this, an array
+// of segments — both are handled below.
 export default async function handler(req, res) {
   const apiKey = process.env.TMDB_API_KEY
   if (!apiKey) {
