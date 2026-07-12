@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { searchShows, getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
+import { searchShows, getShowDetails, POSTER_BASE } from '../lib/tmdb'
 import { supabase } from '../lib/supabase'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
-import { daysUntil, hasAired } from '../lib/watchHelpers'
+import { daysUntil } from '../lib/watchHelpers'
+import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 
 const DEBOUNCE_MS = 400
 const UNIQUE_VIOLATION = '23505'
@@ -104,8 +105,9 @@ export default function Browse() {
   // "Log as watched" — retroactively log a show finished before using the app,
   // without ticking every episode by hand. Ensures the show is tracked (same
   // UNIQUE_VIOLATION handling as handleAdd), then bulk-marks every already-aired
-  // episode watched. Unaired future episodes are skipped — they don't exist yet
-  // to mark, even though the user is claiming to have "seen the whole show".
+  // episode watched via the shared bulk-mark routine. Unaired future episodes
+  // are skipped — they don't exist yet to mark, even though the user is claiming
+  // to have "seen the whole show".
   async function handleLogWatched(show) {
     setLoggingIds((prev) => new Set(prev).add(show.id))
 
@@ -121,39 +123,8 @@ export default function Browse() {
       }
       setTrackedIds((prev) => new Set(prev).add(show.id))
 
-      const details = await getShowDetails(show.id)
-      const dayShift = dayShiftForNetworks(details.networks)
-      const seasons = (details.seasons ?? [])
-        .filter((season) => season.season_number > 0)
-        .sort((a, b) => a.season_number - b.season_number)
-
-      const episodesArrays = await Promise.all(
-        seasons.map((season) => getSeasonEpisodes(show.id, season.season_number)),
-      )
-
-      const now = new Date().toISOString()
-      const rows = []
-      seasons.forEach((season, i) => {
-        for (const ep of episodesArrays[i].episodes) {
-          if (hasAired(ep, dayShift)) {
-            rows.push({
-              tmdb_show_id: show.id,
-              season_number: season.season_number,
-              episode_number: ep.episode_number,
-              episode_name: ep.name,
-              runtime_minutes: ep.runtime,
-              watched_at: now,
-            })
-          }
-        }
-      })
-
-      if (rows.length > 0) {
-        const { error: upsertError } = await supabase
-          .from('watched_episodes')
-          .upsert(rows, { onConflict: 'tmdb_show_id,season_number,episode_number' })
-        if (upsertError) throw upsertError
-      }
+      const { rows } = await buildAiredEpisodeRows(show.id)
+      await upsertWatchedRows(rows)
 
       setLoggedIds((prev) => new Set(prev).add(show.id))
     } catch {
