@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, computeWatchingStatus, isHiddenFromWatching } from '../lib/watchHelpers'
+import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
@@ -63,11 +64,11 @@ export default function Watching() {
         }
 
         const tmdbIds = trackedShows.map((show) => show.tmdb_id)
-        const { data: watchedRows, error: watchedError } = await supabase
-          .from('watched_episodes')
-          .select('tmdb_show_id, season_number, episode_number')
-          .in('tmdb_show_id', tmdbIds)
-        if (watchedError) throw watchedError
+        const watchedRows = await fetchWatchedEpisodes(
+          supabase,
+          'tmdb_show_id, season_number, episode_number',
+          tmdbIds,
+        )
 
         const watchedByShowId = new Map()
         for (const row of watchedRows ?? []) {

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey, localTodayISO } from '../lib/watchHelpers'
+import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
 // as Watching.jsx — the underlying TMDB season data is already localStorage-
@@ -221,10 +222,10 @@ export default function Stats() {
         // Every distinct show with at least one watched episode ever. A show
         // with zero ticked episodes simply never appears here, which is the
         // whole "only watched shows" filter — no extra logic needed.
-        const { data: watchedRows, error: watchedError } = await supabase
-          .from('watched_episodes')
-          .select('tmdb_show_id, season_number, episode_number, watched_at')
-        if (watchedError) throw watchedError
+        const watchedRows = await fetchWatchedEpisodes(
+          supabase,
+          'tmdb_show_id, season_number, episode_number, watched_at',
+        )
 
         const rows = watchedRows ?? []
         if (rows.length === 0) {
