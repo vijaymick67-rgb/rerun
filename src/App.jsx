@@ -11,7 +11,8 @@ function App() {
   return (
     <div className="min-h-screen pb-16">
       <Routes>
-        <Route path="/" element={<Browse />} />
+        <Route path="/" element={<Watching />} />
+        <Route path="/browse" element={<Browse />} />
         <Route path="/watching" element={<Watching />} />
         <Route path="/watching/:tmdbId" element={<ShowDetail />} />
         <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
