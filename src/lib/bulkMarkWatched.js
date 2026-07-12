@@ -17,6 +17,7 @@ import {
 } from './tmdb.js'
 import { dayShiftForNetworks } from './networkReleaseTiming.js'
 import { hasAired } from './watchHelpers.js'
+import { markTrackedShowFinished } from './finishedShows.js'
 
 // The one conflict key used everywhere watched_episodes is written.
 export const WATCHED_CONFLICT_KEY = 'tmdb_show_id,season_number,episode_number'
@@ -176,6 +177,7 @@ export async function bulkMarkShows(shows, options = {}) {
   const getShowDetails = options.getShowDetails ?? realGetShowDetails
   const getSeasonEpisodes = options.getSeasonEpisodes ?? realGetSeasonEpisodes
   const watchedAt = options.now ?? new Date().toISOString()
+  const markFinished = options.markFinished ?? ((showId) => markTrackedShowFinished(supabase, showId, watchedAt))
   const { onProgress } = options
 
   const results = []
@@ -196,11 +198,15 @@ export async function bulkMarkShows(shows, options = {}) {
         watchedAt,
       })
       const { inserted } = await upsertWatchedRows(rows, { supabase, chunkSize: options.chunkSize })
+      // Only archive after the episode write completed. A failed bulk show is
+      // never marked finished, and its watch history is left as-is.
+      await markFinished(show.tmdb_id)
       result = {
         ...result,
         airedCount: rows.length,
         insertedCount: inserted,
         failedSeasons,
+        finished: true,
       }
     } catch (err) {
       result.error = err?.message || 'Unknown error'

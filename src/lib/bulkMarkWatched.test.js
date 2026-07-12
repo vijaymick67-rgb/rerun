@@ -187,13 +187,15 @@ describe('buildAiredEpisodeRows', () => {
 describe('bulkMarkShows', () => {
   function run(shows, supabase = makeSupabase(), opts = {}) {
     const tmdb = makeTmdb()
+    const markFinished = opts.markFinished ?? vi.fn(async () => {})
     return bulkMarkShows(shows, {
       supabase,
       getShowDetails: tmdb.getShowDetails,
       getSeasonEpisodes: tmdb.getSeasonEpisodes,
       now: NOW,
+      markFinished,
       ...opts,
-    }).then((results) => ({ results, supabase }))
+    }).then((results) => ({ results, supabase, markFinished }))
   }
 
   it('marks every aired episode of each show and reports per-show counts', async () => {
@@ -240,7 +242,7 @@ describe('bulkMarkShows', () => {
   })
 
   it('isolates a failing show and keeps going', async () => {
-    const { results, supabase } = await run([
+    const { results, supabase, markFinished } = await run([
       { tmdb_id: 999, name: 'Missing Show' }, // getShowDetails throws
       { tmdb_id: 200, name: 'Second Show' },
     ])
@@ -249,6 +251,20 @@ describe('bulkMarkShows', () => {
     expect(results[1].error).toBeNull()
     expect(results[1].insertedCount).toBe(3)
     expect(watchedRow(supabase, 200, 1, 1)).toBeDefined()
+    expect(markFinished).toHaveBeenCalledTimes(1)
+    expect(markFinished).toHaveBeenCalledWith(200)
+  })
+
+  it('does not mark a show finished when its bulk episode operation fails', async () => {
+    const markFinished = vi.fn(async () => {})
+    const { results, supabase } = await run(
+      [{ tmdb_id: 999, name: 'Missing Show' }],
+      makeSupabase(),
+      { markFinished },
+    )
+    expect(results[0].error).toBeTruthy()
+    expect(markFinished).not.toHaveBeenCalled()
+    expect(supabase.tables.watched_episodes.size).toBe(0)
   })
 
   it('reports progress once per show', async () => {
