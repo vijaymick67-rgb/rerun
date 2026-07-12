@@ -29,23 +29,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.watching-row-hover-remove {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 150ms ease;
-}
-
-.watching-row-chevron {
+/* The grid tile's remove "×" is always visible on touch (where there's no
+   hover to reveal it), then hidden-until-hover on fine-pointer devices so it
+   doesn't clutter every tile on desktop. Mirrors the hover gating the old
+   swipe-row used, just applied to a corner button. */
+.watching-tile-remove {
   transition: opacity 150ms ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .watching-row:hover .watching-row-hover-remove {
-    opacity: 1;
-    pointer-events: auto;
+  .watching-tile-remove {
+    opacity: 0;
+    pointer-events: none;
   }
 
-  .watching-row:hover .watching-row-chevron {
-    opacity: 0;
+  .watching-tile:hover .watching-tile-remove {
+    opacity: 1;
+    pointer-events: auto;
   }
 }

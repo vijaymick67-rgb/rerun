@@ -75,16 +75,6 @@ function formatWatchTime(totalMinutes) {
   return `${monthPart} ${days} day${days === 1 ? '' : 's'}`
 }
 
-// Local calendar date (YYYY-MM-DD) for a stored watched_at timestamp, so the
-// "busiest day" tally groups by the user's day, not UTC.
-function localDateFromTimestamp(ts) {
-  const d = new Date(ts)
-  if (Number.isNaN(d.getTime())) return null
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${month}-${day}`
-}
-
 // Small deterministic string hash — used to turn today's date into a stable
 // index so the insight is the same all day and rotates the next.
 function hashString(str) {
@@ -98,10 +88,28 @@ function hashString(str) {
 // Build the pool of eligible insight sentences. Only insights whose data is
 // substantial enough to read sensibly are included, so the daily pick never
 // lands on something empty or nonsensical.
-function buildInsights({ shows, watchedRows, totalWatchedEpisodes }) {
+function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes }) {
   const insights = []
   const showCount = shows.length
   if (showCount === 0 || totalWatchedEpisodes === 0) return insights
+
+  const showById = new Map(shows.map((show) => [show.tmdb_id, show]))
+
+  // Per-show rollups derived once from the raw watched rows: which distinct
+  // seasons were touched, and the most recent watch timestamp.
+  const seasonsByShow = new Map()
+  const latestWatchByShow = new Map()
+  for (const row of watchedRows) {
+    if (!seasonsByShow.has(row.tmdb_show_id)) {
+      seasonsByShow.set(row.tmdb_show_id, new Set())
+    }
+    seasonsByShow.get(row.tmdb_show_id).add(row.season_number)
+
+    const ts = new Date(row.watched_at).getTime()
+    if (!Number.isNaN(ts) && ts > (latestWatchByShow.get(row.tmdb_show_id) ?? -Infinity)) {
+      latestWatchByShow.set(row.tmdb_show_id, ts)
+    }
+  }
 
   // A simple summary — always valid once anything's been watched.
   insights.push(
@@ -133,20 +141,11 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes }) {
     insights.push(`${topNetwork} has been your most-watched network lately.`)
   }
 
-  // Busiest single calendar day — skip unless at least a couple of episodes
-  // landed on the same day, otherwise it's not really a "busy" day.
-  const perDay = new Map()
-  for (const row of watchedRows) {
-    const day = localDateFromTimestamp(row.watched_at)
-    if (!day) continue
-    perDay.set(day, (perDay.get(day) ?? 0) + 1)
-  }
-  let busiestCount = 0
-  for (const count of perDay.values()) {
-    if (count > busiestCount) busiestCount = count
-  }
-  if (busiestCount >= 2) {
-    insights.push(`You once watched ${busiestCount} episodes in a single day.`)
+  // Distinct networks watched across — only reads as an insight once there's
+  // real spread, so gate on at least a couple of different primary networks.
+  const distinctNetworks = networkTotals.size
+  if (distinctNetworks >= 2) {
+    insights.push(`Your watching spans ${distinctNetworks} different networks.`)
   }
 
   // Biggest watch by episode count — needs a few episodes to be worth calling out.
@@ -158,6 +157,46 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes }) {
     insights.push(
       `You're ${biggest.watched} episodes deep into ${biggest.name} — your biggest watch yet.`,
     )
+  }
+
+  // Show spanning the most seasons — skip unless the leader is genuinely
+  // multi-season, otherwise "most seasons" is a meaningless tie at one apiece.
+  let mostSeasonsShowId = null
+  let mostSeasonsCount = 0
+  for (const [showId, seasons] of seasonsByShow) {
+    if (seasons.size > mostSeasonsCount) {
+      mostSeasonsShowId = showId
+      mostSeasonsCount = seasons.size
+    }
+  }
+  const mostSeasonsShow = showById.get(mostSeasonsShowId)
+  if (mostSeasonsShow && mostSeasonsCount >= 2) {
+    insights.push(
+      `You've watched ${mostSeasonsCount} seasons of ${mostSeasonsShow.name} — more than any other show.`,
+    )
+  }
+
+  // Most recently finished show — a show counts as finished only when every
+  // episode we know about is watched. Needs at least one such show.
+  let latestFinishedShow = null
+  let latestFinishedAt = -Infinity
+  for (const show of shows) {
+    if (show.total <= 0 || show.watched < show.total) continue
+    const finishedAt = latestWatchByShow.get(show.tmdb_id) ?? -Infinity
+    if (finishedAt > latestFinishedAt) {
+      latestFinishedAt = finishedAt
+      latestFinishedShow = show
+    }
+  }
+  if (latestFinishedShow) {
+    insights.push(`${latestFinishedShow.name} was the last show you finished off.`)
+  }
+
+  // Average episode runtime across everything watched — a friendly round
+  // figure, only worth showing once there's a decent sample of episodes.
+  if (totalWatchedEpisodes >= 5 && totalMinutes > 0) {
+    const avgMinutes = Math.round(totalMinutes / totalWatchedEpisodes)
+    insights.push(`Your average episode runs about ${avgMinutes} minutes.`)
   }
 
   return insights
@@ -293,6 +332,7 @@ export default function Stats() {
           shows: computed,
           watchedRows: rows,
           totalWatchedEpisodes: rows.length,
+          totalMinutes: totalRuntimeMinutes,
         })
 
         setShows(computed)
@@ -391,9 +431,6 @@ export default function Stats() {
 
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-(--color-text)">{show.name}</p>
-                  <p className="text-xs text-(--color-text-muted)">
-                    {show.watched}/{show.total} episodes
-                  </p>
                 </div>
 
                 <span aria-hidden="true" className="shrink-0 text-(--color-text-muted)">
