@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { searchShows, POSTER_BASE } from '../lib/tmdb'
+import { searchShows, getShowDetails, POSTER_BASE } from '../lib/tmdb'
 import { supabase } from '../lib/supabase'
+import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
+import { daysUntil } from '../lib/watchHelpers'
 
 const DEBOUNCE_MS = 400
 const UNIQUE_VIOLATION = '23505'
+const DELAYED_ADD_THRESHOLD_DAYS = 60
 
 export default function Browse() {
   const [query, setQuery] = useState('')
@@ -13,6 +16,7 @@ export default function Browse() {
   const [searched, setSearched] = useState(false)
   const [trackedIds, setTrackedIds] = useState(new Set())
   const [addingIds, setAddingIds] = useState(new Set())
+  const [delayedAddMessage, setDelayedAddMessage] = useState(null)
   const debounceRef = useRef(null)
 
   useEffect(() => {
@@ -76,6 +80,22 @@ export default function Browse() {
 
     if (!insertError || insertError.code === UNIQUE_VIOLATION) {
       setTrackedIds((prev) => new Set(prev).add(show.id))
+    } else {
+      return
+    }
+
+    try {
+      const details = await getShowDetails(show.id)
+      const dayShift = dayShiftForNetworks(details.networks)
+      const premiereDate = details.next_episode_to_air?.air_date ?? details.first_air_date ?? null
+      const daysAway = daysUntil(premiereDate, dayShift)
+      if (daysAway !== null && daysAway > DELAYED_ADD_THRESHOLD_DAYS) {
+        setDelayedAddMessage(
+          "This show premieres in a while! We'll automatically add it to your Watching tab closer to the release date.",
+        )
+      }
+    } catch {
+      // best-effort — premiere timing is a nice-to-have, the show is already tracked
     }
   }
 
@@ -96,6 +116,20 @@ export default function Browse() {
       )}
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+
+      {delayedAddMessage && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-accent)/40 bg-(--color-accent)/10 px-3 py-2 text-sm text-(--color-accent)">
+          <span>{delayedAddMessage}</span>
+          <button
+            type="button"
+            onClick={() => setDelayedAddMessage(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {!loading && !error && !query.trim() && (
         <p className="mt-8 text-center text-(--color-text-muted)">

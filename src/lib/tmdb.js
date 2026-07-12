@@ -12,7 +12,10 @@ export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 // instead of "Jul 10". A hard refresh reloads the JS bundle but NOT
 // localStorage, so a correct code fix cannot dislodge a stale cached value.
 // Bumping this version wipes the stale entries on next load so they refetch.
-const CACHE_SCHEMA_VERSION = '3'
+// v4: getShowDetails() now also trims in `next_episode_to_air` — shows
+// cached before this holds it undefined forever, which would silently fall
+// back to "Caught up" instead of a premiere countdown.
+const CACHE_SCHEMA_VERSION = '4'
 const SCHEMA_KEY = 'tmdb_cache_schema_version'
 
 function pruneCacheIfSchemaChanged() {
@@ -119,6 +122,14 @@ export async function getShowDetails(tmdbId) {
     status: data.status,
     number_of_seasons: data.number_of_seasons,
     number_of_episodes: data.number_of_episodes,
+    next_episode_to_air: data.next_episode_to_air
+      ? {
+          air_date: data.next_episode_to_air.air_date,
+          season_number: data.next_episode_to_air.season_number,
+          episode_number: data.next_episode_to_air.episode_number,
+          name: data.next_episode_to_air.name,
+        }
+      : null,
     networks: (data.networks ?? []).map((network) => network.name),
     seasons: (data.seasons ?? []).map((season) => ({
       season_number: season.season_number,
