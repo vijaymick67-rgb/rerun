@@ -9,6 +9,8 @@
   --color-text-muted: #9199a8;
   --color-accent: #5b8def;
   --color-accent-muted: rgba(91, 141, 239, 0.15);
+  --color-upcoming: #e0a458;
+  --color-upcoming-muted: rgba(224, 164, 88, 0.15);
 
   --font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
 }

@@ -5,6 +5,16 @@ import { POSTER_BASE } from '../lib/tmdb'
 const REVEAL_WIDTH = 84
 const DRAG_THRESHOLD = 6
 
+// Countdown copy differs for a true premiere (series debut or new season)
+// vs. the next episode of a season that's already airing weekly.
+function countdownLabel(status) {
+  const isPremiere = status.subtype === 'premiere'
+  if (status.airsSoon) return isPremiere ? 'Airs soon' : 'New episode soon'
+  return isPremiere
+    ? `Airs in ${status.daysUntil} days`
+    : `New episode in ${status.daysUntil} days`
+}
+
 export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, onRemove }) {
   const rowRef = useRef(null)
   const frontRef = useRef(null)
@@ -149,9 +159,9 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
                 {show.status.name ? ` · ${show.status.name}` : ''}
               </p>
             ) : show.status?.type === 'countdown' ? (
-              <p className="mt-1 text-xs text-(--color-text-muted)">
-                {show.status.airsSoon ? 'Airs soon' : `${show.status.daysUntil} days`}
-              </p>
+              <span className="mt-1 inline-flex w-fit items-center rounded-full bg-(--color-upcoming-muted) px-2 py-0.5 text-xs font-medium text-(--color-upcoming)">
+                {countdownLabel(show.status)}
+              </span>
             ) : (
               <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
             )}
