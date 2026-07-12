@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
-import { episodeKey, computeWatchingStatus, isHiddenFromWatching } from '../lib/watchHelpers'
+import { episodeKey, computeWatchingStatus } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
+import { isVisibleInWatching } from '../lib/finishedShows'
+import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
@@ -13,29 +15,8 @@ import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 // "Caught up" before the fresh load overwrites it.
 // v3: one-time cache-bust so the Settings bulk-mark-watched writes are picked
 // up — old v2 entries are simply never matched and a fresh Supabase fetch runs.
-const CACHE_KEY = 'watching_cache:v3'
-
-function loadCache() {
-  try {
-    const raw = localStorage.getItem(CACHE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function saveCache(shows) {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(shows))
-  } catch {
-    // ignore quota/serialization errors, cache is best-effort
-  }
-}
-
 export default function Watching() {
-  const [cachedShows] = useState(() => loadCache())
+  const [cachedShows] = useState(() => loadWatchingCache())
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)
@@ -52,13 +33,14 @@ export default function Watching() {
         const { data: trackedShows, error: showsError } = await supabase
           .from('tracked_shows')
           .select('*')
+          .is('finished_at', null)
           .order('added_at', { ascending: false })
         if (showsError) throw showsError
 
         if (!trackedShows || trackedShows.length === 0) {
           if (!ignore) {
             setShows([])
-            saveCache([])
+            saveWatchingCache([])
           }
           return
         }
@@ -125,7 +107,7 @@ export default function Watching() {
         })
 
         setShows(enriched)
-        saveCache(enriched)
+        saveWatchingCache(enriched)
       } catch {
         if (!ignore) setError('Failed to load your shows. Try refreshing.')
       } finally {
@@ -158,7 +140,7 @@ export default function Watching() {
     if (!deleteError) {
       setShows((prev) => {
         const next = prev.filter((s) => s.id !== show.id)
-        saveCache(next)
+        saveWatchingCache(next)
         return next
       })
     }
@@ -169,7 +151,7 @@ export default function Watching() {
     })
   }
 
-  const visibleShows = shows.filter((show) => !isHiddenFromWatching(show.status))
+  const visibleShows = shows.filter((show) => isVisibleInWatching(show, show.status))
 
   return (
     <div className="p-4">

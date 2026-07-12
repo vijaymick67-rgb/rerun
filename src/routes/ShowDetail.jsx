@@ -4,7 +4,10 @@ import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey } from '../lib/watchHelpers'
 import { showDetailCacheKey, readDetailCache, writeDetailCache, clearDetailCache } from '../lib/detailCache'
+import { markTrackedShowFinished, restoreTrackedShow } from '../lib/finishedShows'
+import { clearWatchingCache } from '../lib/watchingCache'
 import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 // tmdbId changes are handled by remounting (see the keyed wrapper below)
 // rather than resetting state in an effect, so the cache-on-mount
@@ -20,6 +23,8 @@ function ShowDetailInner({ tmdbId }) {
   const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
+  const [confirmFinish, setConfirmFinish] = useState(false)
+  const [savingFinished, setSavingFinished] = useState(false)
 
   useEffect(() => {
     let ignore = false
@@ -102,6 +107,29 @@ function ShowDetailInner({ tmdbId }) {
     )
   }, 0)
 
+  async function setFinished(finished) {
+    if (!show || savingFinished) return
+    setSavingFinished(true)
+    try {
+      if (finished) {
+        const finishedAt = await markTrackedShowFinished(supabase, numericTmdbId)
+        const next = { ...show, finished_at: finishedAt }
+        setShow(next)
+        writeDetailCache(cacheKey, { show: next, seasons, episodesBySeason, watchedList: [...watched] })
+      } else {
+        await restoreTrackedShow(supabase, numericTmdbId)
+        const next = { ...show, finished_at: null }
+        setShow(next)
+        writeDetailCache(cacheKey, { show: next, seasons, episodesBySeason, watchedList: [...watched] })
+      }
+      clearWatchingCache()
+    } catch (err) {
+      setError(err.message || 'Could not update this show.')
+    } finally {
+      setSavingFinished(false)
+    }
+  }
+
   return (
     <div className="p-4">
       <div className="flex items-center gap-2">
@@ -182,6 +210,19 @@ function ShowDetailInner({ tmdbId }) {
           </div>
 
           <div className="mt-4 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => (show.finished_at ? setFinished(false) : setConfirmFinish(true))}
+              disabled={savingFinished}
+              className="w-full rounded-md border border-(--color-border) py-2 text-sm font-medium text-(--color-text) disabled:opacity-60"
+            >
+              {savingFinished
+                ? 'Saving…'
+                : show.finished_at
+                  ? 'Restore to Watching'
+                  : 'Mark finished'}
+            </button>
+
             {seasons.length === 0 && (
               <p className="text-sm text-(--color-text-muted)">
                 Couldn't load season data for this show.
@@ -211,6 +252,19 @@ function ShowDetailInner({ tmdbId }) {
               )
             })}
           </div>
+
+          <ConfirmDialog
+            open={confirmFinish}
+            title={`Mark ${show.name} finished?`}
+            message="This removes the show from Watching but keeps all episode history and Stats data. You can restore it later from this screen."
+            confirmLabel="Mark finished"
+            cancelLabel="Cancel"
+            onConfirm={() => {
+              setConfirmFinish(false)
+              setFinished(true)
+            }}
+            onCancel={() => setConfirmFinish(false)}
+          />
         </>
       )}
     </div>

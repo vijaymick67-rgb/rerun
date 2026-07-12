@@ -8,6 +8,8 @@ import {
   bulkMarkShows,
 } from '../lib/bulkMarkWatched'
 import { countWatchedEpisodes } from '../lib/watchedEpisodes'
+import { finishTrackedShows } from '../lib/finishedShows'
+import { clearWatchingCache } from '../lib/watchingCache'
 
 export default function Settings() {
   const [file, setFile] = useState(null)
@@ -117,7 +119,108 @@ export default function Settings() {
       <div className="my-8 h-px bg-(--color-border)" />
 
       <BulkMarkTool />
+
+      <div className="my-8 h-px bg-(--color-border)" />
+
+      <FinishedRepairTool />
     </div>
+  )
+}
+
+// The original bulk operation happened before finished_at existed. This repair
+// has the same exception list and only updates tracked_shows; it never touches
+// watched_episodes or their historical timestamps.
+function FinishedRepairTool() {
+  const [plan, setPlan] = useState(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [results, setResults] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function preview() {
+    if (running) return
+    setError(null)
+    setResults(null)
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('tracked_shows')
+        .select('tmdb_id, name, finished_at')
+      if (fetchError) throw fetchError
+      const base = planBulkMark(data ?? [])
+      setPlan({ ...base, affected: base.affected.filter((show) => !show.finished_at) })
+    } catch (err) {
+      setError(err.message || 'Could not load the repair preview.')
+    }
+  }
+
+  async function repair() {
+    if (!plan || running) return
+    setConfirmOpen(false)
+    setRunning(true)
+    setError(null)
+    try {
+      const rows = await finishTrackedShows(plan.affected, { supabase })
+      setResults(rows)
+      clearWatchingCache()
+    } catch (err) {
+      setError(err.message || 'Could not apply the repair.')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const failed = results?.filter((row) => row.error) ?? []
+  const completed = results?.filter((row) => !row.error) ?? []
+
+  return (
+    <section>
+      <h2 className="text-base font-semibold text-(--color-text)">Archive earlier bulk-marked shows</h2>
+      <p className="mt-1 text-sm text-(--color-text-muted)">
+        One-time repair for the earlier bulk-mark run. It marks the same non-exception
+        shows finished, without changing any watched episodes or timestamps.
+      </p>
+
+      {!results && (
+        <button type="button" onClick={preview} disabled={running} className="mt-4 w-full rounded-md border border-(--color-border) py-2 text-sm font-medium text-(--color-text) disabled:opacity-60">
+          {plan ? 'Refresh repair preview' : 'Preview archive repair'}
+        </button>
+      )}
+
+      {plan && !results && (
+        <div className="mt-4 rounded-lg border border-(--color-border) bg-(--color-surface) p-3 text-sm">
+          <p className="font-medium text-(--color-text)">Will mark finished ({plan.affected.length})</p>
+          <p className="mt-1 text-(--color-text-muted)">
+            Exception-list shows remain untouched ({plan.skipped.length} matched).
+          </p>
+          {plan.affected.length > 0 && (
+            <ul className="mt-2 list-inside list-disc text-(--color-text-muted)">
+              {plan.affected.map((show) => <li key={show.tmdb_id}>{show.name}</li>)}
+            </ul>
+          )}
+          <button type="button" onClick={() => setConfirmOpen(true)} disabled={running || plan.affected.length === 0} className="mt-4 w-full rounded-md bg-(--color-accent) py-2 text-sm font-medium text-(--color-bg) disabled:opacity-60">
+            Archive {plan.affected.length} show{plan.affected.length === 1 ? '' : 's'}
+          </button>
+        </div>
+      )}
+
+      {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+      {results && (
+        <div className="mt-4 rounded-lg border border-(--color-border) bg-(--color-surface) p-3 text-sm">
+          <p className="font-medium text-(--color-text)">{completed.length} show{completed.length === 1 ? '' : 's'} archived.</p>
+          {failed.length > 0 && <p className="mt-1 text-red-400">{failed.length} show{failed.length === 1 ? '' : 's'} could not be archived.</p>}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Archive ${plan?.affected.length ?? 0} shows?`}
+        message="This only sets the personal finished state. It does not delete shows or change watched episodes, timestamps, or Stats."
+        confirmLabel="Archive shows"
+        cancelLabel="Cancel"
+        onConfirm={repair}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </section>
   )
 }
 
@@ -148,13 +251,14 @@ function BulkMarkTool() {
     try {
       const { data, error: fetchError } = await supabase
         .from('tracked_shows')
-        .select('tmdb_id, name')
+        .select('tmdb_id, name, finished_at')
       if (fetchError) throw fetchError
       if (!data || data.length === 0) {
         setError('No tracked shows found.')
         return
       }
-      setPlan(planBulkMark(data))
+      const base = planBulkMark(data)
+      setPlan({ ...base, affected: base.affected.filter((show) => !show.finished_at) })
     } catch (err) {
       setError(err.message || 'Could not load your tracked shows.')
     } finally {

@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey, localTodayISO } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
+import { isRepresentedInStats } from '../lib/finishedShows'
 
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
 // as Watching.jsx — the underlying TMDB season data is already localStorage-
@@ -325,23 +326,29 @@ export default function Stats() {
 
         if (ignore) return
 
-        const totalRuntimeMinutes = computed.reduce((sum, show) => sum + show.minutes, 0)
+        // Personal finished_at is deliberately not a filter here: Stats is a
+        // record of watched history, including archived shows.
+        const represented = computed.filter((show) =>
+          isRepresentedInStats(show, watchedByShowId.get(show.tmdb_id)),
+        )
 
-        computed.sort((a, b) =>
+        const totalRuntimeMinutes = represented.reduce((sum, show) => sum + show.minutes, 0)
+
+        represented.sort((a, b) =>
           a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
         )
 
         const nextInsights = buildInsights({
-          shows: computed,
+          shows: represented,
           watchedRows: rows,
           totalWatchedEpisodes: rows.length,
           totalMinutes: totalRuntimeMinutes,
         })
 
-        setShows(computed)
+        setShows(represented)
         setTotalMinutes(totalRuntimeMinutes)
         setInsights(nextInsights)
-        saveCache({ shows: computed, totalMinutes: totalRuntimeMinutes, insights: nextInsights })
+        saveCache({ shows: represented, totalMinutes: totalRuntimeMinutes, insights: nextInsights })
       } catch {
         if (!ignore) setError('Failed to load your stats. Try refreshing.')
       } finally {
