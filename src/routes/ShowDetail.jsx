@@ -70,6 +70,19 @@ export default function ShowDetail() {
     }
   }, [numericTmdbId])
 
+  const totalEpisodeCount = seasons.reduce(
+    (sum, season) => sum + (episodesBySeason[season.season_number]?.length ?? 0),
+    0,
+  )
+  const totalWatchedCount = seasons.reduce((sum, season) => {
+    const episodes = episodesBySeason[season.season_number] ?? []
+    return (
+      sum +
+      episodes.filter((ep) => watched.has(episodeKey(season.season_number, ep.episode_number)))
+        .length
+    )
+  }, 0)
+
   return (
     <div className="p-4">
       <div className="flex items-center gap-2">
@@ -116,6 +129,20 @@ export default function ShowDetail() {
               <p className="text-sm text-(--color-text-muted)">
                 {seasons.length} season{seasons.length === 1 ? '' : 's'}
               </p>
+
+              {totalEpisodeCount > 0 && (
+                <>
+                  <p className="mt-1 text-sm text-(--color-text-muted)">
+                    {totalWatchedCount}/{totalEpisodeCount} episodes watched
+                  </p>
+                  <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-(--color-border)">
+                    <div
+                      className="h-full rounded-full bg-(--color-accent)"
+                      style={{ width: `${(totalWatchedCount / totalEpisodeCount) * 100}%` }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

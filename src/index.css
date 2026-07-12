@@ -26,3 +26,24 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+.watching-row-hover-remove {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.watching-row-chevron {
+  transition: opacity 150ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .watching-row:hover .watching-row-hover-remove {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .watching-row:hover .watching-row-chevron {
+    opacity: 0;
+  }
+}
