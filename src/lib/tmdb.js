@@ -133,8 +133,9 @@ export async function searchShows(query) {
 //   :v2 added `networks`
 //   :v3 added `episode_run_time` (per-show runtime fallback used by Stats
 //       when an individual episode's own runtime is null)
+//   :v4 added `last_episode_to_air` for post-air archived-show eligibility
 export async function getShowDetails(tmdbId, options = {}) {
-  const cacheKey = `/tv/${tmdbId}:v3`
+  const cacheKey = `/tv/${tmdbId}:v4`
   const cached = readCache(cacheKey)
   if (cached && !options.refreshDynamic) return cached
   const cachedAt = readCacheTime(cacheKey)
@@ -167,6 +168,14 @@ export async function getShowDetails(tmdbId, options = {}) {
           season_number: data.next_episode_to_air.season_number,
           episode_number: data.next_episode_to_air.episode_number,
           name: data.next_episode_to_air.name,
+        }
+      : null,
+    last_episode_to_air: data.last_episode_to_air
+      ? {
+          air_date: data.last_episode_to_air.air_date,
+          season_number: data.last_episode_to_air.season_number,
+          episode_number: data.last_episode_to_air.episode_number,
+          name: data.last_episode_to_air.name,
         }
       : null,
     networks: (data.networks ?? []).map((network) => network.name),

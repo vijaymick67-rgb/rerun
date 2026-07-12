@@ -3,6 +3,7 @@ import {
   isHiddenFromWatching,
   WATCHING_COUNTDOWN_WINDOW_DAYS,
 } from './watchHelpers.js'
+import { shiftAirDate } from './networkReleaseTiming.js'
 
 export function isPersonallyFinished(show) {
   return show?.finished_at != null
@@ -19,10 +20,31 @@ export function isVisibleInWatching(show, status) {
 // date and >60 hiding boundary used by countdown rendering are reused here.
 // Negative values are intentionally eligible: cached dated episode metadata
 // lets the normal nextUp scan keep a returned show visible after air day.
-export function shouldFinishedShowReturn(details, dayShift = 0) {
+function localDateISO(timestamp) {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return null
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+export function shouldFinishedShowReturn(show, details, dayShift = 0) {
   const airDate = details?.next_episode_to_air?.air_date
   const remaining = daysUntil(airDate, dayShift)
-  return remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS
+  if (remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS) return true
+
+  // After air day TMDB may clear next_episode_to_air (season finale or
+  // full-season drop). A last episode dated after the personal finish is a
+  // lightweight signal that new material exists and merits a season scan.
+  const lastAirDate = details?.last_episode_to_air?.air_date
+  const daysSinceLastAir = daysUntil(lastAirDate, dayShift)
+  const finishedDate = localDateISO(show?.finished_at)
+  return Boolean(
+    finishedDate &&
+      daysSinceLastAir !== null &&
+      daysSinceLastAir <= 0 &&
+      shiftAirDate(lastAirDate, dayShift) > finishedDate,
+  )
 }
 
 // Stats is history-led. A personal archive must never remove metadata for a

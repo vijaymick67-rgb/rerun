@@ -42,20 +42,32 @@ describe('Watching archived-show loading', () => {
     expect(getSeasonEpisodes).toHaveBeenCalledWith(1, 1, { refreshDynamic: true })
   })
 
-  it('keeps finished_at persisted and changes countdown to nextUp after air day', async () => {
-    vi.setSystemTime(new Date(2026, 7, 2, 12))
+  it('keeps a returned show eligible after TMDB clears next_episode_to_air on air day', async () => {
     const show = { tmdb_id: 9, name: 'Returning', finished_at: '2026-01-01T00:00:00Z' }
-    const details = {
+    const upcomingDetails = {
       networks: [],
       seasons: [{ season_number: 2 }],
       next_episode_to_air: { air_date: '2026-08-01', episode_number: 1 },
     }
-    const getShowDetails = vi.fn(async () => details)
+    const initialDetails = vi.fn(async () => upcomingDetails)
+
+    const initial = await selectTrackedShowsForWatching([show], initialDetails)
+    expect(initial.candidates.map((candidate) => candidate.tmdb_id)).toEqual([9])
+
+    vi.setSystemTime(new Date(2026, 7, 2, 12))
+    const freshDetails = {
+      networks: [],
+      seasons: [{ season_number: 2 }],
+      next_episode_to_air: null,
+      last_episode_to_air: { air_date: '2026-08-01', season_number: 2, episode_number: 1 },
+    }
+    const getShowDetails = vi.fn(async () => freshDetails)
     const getSeasonEpisodes = vi.fn(async () => ({
       episodes: [{ episode_number: 1, name: 'Premiere', air_date: '2026-08-01' }],
     }))
 
     const { candidates, preloadedById } = await selectTrackedShowsForWatching([show], getShowDetails)
+    expect(candidates.map((candidate) => candidate.tmdb_id)).toEqual([9])
     const enriched = await enrichTrackedShowsForWatching(
       candidates,
       new Map([[9, new Set()]]),

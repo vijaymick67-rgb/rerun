@@ -13,7 +13,7 @@ export async function selectTrackedShowsForWatching(trackedShows, getShowDetails
       try {
         const details = await getShowDetails(show.tmdb_id, { refreshDynamic: true })
         const dayShift = dayShiftForNetworks(details.networks)
-        return shouldFinishedShowReturn(details, dayShift)
+        return shouldFinishedShowReturn(show, details, dayShift)
           ? { show, details, dayShift }
           : null
       } catch {

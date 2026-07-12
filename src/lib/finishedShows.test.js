@@ -53,13 +53,14 @@ describe('personal finished state', () => {
   })
 
   it('keeps a finished show hidden without a dated next episode', () => {
-    expect(shouldFinishedShowReturn({ next_episode_to_air: null })).toBe(false)
+    expect(shouldFinishedShowReturn({ finished_at: '2026-01-01' }, { next_episode_to_air: null })).toBe(false)
     expect(isVisibleInWatching({ finished_at: '2026-01-01' }, caughtUp)).toBe(false)
   })
 
   it('keeps a finished show hidden 61 days away and returns it at the existing 60-day boundary', () => {
-    expect(shouldFinishedShowReturn({ next_episode_to_air: { air_date: '2026-09-11' } })).toBe(false)
-    expect(shouldFinishedShowReturn({ next_episode_to_air: { air_date: '2026-09-10' } })).toBe(true)
+    const show = { finished_at: '2026-01-01' }
+    expect(shouldFinishedShowReturn(show, { next_episode_to_air: { air_date: '2026-09-11' } })).toBe(false)
+    expect(shouldFinishedShowReturn(show, { next_episode_to_air: { air_date: '2026-09-10' } })).toBe(true)
   })
 
   it('returns a finished show inside 60 days with unchanged countdown wording', () => {
@@ -69,7 +70,10 @@ describe('personal finished state', () => {
     const episode = computeWatchingStatus({}, new Set(), 0, {
       next_episode_to_air: { air_date: '2026-08-01', episode_number: 2 },
     })
-    expect(shouldFinishedShowReturn({ next_episode_to_air: { air_date: '2026-08-01' } })).toBe(true)
+    expect(shouldFinishedShowReturn(
+      { finished_at: '2026-01-01' },
+      { next_episode_to_air: { air_date: '2026-08-01' } },
+    )).toBe(true)
     expect(isVisibleInWatching({ finished_at: '2026-01-01' }, premiere)).toBe(true)
     expect(watchingStatusLabel(premiere)).toBe('Airs in 20 days')
     expect(watchingStatusLabel(episode)).toBe('New episode in 20 days')
