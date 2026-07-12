@@ -15,6 +15,7 @@ import {
 } from './tmdb.js'
 import { dayShiftForNetworks } from './networkReleaseTiming.js'
 import { hasAired } from './watchHelpers.js'
+import { buildAiredEpisodeRows } from './bulkMarkWatched.js'
 
 const UNIQUE_VIOLATION = '23505'
 
@@ -148,7 +149,6 @@ async function processShow(show, ctx) {
   }
 
   const dayShift = dayShiftForNetworks(details.networks)
-  const realSeasons = (details.seasons ?? []).filter((s) => s.season_number > 0)
 
   const pEps = pEpByTmId.get(show.tmId) ?? []
   const pSes = pSeByTmId.get(show.tmId) ?? []
@@ -227,16 +227,20 @@ async function processShow(show, ctx) {
   }
 
   // --- Step 5: fallback for completed shows with zero episode-level data ---
+  // Reuse the shared bulk-mark routine (the same one behind Browse's "Log as
+  // watched" and Settings' bulk tool) so "every aired episode of a show" is
+  // defined in exactly one place. rowsByKey is empty here, so these rows can't
+  // collide with earlier pEp/pSe writes.
   if (show.isCompleted && rowsByKey.size === 0) {
-    const seasonNumbers = realSeasons.map((s) => s.season_number)
-    await ensureSeasons(seasonNumbers)
     const watchedAt = show.completionTs || now
-    for (const n of seasonNumbers) {
-      const eps = seasonEpisodes.get(n)
-      if (!eps) continue
-      for (const ep of eps) {
-        if (hasAired(ep, dayShift)) addRow(n, ep.episode_number, ep, watchedAt)
-      }
+    const { rows } = await buildAiredEpisodeRows(show.tmId, {
+      details,
+      getShowDetails,
+      getSeasonEpisodes,
+      watchedAt,
+    })
+    for (const row of rows) {
+      rowsByKey.set(`${row.season_number}:${row.episode_number}`, row)
     }
     if (rowsByKey.size > 0) result.usedFallback = true
   }
