@@ -7,7 +7,9 @@ import { episodeKey, localTodayISO } from '../lib/watchHelpers'
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
 // as Watching.jsx — the underlying TMDB season data is already localStorage-
 // cached, so a revisit paints instantly and refreshes in the background.
-const CACHE_KEY = 'stats_cache:v1'
+// v2: one-time cache-bust so the Settings bulk-mark-watched writes are picked
+// up — old v1 entries are simply never matched and a fresh Supabase fetch runs.
+const CACHE_KEY = 'stats_cache:v2'
 
 // When neither an episode's own runtime nor the show's average typical runtime
 // is known, assume this many minutes per episode. This is the single flat
