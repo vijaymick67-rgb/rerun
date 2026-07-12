@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
+import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, computeNextUp } from '../lib/watchHelpers'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
+import WatchingRow from '../components/WatchingRow'
 
 export default function Watching() {
   const [shows, setShows] = useState([])
@@ -12,6 +12,7 @@ export default function Watching() {
   const [error, setError] = useState(null)
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
+  const [openSwipeId, setOpenSwipeId] = useState(null)
 
   useEffect(() => {
     let ignore = false
@@ -102,6 +103,7 @@ export default function Watching() {
   }, [])
 
   function handleRemove(show) {
+    setOpenSwipeId(null)
     setConfirmingShow(show)
   }
 
@@ -142,63 +144,16 @@ export default function Watching() {
 
       {!loading && !error && shows.length > 0 && (
         <div className="mt-4 flex flex-col gap-3">
-          {shows.map((show) => {
-            const isRemoving = removingIds.has(show.id)
-
-            return (
-              <div
-                key={show.id}
-                className="flex gap-3 overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface) p-3"
-              >
-                <Link
-                  to={`/watching/${show.tmdb_id}`}
-                  className="flex flex-1 items-center gap-3 text-left"
-                >
-                  {show.poster_path ? (
-                    <img
-                      src={POSTER_BASE + show.poster_path}
-                      alt={show.name}
-                      className="h-24 w-16 shrink-0 rounded-md object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-24 w-16 shrink-0 items-center justify-center rounded-md bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-                      No poster
-                    </div>
-                  )}
-
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-(--color-text)">
-                      {show.name}
-                    </p>
-
-                    {show.nextUp ? (
-                      <p className="mt-1 text-xs text-(--color-accent)">
-                        Up next: S{show.nextUp.season_number}E{show.nextUp.episode_number}
-                        {show.nextUp.name ? ` · ${show.nextUp.name}` : ''}
-                      </p>
-                    ) : show.loadError ? (
-                      <p className="mt-1 text-xs text-red-400">Couldn't load episodes</p>
-                    ) : (
-                      <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
-                    )}
-                  </div>
-
-                  <span aria-hidden="true" className="shrink-0 text-(--color-text-muted)">
-                    ›
-                  </span>
-                </Link>
-
-                <button
-                  type="button"
-                  onClick={() => handleRemove(show)}
-                  disabled={isRemoving}
-                  className="h-fit shrink-0 rounded-md px-2 py-1.5 text-xs font-medium text-(--color-text-muted) disabled:opacity-60"
-                >
-                  {isRemoving ? 'Removing…' : 'Remove'}
-                </button>
-              </div>
-            )
-          })}
+          {shows.map((show) => (
+            <WatchingRow
+              key={show.id}
+              show={show}
+              isRemoving={removingIds.has(show.id)}
+              isOpen={openSwipeId === show.id}
+              onOpenChange={setOpenSwipeId}
+              onRemove={handleRemove}
+            />
+          ))}
         </div>
       )}
 
