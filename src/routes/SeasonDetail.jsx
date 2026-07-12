@@ -4,17 +4,28 @@ import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, hasAired, formatDate } from '../lib/watchHelpers'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
+import {
+  showDetailCacheKey,
+  seasonDetailCacheKey,
+  readDetailCache,
+  writeDetailCache,
+} from '../lib/detailCache'
+import SeasonDetailSkeleton from '../components/SeasonDetailSkeleton'
 
-export default function SeasonDetail() {
-  const { tmdbId, seasonNumber } = useParams()
+// tmdbId/seasonNumber changes are handled by remounting (see the keyed
+// wrapper below) rather than resetting state in an effect, so the
+// cache-on-mount initializers below always read the correct season's cache.
+function SeasonDetailInner({ tmdbId, seasonNumber }) {
   const numericTmdbId = Number(tmdbId)
   const numericSeasonNumber = Number(seasonNumber)
+  const cacheKey = seasonDetailCacheKey(numericTmdbId, numericSeasonNumber)
 
-  const [showName, setShowName] = useState('')
-  const [dayShift, setDayShift] = useState(0)
-  const [episodes, setEpisodes] = useState(null)
-  const [watched, setWatched] = useState(new Set())
-  const [loading, setLoading] = useState(true)
+  const [cached] = useState(() => readDetailCache(cacheKey))
+  const [showName, setShowName] = useState(() => cached?.showName ?? '')
+  const [dayShift, setDayShift] = useState(() => cached?.dayShift ?? 0)
+  const [episodes, setEpisodes] = useState(() => cached?.episodes ?? null)
+  const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
+  const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
   const [busyEpisodes, setBusyEpisodes] = useState(new Set())
   const [isSeasonBusy, setIsSeasonBusy] = useState(false)
@@ -23,7 +34,6 @@ export default function SeasonDetail() {
     let ignore = false
 
     async function load() {
-      setLoading(true)
       setError(null)
       try {
         const [{ data: watchedRows, error: watchedError }, details, seasonData] = await Promise.all([
@@ -38,12 +48,22 @@ export default function SeasonDetail() {
         if (watchedError) throw watchedError
         if (ignore) return
 
-        setShowName(details.name ?? '')
-        setDayShift(dayShiftForNetworks(details.networks))
-        setEpisodes(seasonData.episodes)
-        setWatched(
-          new Set((watchedRows ?? []).map((row) => episodeKey(numericSeasonNumber, row.episode_number))),
+        const nextShowName = details.name ?? ''
+        const nextDayShift = dayShiftForNetworks(details.networks)
+        const watchedList = (watchedRows ?? []).map((row) =>
+          episodeKey(numericSeasonNumber, row.episode_number),
         )
+
+        setShowName(nextShowName)
+        setDayShift(nextDayShift)
+        setEpisodes(seasonData.episodes)
+        setWatched(new Set(watchedList))
+        writeDetailCache(cacheKey, {
+          showName: nextShowName,
+          dayShift: nextDayShift,
+          episodes: seasonData.episodes,
+          watchedList,
+        })
       } catch {
         if (!ignore) setError('Failed to load this season. Try refreshing.')
       } finally {
@@ -55,7 +75,34 @@ export default function SeasonDetail() {
     return () => {
       ignore = true
     }
-  }, [numericTmdbId, numericSeasonNumber])
+  }, [numericTmdbId, numericSeasonNumber, cacheKey])
+
+  // Writes the season's own cache with the new watched set, and patches the
+  // parent ShowDetail cache (if present) so its watched counts don't go
+  // stale until its own background refresh runs — same principle as
+  // Watching.jsx's confirmRemove updating its cache right after the mutation
+  // succeeds, extended across the two related cache entries.
+  function syncWatchedCaches(nextWatchedSet) {
+    const watchedList = [...nextWatchedSet]
+    writeDetailCache(cacheKey, {
+      showName,
+      dayShift,
+      episodes,
+      watchedList,
+    })
+
+    const showCacheKey = showDetailCacheKey(numericTmdbId)
+    const showCached = readDetailCache(showCacheKey)
+    if (showCached) {
+      const otherSeasonsWatched = (showCached.watchedList ?? []).filter(
+        (key) => !key.startsWith(`${numericSeasonNumber}:`),
+      )
+      writeDetailCache(showCacheKey, {
+        ...showCached,
+        watchedList: [...otherSeasonsWatched, ...watchedList],
+      })
+    }
+  }
 
   async function toggleEpisode(episode) {
     const epKey = episodeKey(numericSeasonNumber, episode.episode_number)
@@ -88,12 +135,11 @@ export default function SeasonDetail() {
         if (upsertError) throw upsertError
       }
 
-      setWatched((prev) => {
-        const next = new Set(prev)
-        if (wasWatched) next.delete(epKey)
-        else next.add(epKey)
-        return next
-      })
+      const nextWatched = new Set(watched)
+      if (wasWatched) nextWatched.delete(epKey)
+      else nextWatched.add(epKey)
+      setWatched(nextWatched)
+      syncWatchedCaches(nextWatched)
     } finally {
       setBusyEpisodes((prev) => {
         const next = new Set(prev)
@@ -128,11 +174,10 @@ export default function SeasonDetail() {
         if (upsertError) throw upsertError
       }
 
-      setWatched((prev) => {
-        const next = new Set(prev)
-        for (const ep of airedEpisodes) next.add(episodeKey(numericSeasonNumber, ep.episode_number))
-        return next
-      })
+      const nextWatched = new Set(watched)
+      for (const ep of airedEpisodes) nextWatched.add(episodeKey(numericSeasonNumber, ep.episode_number))
+      setWatched(nextWatched)
+      syncWatchedCaches(nextWatched)
     } finally {
       setIsSeasonBusy(false)
     }
@@ -162,11 +207,23 @@ export default function SeasonDetail() {
         </div>
       </div>
 
-      {loading && <p className="mt-4 text-sm text-(--color-text-muted)">Loading…</p>}
+      {loading && <SeasonDetailSkeleton />}
 
-      {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-red-400/80 hover:text-red-400"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
-      {!loading && !error && episodes && (
+      {!loading && episodes && (
         <div className="mt-4 flex flex-col gap-2">
           {hasUnwatchedAiredEpisodes && (
             <button
@@ -221,5 +278,16 @@ export default function SeasonDetail() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function SeasonDetail() {
+  const { tmdbId, seasonNumber } = useParams()
+  return (
+    <SeasonDetailInner
+      key={`${tmdbId}:${seasonNumber}`}
+      tmdbId={tmdbId}
+      seasonNumber={seasonNumber}
+    />
   )
 }
