@@ -5,10 +5,33 @@ import { episodeKey, computeNextUp } from '../lib/watchHelpers'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
+import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
+
+const CACHE_KEY = 'watching_cache:v1'
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function saveCache(shows) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(shows))
+  } catch {
+    // ignore quota/serialization errors, cache is best-effort
+  }
+}
 
 export default function Watching() {
-  const [shows, setShows] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [cachedShows] = useState(() => loadCache())
+  const [shows, setShows] = useState(() => cachedShows ?? [])
+  const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
@@ -18,7 +41,6 @@ export default function Watching() {
     let ignore = false
 
     async function load() {
-      setLoading(true)
       setError(null)
       try {
         const { data: trackedShows, error: showsError } = await supabase
@@ -28,7 +50,10 @@ export default function Watching() {
         if (showsError) throw showsError
 
         if (!trackedShows || trackedShows.length === 0) {
-          if (!ignore) setShows([])
+          if (!ignore) {
+            setShows([])
+            saveCache([])
+          }
           return
         }
 
@@ -63,10 +88,12 @@ export default function Watching() {
                 .filter((season) => season.season_number > 0)
                 .sort((a, b) => a.season_number - b.season_number)
 
-              for (const season of seasons) {
-                const seasonData = await getSeasonEpisodes(show.tmdb_id, season.season_number)
-                episodesBySeason[season.season_number] = seasonData.episodes
-              }
+              const episodesArrays = await Promise.all(
+                seasons.map((season) => getSeasonEpisodes(show.tmdb_id, season.season_number)),
+              )
+              seasons.forEach((season, i) => {
+                episodesBySeason[season.season_number] = episodesArrays[i].episodes
+              })
             } catch {
               loadError = true
             }
@@ -89,6 +116,7 @@ export default function Watching() {
         })
 
         setShows(enriched)
+        saveCache(enriched)
       } catch {
         if (!ignore) setError('Failed to load your shows. Try refreshing.')
       } finally {
@@ -119,7 +147,11 @@ export default function Watching() {
       .eq('id', show.id)
 
     if (!deleteError) {
-      setShows((prev) => prev.filter((s) => s.id !== show.id))
+      setShows((prev) => {
+        const next = prev.filter((s) => s.id !== show.id)
+        saveCache(next)
+        return next
+      })
     }
     setRemovingIds((prev) => {
       const next = new Set(prev)
@@ -132,9 +164,27 @@ export default function Watching() {
     <div className="p-4">
       <h1 className="text-xl font-semibold text-(--color-text)">Watching</h1>
 
-      {loading && <p className="mt-4 text-sm text-(--color-text-muted)">Loading…</p>}
+      {loading && (
+        <div className="mt-4 flex flex-col gap-3">
+          <WatchingRowSkeleton />
+          <WatchingRowSkeleton />
+          <WatchingRowSkeleton />
+        </div>
+      )}
 
-      {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-red-400/80 hover:text-red-400"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {!loading && !error && shows.length === 0 && (
         <p className="mt-8 text-center text-(--color-text-muted)">
@@ -142,7 +192,7 @@ export default function Watching() {
         </p>
       )}
 
-      {!loading && !error && shows.length > 0 && (
+      {!loading && shows.length > 0 && (
         <div className="mt-4 flex flex-col gap-3">
           {shows.map((show) => (
             <WatchingRow
