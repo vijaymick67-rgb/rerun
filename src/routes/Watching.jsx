@@ -4,8 +4,8 @@ import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, computeWatchingStatus, isHiddenFromWatching } from '../lib/watchHelpers'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
-import WatchingTile from '../components/WatchingTile'
-import WatchingTileSkeleton from '../components/WatchingTileSkeleton'
+import WatchingRow from '../components/WatchingRow'
+import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 
 // v2: shows now carry `status` (nextUp/countdown/caughtUp/completed) instead
 // of a bare `nextUp` — bumped so a stale v1 entry doesn't briefly render as
@@ -38,6 +38,7 @@ export default function Watching() {
   const [error, setError] = useState(null)
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
+  const [openSwipeId, setOpenSwipeId] = useState(null)
 
   useEffect(() => {
     let ignore = false
@@ -136,6 +137,7 @@ export default function Watching() {
   }, [])
 
   function handleRemove(show) {
+    setOpenSwipeId(null)
     setConfirmingShow(show)
   }
 
@@ -171,10 +173,10 @@ export default function Watching() {
       <h1 className="text-xl font-semibold text-(--color-text)">Watching</h1>
 
       {loading && (
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <WatchingTileSkeleton />
-          <WatchingTileSkeleton />
-          <WatchingTileSkeleton />
+        <div className="mt-4 flex flex-col gap-3">
+          <WatchingRowSkeleton />
+          <WatchingRowSkeleton />
+          <WatchingRowSkeleton />
         </div>
       )}
 
@@ -205,12 +207,14 @@ export default function Watching() {
       )}
 
       {!loading && visibleShows.length > 0 && (
-        <div className="mt-4 grid grid-cols-3 gap-3">
+        <div className="mt-4 flex flex-col gap-3">
           {visibleShows.map((show) => (
-            <WatchingTile
+            <WatchingRow
               key={show.id}
               show={show}
               isRemoving={removingIds.has(show.id)}
+              isOpen={openSwipeId === show.id}
+              onOpenChange={setOpenSwipeId}
               onRemove={handleRemove}
             />
           ))}
