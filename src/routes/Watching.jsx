@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
-import { episodeKey, computeNextUp } from '../lib/watchHelpers'
+import { episodeKey, computeWatchingStatus, isHiddenFromWatching } from '../lib/watchHelpers'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
 import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 
-const CACHE_KEY = 'watching_cache:v1'
+// v2: shows now carry `status` (nextUp/countdown/caughtUp/completed) instead
+// of a bare `nextUp` — bumped so a stale v1 entry doesn't briefly render as
+// "Caught up" before the fresh load overwrites it.
+const CACHE_KEY = 'watching_cache:v2'
 
 function loadCache() {
   try {
@@ -81,8 +84,9 @@ export default function Watching() {
             let loadError = false
 
             let dayShift = 0
+            let details = null
             try {
-              const details = await getShowDetails(show.tmdb_id)
+              details = await getShowDetails(show.tmdb_id)
               dayShift = dayShiftForNetworks(details.networks)
               const seasons = (details.seasons ?? [])
                 .filter((season) => season.season_number > 0)
@@ -101,17 +105,19 @@ export default function Watching() {
             return {
               ...show,
               loadError,
-              nextUp: computeNextUp(episodesBySeason, watched, dayShift),
+              status: computeWatchingStatus(episodesBySeason, watched, dayShift, details),
             }
           }),
         )
 
         if (ignore) return
 
+        const statusRank = { nextUp: 0, countdown: 1, caughtUp: 2, completed: 3 }
         enriched.sort((a, b) => {
-          if (a.nextUp && b.nextUp) return a.nextUp.air_date < b.nextUp.air_date ? -1 : 1
-          if (a.nextUp) return -1
-          if (b.nextUp) return 1
+          const rankDiff = statusRank[a.status.type] - statusRank[b.status.type]
+          if (rankDiff !== 0) return rankDiff
+          if (a.status.type === 'nextUp') return a.status.air_date < b.status.air_date ? -1 : 1
+          if (a.status.type === 'countdown') return a.status.daysUntil - b.status.daysUntil
           return new Date(b.added_at) - new Date(a.added_at)
         })
 
@@ -160,6 +166,8 @@ export default function Watching() {
     })
   }
 
+  const visibleShows = shows.filter((show) => !isHiddenFromWatching(show.status))
+
   return (
     <div className="p-4">
       <h1 className="text-xl font-semibold text-(--color-text)">Watching</h1>
@@ -192,9 +200,15 @@ export default function Watching() {
         </p>
       )}
 
-      {!loading && shows.length > 0 && (
+      {!loading && !error && shows.length > 0 && visibleShows.length === 0 && (
+        <p className="mt-8 text-center text-(--color-text-muted)">
+          Nothing airing soon.
+        </p>
+      )}
+
+      {!loading && visibleShows.length > 0 && (
         <div className="mt-4 flex flex-col gap-3">
-          {shows.map((show) => (
+          {visibleShows.map((show) => (
             <WatchingRow
               key={show.id}
               show={show}

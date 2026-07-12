@@ -8,11 +8,27 @@ export function episodeKey(seasonNumber, episodeNumber) {
 
 // Local calendar date, e.g. "2026-07-15" — see hasAired() below for why this
 // can't be derived from toISOString().
-function localTodayISO() {
+export function localTodayISO() {
   const now = new Date()
   const month = String(now.getMonth() + 1).padStart(2, '0')
   const day = String(now.getDate()).padStart(2, '0')
   return `${now.getFullYear()}-${month}-${day}`
+}
+
+// Calendar-day difference between two YYYY-MM-DD dates (toISO - fromISO).
+function daysBetween(fromISO, toISO) {
+  const [fy, fm, fd] = fromISO.split('-').map(Number)
+  const [ty, tm, td] = toISO.split('-').map(Number)
+  const fromDate = new Date(fy, fm - 1, fd)
+  const toDate = new Date(ty, tm - 1, td)
+  return Math.round((toDate - fromDate) / 86400000)
+}
+
+// Days from today until a (possibly network-shifted) air date. Returns null
+// when there's no date to compute against.
+export function daysUntil(airDate, dayShift = 0) {
+  if (!airDate || !ISO_DATE_RE.test(airDate)) return null
+  return daysBetween(localTodayISO(), shiftAirDate(airDate, dayShift))
 }
 
 // Bug fix: "today" used to come from new Date().toISOString(), which converts
@@ -56,4 +72,45 @@ export function computeNextUp(episodesBySeason, watched, dayShift = 0) {
     }
   }
   return null
+}
+
+// Airs today/tomorrow renders as "Airs soon" instead of a day count.
+const AIRS_SOON_THRESHOLD_DAYS = 1
+
+// Richer status for a tracked show, covering the cases computeNextUp alone
+// can't distinguish: an unaired premiere, a mid-run gap awaiting a renewal
+// date, and a show that's finished forever. `details` is the trimmed
+// getShowDetails() response (status + next_episode_to_air).
+export function computeWatchingStatus(episodesBySeason, watched, dayShift, details) {
+  const nextUp = computeNextUp(episodesBySeason, watched, dayShift)
+  if (nextUp) return { type: 'nextUp', ...nextUp }
+
+  const nextAirDate = details?.next_episode_to_air?.air_date
+  const daysUntilAir = daysUntil(nextAirDate, dayShift)
+  if (nextAirDate && daysUntilAir !== null) {
+    return {
+      type: 'countdown',
+      air_date: shiftAirDate(nextAirDate, dayShift),
+      daysUntil: daysUntilAir,
+      airsSoon: daysUntilAir <= AIRS_SOON_THRESHOLD_DAYS,
+    }
+  }
+
+  if (details?.status === 'Ended' || details?.status === 'Canceled') {
+    return { type: 'completed' }
+  }
+
+  return { type: 'caughtUp' }
+}
+
+// Combined Watching-tab visibility rule: hide a show once there's nothing
+// unwatched already aired, and either it's finished forever or its next
+// known episode is too far out to be worth showing yet.
+const HIDE_COUNTDOWN_BEYOND_DAYS = 60
+
+export function isHiddenFromWatching(status) {
+  if (!status) return false
+  if (status.type === 'completed') return true
+  if (status.type === 'countdown' && status.daysUntil > HIDE_COUNTDOWN_BEYOND_DAYS) return true
+  return false
 }

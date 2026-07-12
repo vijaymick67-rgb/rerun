@@ -141,13 +141,17 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-(--color-text)">{show.name}</p>
 
-            {show.nextUp ? (
-              <p className="mt-1 text-xs text-(--color-accent)">
-                Up next: S{show.nextUp.season_number}E{show.nextUp.episode_number}
-                {show.nextUp.name ? ` · ${show.nextUp.name}` : ''}
-              </p>
-            ) : show.loadError ? (
+            {show.loadError ? (
               <p className="mt-1 text-xs text-red-400">Couldn't load episodes</p>
+            ) : show.status?.type === 'nextUp' ? (
+              <p className="mt-1 text-xs text-(--color-accent)">
+                Up next: S{show.status.season_number}E{show.status.episode_number}
+                {show.status.name ? ` · ${show.status.name}` : ''}
+              </p>
+            ) : show.status?.type === 'countdown' ? (
+              <p className="mt-1 text-xs text-(--color-text-muted)">
+                {show.status.airsSoon ? 'Airs soon' : `${show.status.daysUntil} days`}
+              </p>
             ) : (
               <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
             )}
