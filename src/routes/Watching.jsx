@@ -10,7 +10,9 @@ import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 // v2: shows now carry `status` (nextUp/countdown/caughtUp/completed) instead
 // of a bare `nextUp` — bumped so a stale v1 entry doesn't briefly render as
 // "Caught up" before the fresh load overwrites it.
-const CACHE_KEY = 'watching_cache:v2'
+// v3: one-time cache-bust so the Settings bulk-mark-watched writes are picked
+// up — old v2 entries are simply never matched and a fresh Supabase fetch runs.
+const CACHE_KEY = 'watching_cache:v3'
 
 function loadCache() {
   try {
