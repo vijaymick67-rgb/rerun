@@ -3,6 +3,52 @@ const CACHE_PREFIX = 'tmdb_cache:'
 
 export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 
+// Bump this whenever a cached shape changes OR a data-correctness fix means
+// previously-cached values may now be wrong. This is the important one: the
+// TMDB cache below lives in localStorage with no expiry, so a show cached
+// before its `networks` were captured holds `networks: []` forever, which
+// silently disables the IST day-shift (dayShiftForNetworks([]) === 0) and
+// leaves the raw US air_date on screen — e.g. Sugar S2E4 stuck on "Jul 9"
+// instead of "Jul 10". A hard refresh reloads the JS bundle but NOT
+// localStorage, so a correct code fix cannot dislodge a stale cached value.
+// Bumping this version wipes the stale entries on next load so they refetch.
+const CACHE_SCHEMA_VERSION = '3'
+const SCHEMA_KEY = 'tmdb_cache_schema_version'
+
+let lastPruneCount = 0
+// Exposed so a temporary debug banner can show how many stale entries were
+// cleared on this load (see SeasonDetail). Safe to keep — it's just a number.
+export function getLastPruneCount() {
+  return lastPruneCount
+}
+export { CACHE_SCHEMA_VERSION }
+
+function pruneCacheIfSchemaChanged() {
+  try {
+    if (localStorage.getItem(SCHEMA_KEY) === CACHE_SCHEMA_VERSION) return
+    let removed = 0
+    // Iterate downward so removeItem doesn't shift indexes we haven't seen.
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith(CACHE_PREFIX)) {
+        localStorage.removeItem(key)
+        removed++
+      }
+    }
+    localStorage.setItem(SCHEMA_KEY, CACHE_SCHEMA_VERSION)
+    lastPruneCount = removed
+    if (removed > 0) {
+      console.warn(
+        `tmdb cache: schema v${CACHE_SCHEMA_VERSION} → cleared ${removed} stale cached entr${removed === 1 ? 'y' : 'ies'}`,
+      )
+    }
+  } catch {
+    // localStorage unavailable — nothing to prune
+  }
+}
+
+pruneCacheIfSchemaChanged()
+
 function readCache(key) {
   try {
     const raw = localStorage.getItem(CACHE_PREFIX + key)
