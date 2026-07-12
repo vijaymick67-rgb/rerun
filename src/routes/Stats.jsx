@@ -410,32 +410,24 @@ export default function Stats() {
             </div>
           )}
 
-          <div className="mt-6 flex flex-col gap-2">
+          <div className="mt-6 grid grid-cols-3 gap-3">
             {shows.map((show) => (
-              <Link
-                key={show.tmdb_id}
-                to={`/watching/${show.tmdb_id}`}
-                className="flex items-center gap-3 rounded-lg border border-(--color-border) bg-(--color-surface) p-3"
-              >
+              <Link key={show.tmdb_id} to={`/watching/${show.tmdb_id}`} className="block">
                 {show.poster_path ? (
                   <img
                     src={POSTER_BASE + show.poster_path}
                     alt={show.name}
-                    className="h-16 w-11 shrink-0 rounded-md object-cover"
+                    className="aspect-[2/3] w-full rounded-lg border border-(--color-border) object-cover"
                   />
                 ) : (
-                  <div className="flex h-16 w-11 shrink-0 items-center justify-center rounded-md bg-(--color-surface-raised) text-[10px] text-(--color-text-muted)">
+                  <div className="flex aspect-[2/3] w-full items-center justify-center rounded-lg border border-(--color-border) bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
                     No poster
                   </div>
                 )}
 
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-(--color-text)">{show.name}</p>
-                </div>
-
-                <span aria-hidden="true" className="shrink-0 text-(--color-text-muted)">
-                  ›
-                </span>
+                <p className="mt-1.5 truncate text-xs font-medium text-(--color-text)">
+                  {show.name}
+                </p>
               </Link>
             ))}
           </div>
