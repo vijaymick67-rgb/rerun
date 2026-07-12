@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
-import { episodeKey, computeWatchingStatus } from '../lib/watchHelpers'
+import { episodeKey } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import { isVisibleInWatching } from '../lib/finishedShows'
+import {
+  enrichTrackedShowsForWatching,
+  selectTrackedShowsForWatching,
+} from '../lib/watchingShows'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
-import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
 import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
@@ -33,7 +36,6 @@ export default function Watching() {
         const { data: trackedShows, error: showsError } = await supabase
           .from('tracked_shows')
           .select('*')
-          .is('finished_at', null)
           .order('added_at', { ascending: false })
         if (showsError) throw showsError
 
@@ -45,7 +47,20 @@ export default function Watching() {
           return
         }
 
-        const tmdbIds = trackedShows.map((show) => show.tmdb_id)
+        const { candidates, preloadedById } = await selectTrackedShowsForWatching(
+          trackedShows,
+          getShowDetails,
+        )
+
+        if (candidates.length === 0) {
+          if (!ignore) {
+            setShows([])
+            saveWatchingCache([])
+          }
+          return
+        }
+
+        const tmdbIds = candidates.map((show) => show.tmdb_id)
         const watchedRows = await fetchWatchedEpisodes(
           supabase,
           'tmdb_show_id, season_number, episode_number',
@@ -62,37 +77,11 @@ export default function Watching() {
             .add(episodeKey(row.season_number, row.episode_number))
         }
 
-        const enriched = await Promise.all(
-          trackedShows.map(async (show) => {
-            const watched = watchedByShowId.get(show.tmdb_id) ?? new Set()
-            const episodesBySeason = {}
-            let loadError = false
-
-            let dayShift = 0
-            let details = null
-            try {
-              details = await getShowDetails(show.tmdb_id)
-              dayShift = dayShiftForNetworks(details.networks)
-              const seasons = (details.seasons ?? [])
-                .filter((season) => season.season_number > 0)
-                .sort((a, b) => a.season_number - b.season_number)
-
-              const episodesArrays = await Promise.all(
-                seasons.map((season) => getSeasonEpisodes(show.tmdb_id, season.season_number)),
-              )
-              seasons.forEach((season, i) => {
-                episodesBySeason[season.season_number] = episodesArrays[i].episodes
-              })
-            } catch {
-              loadError = true
-            }
-
-            return {
-              ...show,
-              loadError,
-              status: computeWatchingStatus(episodesBySeason, watched, dayShift, details),
-            }
-          }),
+        const enriched = await enrichTrackedShowsForWatching(
+          candidates,
+          watchedByShowId,
+          preloadedById,
+          { getShowDetails, getSeasonEpisodes },
         )
 
         if (ignore) return

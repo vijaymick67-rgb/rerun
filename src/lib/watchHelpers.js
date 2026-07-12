@@ -107,11 +107,21 @@ export function computeWatchingStatus(episodesBySeason, watched, dayShift, detai
 // Combined Watching-tab visibility rule: hide a show once there's nothing
 // unwatched already aired, and either it's finished forever or its next
 // known episode is too far out to be worth showing yet.
-const HIDE_COUNTDOWN_BEYOND_DAYS = 60
+export const WATCHING_COUNTDOWN_WINDOW_DAYS = 60
 
 export function isHiddenFromWatching(status) {
   if (!status) return false
   if (status.type === 'completed') return true
-  if (status.type === 'countdown' && status.daysUntil > HIDE_COUNTDOWN_BEYOND_DAYS) return true
+  if (status.type === 'countdown' && status.daysUntil > WATCHING_COUNTDOWN_WINDOW_DAYS) return true
   return false
+}
+
+// Kept separate from the row component so countdown wording is covered by the
+// same unit tests as the status subtype that drives it.
+export function watchingStatusLabel(status) {
+  const isPremiere = status.subtype === 'premiere'
+  if (status.airsSoon) return isPremiere ? 'Airs soon' : 'New episode soon'
+  return isPremiere
+    ? `Airs in ${status.daysUntil} days`
+    : `New episode in ${status.daysUntil} days`
 }
