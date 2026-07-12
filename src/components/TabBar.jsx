@@ -3,8 +3,8 @@ import { NavLink } from 'react-router-dom'
 const TABS = [
   { to: '/browse', label: 'Browse' },
   { to: '/watching', label: 'Watching' },
-  { to: '/log', label: 'Log' },
   { to: '/stats', label: 'Stats' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 export default function TabBar() {

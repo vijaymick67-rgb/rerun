@@ -4,8 +4,8 @@ import Browse from './routes/Browse'
 import Watching from './routes/Watching'
 import ShowDetail from './routes/ShowDetail'
 import SeasonDetail from './routes/SeasonDetail'
-import Log from './routes/Log'
 import Stats from './routes/Stats'
+import Settings from './routes/Settings'
 
 function App() {
   return (
@@ -16,8 +16,8 @@ function App() {
         <Route path="/watching" element={<Watching />} />
         <Route path="/watching/:tmdbId" element={<ShowDetail />} />
         <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
-        <Route path="/log" element={<Log />} />
         <Route path="/stats" element={<Stats />} />
+        <Route path="/settings" element={<Settings />} />
       </Routes>
       <TabBar />
     </div>
