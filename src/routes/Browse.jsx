@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { searchShows, getShowDetails, POSTER_BASE } from '../lib/tmdb'
+import { searchShows, getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { supabase } from '../lib/supabase'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
-import { daysUntil } from '../lib/watchHelpers'
+import { daysUntil, hasAired } from '../lib/watchHelpers'
 
 const DEBOUNCE_MS = 400
 const UNIQUE_VIOLATION = '23505'
@@ -16,6 +16,8 @@ export default function Browse() {
   const [searched, setSearched] = useState(false)
   const [trackedIds, setTrackedIds] = useState(new Set())
   const [addingIds, setAddingIds] = useState(new Set())
+  const [loggingIds, setLoggingIds] = useState(new Set())
+  const [loggedIds, setLoggedIds] = useState(new Set())
   const [delayedAddMessage, setDelayedAddMessage] = useState(null)
   const debounceRef = useRef(null)
 
@@ -99,6 +101,72 @@ export default function Browse() {
     }
   }
 
+  // "Log as watched" — retroactively log a show finished before using the app,
+  // without ticking every episode by hand. Ensures the show is tracked (same
+  // UNIQUE_VIOLATION handling as handleAdd), then bulk-marks every already-aired
+  // episode watched. Unaired future episodes are skipped — they don't exist yet
+  // to mark, even though the user is claiming to have "seen the whole show".
+  async function handleLogWatched(show) {
+    setLoggingIds((prev) => new Set(prev).add(show.id))
+
+    try {
+      const { error: insertError } = await supabase.from('tracked_shows').insert({
+        tmdb_id: show.id,
+        name: show.name,
+        poster_path: show.poster_path,
+        added_at: new Date().toISOString(),
+      })
+      if (insertError && insertError.code !== UNIQUE_VIOLATION) {
+        throw insertError
+      }
+      setTrackedIds((prev) => new Set(prev).add(show.id))
+
+      const details = await getShowDetails(show.id)
+      const dayShift = dayShiftForNetworks(details.networks)
+      const seasons = (details.seasons ?? [])
+        .filter((season) => season.season_number > 0)
+        .sort((a, b) => a.season_number - b.season_number)
+
+      const episodesArrays = await Promise.all(
+        seasons.map((season) => getSeasonEpisodes(show.id, season.season_number)),
+      )
+
+      const now = new Date().toISOString()
+      const rows = []
+      seasons.forEach((season, i) => {
+        for (const ep of episodesArrays[i].episodes) {
+          if (hasAired(ep, dayShift)) {
+            rows.push({
+              tmdb_show_id: show.id,
+              season_number: season.season_number,
+              episode_number: ep.episode_number,
+              episode_name: ep.name,
+              runtime_minutes: ep.runtime,
+              watched_at: now,
+            })
+          }
+        }
+      })
+
+      if (rows.length > 0) {
+        const { error: upsertError } = await supabase
+          .from('watched_episodes')
+          .upsert(rows, { onConflict: 'tmdb_show_id,season_number,episode_number' })
+        if (upsertError) throw upsertError
+      }
+
+      setLoggedIds((prev) => new Set(prev).add(show.id))
+    } catch {
+      // best-effort — leave the button in its default state so the user can retry
+    } finally {
+      setLoggingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(show.id)
+        return next
+      })
+    }
+  }
+
   return (
     <div className="p-4">
       <h1 className="text-xl font-semibold text-(--color-text)">Browse</h1>
@@ -148,6 +216,8 @@ export default function Browse() {
           {results.map((show) => {
             const isTracked = trackedIds.has(show.id)
             const isAdding = addingIds.has(show.id)
+            const isLogging = loggingIds.has(show.id)
+            const isLogged = loggedIds.has(show.id)
             const year = show.first_air_date
               ? show.first_air_date.slice(0, 4)
               : null
@@ -188,6 +258,19 @@ export default function Browse() {
                     }`}
                   >
                     {isTracked ? 'Added' : isAdding ? 'Adding…' : 'Add'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleLogWatched(show)}
+                    disabled={isLogged || isLogging}
+                    className={`mt-1.5 w-full rounded-md py-1.5 text-xs font-medium ${
+                      isLogged
+                        ? 'bg-(--color-surface-raised) text-(--color-text-muted)'
+                        : 'border border-(--color-border) text-(--color-text-muted) disabled:opacity-60'
+                    }`}
+                  >
+                    {isLogged ? 'Logged ✓' : isLogging ? 'Logging…' : 'Log as watched'}
                   </button>
                 </div>
               </div>

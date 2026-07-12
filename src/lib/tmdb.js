@@ -103,12 +103,15 @@ export async function searchShows(query) {
 // getSeasonEpisodes) and network names (used to correct TMDB's US air_date
 // to the IST-effective release day — see lib/networkReleaseTiming.js).
 //
-// Cache key bumped to :v2 so shows cached before `networks` was added here
-// get re-trimmed from the underlying tmdbFetch response (already cached raw
-// — TMDB's /tv/{id} always includes networks — so this is not a new network
-// call) instead of silently missing the field forever.
+// Cache key bumped across versions so shows cached before a field was added
+// here get re-trimmed from the underlying tmdbFetch response (already cached
+// raw — TMDB's /tv/{id} always includes these fields — so this is not a new
+// network call) instead of silently missing the field forever:
+//   :v2 added `networks`
+//   :v3 added `episode_run_time` (per-show runtime fallback used by Stats
+//       when an individual episode's own runtime is null)
 export async function getShowDetails(tmdbId) {
-  const cacheKey = `/tv/${tmdbId}:v2`
+  const cacheKey = `/tv/${tmdbId}:v3`
   const cached = readCache(cacheKey)
   if (cached) return cached
 
@@ -122,6 +125,9 @@ export async function getShowDetails(tmdbId) {
     status: data.status,
     number_of_seasons: data.number_of_seasons,
     number_of_episodes: data.number_of_episodes,
+    // TMDB's show-level typical runtime(s), in minutes — used as a fallback
+    // for episodes whose own `runtime` is null (see Stats time computation).
+    episode_run_time: data.episode_run_time ?? [],
     next_episode_to_air: data.next_episode_to_air
       ? {
           air_date: data.next_episode_to_air.air_date,
