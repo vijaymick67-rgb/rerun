@@ -7,6 +7,7 @@ import {
   planBulkMark,
   bulkMarkShows,
 } from '../lib/bulkMarkWatched'
+import { countWatchedEpisodes } from '../lib/watchedEpisodes'
 
 export default function Settings() {
   const [file, setFile] = useState(null)
@@ -171,7 +172,17 @@ function BulkMarkTool() {
       const res = await bulkMarkShows(plan.affected, {
         onProgress: (p) => setProgress(p),
       })
-      setResults(res)
+      let readableCount = null
+      let readBackError = null
+      try {
+        readableCount = await countWatchedEpisodes(
+          supabase,
+          plan.affected.map((show) => show.tmdb_id),
+        )
+      } catch (readError) {
+        readBackError = readError.message || 'Unknown error'
+      }
+      setResults({ rows: res, readableCount, readBackError })
     } catch (err) {
       setError(err.message || 'Bulk-mark failed.')
     } finally {
@@ -334,8 +345,8 @@ function BulkPreview({ plan, running, onConfirm }) {
 }
 
 function BulkSummary({ results, plan, onReset }) {
-  const marked = results.filter((r) => !r.error)
-  const failed = results.filter((r) => r.error)
+  const marked = results.rows.filter((r) => !r.error)
+  const failed = results.rows.filter((r) => r.error)
   const totalInserted = marked.reduce((sum, r) => sum + r.insertedCount, 0)
 
   return (
@@ -344,6 +355,14 @@ function BulkSummary({ results, plan, onReset }) {
       <p className="mt-1 text-sm text-(--color-text-muted)">
         {totalInserted} new episode{totalInserted === 1 ? '' : 's'} marked across{' '}
         {marked.length} show{marked.length === 1 ? '' : 's'}.
+      </p>
+
+      <p className="mt-3 rounded-md bg-(--color-surface-raised) px-3 py-2 text-xs text-(--color-text-muted)">
+        {results.readBackError
+          ? `Live read-back could not be verified: ${results.readBackError}`
+          : `Live read-back: the app can now see ${results.readableCount} watched episode${
+              results.readableCount === 1 ? '' : 's'
+            } across the affected shows.`}
       </p>
 
       {marked.length > 0 && (
