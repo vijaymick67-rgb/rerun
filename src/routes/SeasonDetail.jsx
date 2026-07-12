@@ -1,14 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { getShowDetails, getSeasonEpisodes, getLastPruneCount, CACHE_SCHEMA_VERSION } from '../lib/tmdb'
+import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, hasAired, formatDate } from '../lib/watchHelpers'
 import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
-
-// TEMPORARY: on-screen diagnostic banner so the IST air-date fix can be
-// verified live from mobile Safari (no dev tools needed). Remove once the
-// Sugar S2E4 → "Jul 10" fix is confirmed on production.
-const SHOW_DEBUG = true
 
 export default function SeasonDetail() {
   const { tmdbId, seasonNumber } = useParams()
@@ -16,7 +11,6 @@ export default function SeasonDetail() {
   const numericSeasonNumber = Number(seasonNumber)
 
   const [showName, setShowName] = useState('')
-  const [networks, setNetworks] = useState([])
   const [dayShift, setDayShift] = useState(0)
   const [episodes, setEpisodes] = useState(null)
   const [watched, setWatched] = useState(new Set())
@@ -45,7 +39,6 @@ export default function SeasonDetail() {
         if (ignore) return
 
         setShowName(details.name ?? '')
-        setNetworks(details.networks ?? [])
         setDayShift(dayShiftForNetworks(details.networks))
         setEpisodes(seasonData.episodes)
         setWatched(
@@ -169,14 +162,6 @@ export default function SeasonDetail() {
         </div>
       </div>
 
-      {SHOW_DEBUG && !loading && !error && (
-        <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 font-mono text-[10px] leading-snug text-amber-300">
-          <div>debug · cache v{CACHE_SCHEMA_VERSION} · pruned {getLastPruneCount()} stale entries on load</div>
-          <div>networks: {JSON.stringify(networks)}</div>
-          <div>dayShift: {dayShift}</div>
-        </div>
-      )}
-
       {loading && <p className="mt-4 text-sm text-(--color-text-muted)">Loading…</p>}
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
@@ -215,11 +200,6 @@ export default function SeasonDetail() {
                       : ep.air_date
                         ? `Airs ${formatDate(ep.air_date, dayShift)}`
                         : 'No air date'}
-                    {SHOW_DEBUG && ep.air_date && (
-                      <span className="ml-1 font-mono text-amber-400/70">
-                        · raw {ep.air_date}
-                      </span>
-                    )}
                   </p>
                 </div>
 

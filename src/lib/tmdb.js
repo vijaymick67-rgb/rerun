@@ -15,14 +15,6 @@ export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 const CACHE_SCHEMA_VERSION = '3'
 const SCHEMA_KEY = 'tmdb_cache_schema_version'
 
-let lastPruneCount = 0
-// Exposed so a temporary debug banner can show how many stale entries were
-// cleared on this load (see SeasonDetail). Safe to keep — it's just a number.
-export function getLastPruneCount() {
-  return lastPruneCount
-}
-export { CACHE_SCHEMA_VERSION }
-
 function pruneCacheIfSchemaChanged() {
   try {
     if (localStorage.getItem(SCHEMA_KEY) === CACHE_SCHEMA_VERSION) return
@@ -36,7 +28,6 @@ function pruneCacheIfSchemaChanged() {
       }
     }
     localStorage.setItem(SCHEMA_KEY, CACHE_SCHEMA_VERSION)
-    lastPruneCount = removed
     if (removed > 0) {
       console.warn(
         `tmdb cache: schema v${CACHE_SCHEMA_VERSION} → cleared ${removed} stale cached entr${removed === 1 ? 'y' : 'ies'}`,

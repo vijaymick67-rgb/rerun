@@ -18,6 +18,10 @@ describe('dayShiftForNetworks', () => {
     expect(dayShiftForNetworks(['Apple tv+'])).toBe(1)
   })
 
+  it('matches "Apple TV" (no plus) the same as "Apple TV+"', () => {
+    expect(dayShiftForNetworks(['Apple TV'])).toBe(1)
+  })
+
   it('warns and defaults to 0 when no network matches', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(dayShiftForNetworks(['Some Unknown Network'])).toBe(0)

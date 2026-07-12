@@ -9,6 +9,7 @@ const DAY_SHIFT_BY_NETWORK = {
   'HBO Max': 1,
   'Max': 1,
   'Apple TV+': 1,
+  'Apple TV': 1, // TMDB sometimes omits the "+" for Apple TV+ originals
   'AMC': 1,
   'AMC+': 1,
   'FX': 1,
