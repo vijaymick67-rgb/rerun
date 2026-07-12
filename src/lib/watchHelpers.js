@@ -90,6 +90,7 @@ export function computeWatchingStatus(episodesBySeason, watched, dayShift, detai
   if (nextAirDate && daysUntilAir !== null) {
     return {
       type: 'countdown',
+      subtype: details.next_episode_to_air.episode_number === 1 ? 'premiere' : 'episode',
       air_date: shiftAirDate(nextAirDate, dayShift),
       daysUntil: daysUntilAir,
       airsSoon: daysUntilAir <= AIRS_SOON_THRESHOLD_DAYS,
