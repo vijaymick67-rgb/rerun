@@ -1,4 +1,8 @@
-import { isHiddenFromWatching } from './watchHelpers.js'
+import {
+  daysUntil,
+  isHiddenFromWatching,
+  WATCHING_COUNTDOWN_WINDOW_DAYS,
+} from './watchHelpers.js'
 
 export function isPersonallyFinished(show) {
   return show?.finished_at != null
@@ -7,7 +11,18 @@ export function isPersonallyFinished(show) {
 // Personal completion is intentionally separate from TMDB's series status:
 // a returning show may still be finished for this owner.
 export function isVisibleInWatching(show, status) {
-  return !isPersonallyFinished(show) && !isHiddenFromWatching(status)
+  if (!isPersonallyFinished(show)) return !isHiddenFromWatching(status)
+  return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
+}
+
+// Lightweight eligibility check for archived shows. The same shifted calendar
+// date and >60 hiding boundary used by countdown rendering are reused here.
+// Negative values are intentionally eligible: cached dated episode metadata
+// lets the normal nextUp scan keep a returned show visible after air day.
+export function shouldFinishedShowReturn(details, dayShift = 0) {
+  const airDate = details?.next_episode_to_air?.air_date
+  const remaining = daysUntil(airDate, dayShift)
+  return remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS
 }
 
 // Stats is history-led. A personal archive must never remove metadata for a

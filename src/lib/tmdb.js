@@ -1,5 +1,7 @@
 const BASE_URL = '/api/tmdb'
 const CACHE_PREFIX = 'tmdb_cache:'
+const CACHE_TIME_PREFIX = 'tmdb_cache_time:'
+const DYNAMIC_TMDB_MAX_AGE_MS = 6 * 60 * 60 * 1000
 
 export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 
@@ -60,10 +62,12 @@ function writeCache(key, value) {
   }
 }
 
-async function tmdbFetch(path, params = {}) {
+async function tmdbFetch(path, params = {}, options = {}) {
   const cacheKey = path + '?' + new URLSearchParams(params).toString()
-  const cached = readCache(cacheKey)
-  if (cached) return cached
+  if (!options.bypassCache) {
+    const cached = readCache(cacheKey)
+    if (cached) return cached
+  }
 
   const url = new URL(BASE_URL + path, window.location.origin)
   for (const [key, value] of Object.entries(params)) {
@@ -79,6 +83,25 @@ async function tmdbFetch(path, params = {}) {
 
 function cacheResult(cacheKey, value) {
   writeCache(cacheKey, value)
+  return value
+}
+
+function readCacheTime(cacheKey) {
+  try {
+    const value = Number(localStorage.getItem(CACHE_TIME_PREFIX + cacheKey))
+    return Number.isFinite(value) && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+function cacheTimedResult(cacheKey, value) {
+  writeCache(cacheKey, value)
+  try {
+    localStorage.setItem(CACHE_TIME_PREFIX + cacheKey, String(Date.now()))
+  } catch {
+    // value caching is still useful when timestamp storage is unavailable
+  }
   return value
 }
 
@@ -110,12 +133,22 @@ export async function searchShows(query) {
 //   :v2 added `networks`
 //   :v3 added `episode_run_time` (per-show runtime fallback used by Stats
 //       when an individual episode's own runtime is null)
-export async function getShowDetails(tmdbId) {
+export async function getShowDetails(tmdbId, options = {}) {
   const cacheKey = `/tv/${tmdbId}:v3`
   const cached = readCache(cacheKey)
-  if (cached) return cached
+  if (cached && !options.refreshDynamic) return cached
+  const cachedAt = readCacheTime(cacheKey)
+  if (cached && cachedAt && Date.now() - cachedAt < DYNAMIC_TMDB_MAX_AGE_MS) return cached
 
-  const data = await tmdbFetch(`/tv/${tmdbId}`)
+  let data
+  try {
+    // Show status and next_episode_to_air change over time. Refresh this small
+    // response periodically so archived shows can discover a newly dated return.
+    data = await tmdbFetch(`/tv/${tmdbId}`, {}, { bypassCache: true })
+  } catch (error) {
+    if (cached) return cached
+    throw error
+  }
   const trimmed = {
     id: data.id,
     name: data.name,
@@ -145,16 +178,26 @@ export async function getShowDetails(tmdbId) {
       poster_path: season.poster_path,
     })),
   }
-  return cacheResult(cacheKey, trimmed)
+  return cacheTimedResult(cacheKey, trimmed)
 }
 
 // Episode list for a single season, including per-episode runtime.
-export async function getSeasonEpisodes(tmdbId, seasonNumber) {
+export async function getSeasonEpisodes(tmdbId, seasonNumber, options = {}) {
   const cacheKey = `/tv/${tmdbId}/season/${seasonNumber}`
   const cached = readCache(cacheKey)
-  if (cached) return cached
+  if (cached && !options.refreshDynamic) return cached
+  const cachedAt = readCacheTime(cacheKey)
+  if (cached && cachedAt && Date.now() - cachedAt < DYNAMIC_TMDB_MAX_AGE_MS) return cached
 
-  const data = await tmdbFetch(`/tv/${tmdbId}/season/${seasonNumber}`)
+  let data
+  try {
+    // Episode lists change while a season is approaching/airing. This request
+    // is only reached for shows already selected for Watching.
+    data = await tmdbFetch(`/tv/${tmdbId}/season/${seasonNumber}`, {}, { bypassCache: true })
+  } catch (error) {
+    if (cached) return cached
+    throw error
+  }
   const trimmed = {
     season_number: data.season_number,
     name: data.name,
@@ -165,7 +208,7 @@ export async function getSeasonEpisodes(tmdbId, seasonNumber) {
       runtime: ep.runtime,
     })),
   }
-  return cacheResult(cacheKey, trimmed)
+  return cacheTimedResult(cacheKey, trimmed)
 }
 
 // A single episode's runtime in minutes (real per-episode runtime, not an estimate).
