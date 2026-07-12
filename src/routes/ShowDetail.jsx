@@ -3,23 +3,28 @@ import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey } from '../lib/watchHelpers'
+import { showDetailCacheKey, readDetailCache, writeDetailCache, clearDetailCache } from '../lib/detailCache'
+import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
 
-export default function ShowDetail() {
-  const { tmdbId } = useParams()
+// tmdbId changes are handled by remounting (see the keyed wrapper below)
+// rather than resetting state in an effect, so the cache-on-mount
+// initializers below always read the correct show's cache.
+function ShowDetailInner({ tmdbId }) {
   const numericTmdbId = Number(tmdbId)
+  const cacheKey = showDetailCacheKey(numericTmdbId)
 
-  const [show, setShow] = useState(null)
-  const [seasons, setSeasons] = useState([])
-  const [episodesBySeason, setEpisodesBySeason] = useState({})
-  const [watched, setWatched] = useState(new Set())
-  const [loading, setLoading] = useState(true)
+  const [cached] = useState(() => readDetailCache(cacheKey))
+  const [show, setShow] = useState(() => cached?.show ?? null)
+  const [seasons, setSeasons] = useState(() => cached?.seasons ?? [])
+  const [episodesBySeason, setEpisodesBySeason] = useState(() => cached?.episodesBySeason ?? {})
+  const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
+  const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     let ignore = false
 
     async function load() {
-      setLoading(true)
       setError(null)
       try {
         const { data: trackedShow, error: showError } = await supabase
@@ -29,7 +34,10 @@ export default function ShowDetail() {
           .maybeSingle()
         if (showError) throw showError
         if (!trackedShow) {
-          if (!ignore) setShow(null)
+          if (!ignore) {
+            setShow(null)
+            clearDetailCache(cacheKey)
+          }
           return
         }
 
@@ -44,19 +52,30 @@ export default function ShowDetail() {
           .filter((season) => season.season_number > 0)
           .sort((a, b) => a.season_number - b.season_number)
 
+        const episodesArrays = await Promise.all(
+          seasonList.map((season) => getSeasonEpisodes(numericTmdbId, season.season_number)),
+        )
         const bySeason = {}
-        for (const season of seasonList) {
-          const seasonData = await getSeasonEpisodes(numericTmdbId, season.season_number)
-          bySeason[season.season_number] = seasonData.episodes
-        }
+        seasonList.forEach((season, i) => {
+          bySeason[season.season_number] = episodesArrays[i].episodes
+        })
 
         if (ignore) return
+
+        const watchedList = (watchedRows ?? []).map((row) =>
+          episodeKey(row.season_number, row.episode_number),
+        )
+
         setShow(trackedShow)
         setSeasons(seasonList)
         setEpisodesBySeason(bySeason)
-        setWatched(
-          new Set((watchedRows ?? []).map((row) => episodeKey(row.season_number, row.episode_number))),
-        )
+        setWatched(new Set(watchedList))
+        writeDetailCache(cacheKey, {
+          show: trackedShow,
+          seasons: seasonList,
+          episodesBySeason: bySeason,
+          watchedList,
+        })
       } catch {
         if (!ignore) setError('Failed to load this show. Try refreshing.')
       } finally {
@@ -68,7 +87,7 @@ export default function ShowDetail() {
     return () => {
       ignore = true
     }
-  }, [numericTmdbId])
+  }, [numericTmdbId, cacheKey])
 
   const totalEpisodeCount = seasons.reduce(
     (sum, season) => sum + (episodesBySeason[season.season_number]?.length ?? 0),
@@ -93,14 +112,30 @@ export default function ShowDetail() {
         >
           ‹
         </Link>
-        <h1 className="min-w-0 truncate text-xl font-semibold text-(--color-text)">
-          {show ? show.name : 'Show'}
-        </h1>
+        {loading ? (
+          <div className="h-5 w-40 animate-pulse rounded bg-(--color-surface-raised)" />
+        ) : (
+          <h1 className="min-w-0 truncate text-xl font-semibold text-(--color-text)">
+            {show ? show.name : 'Show'}
+          </h1>
+        )}
       </div>
 
-      {loading && <p className="mt-4 text-sm text-(--color-text-muted)">Loading…</p>}
+      {loading && <ShowDetailSkeleton />}
 
-      {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-red-400/80 hover:text-red-400"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {!loading && !error && show === null && (
         <p className="mt-8 text-center text-(--color-text-muted)">
@@ -111,7 +146,7 @@ export default function ShowDetail() {
         </p>
       )}
 
-      {!loading && !error && show && (
+      {!loading && show && (
         <>
           <div className="mt-4 flex gap-3">
             {show.poster_path ? (
@@ -180,4 +215,9 @@ export default function ShowDetail() {
       )}
     </div>
   )
+}
+
+export default function ShowDetail() {
+  const { tmdbId } = useParams()
+  return <ShowDetailInner key={tmdbId} tmdbId={tmdbId} />
 }
