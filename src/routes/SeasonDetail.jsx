@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
@@ -11,6 +11,10 @@ import {
   writeDetailCache,
 } from '../lib/detailCache'
 import SeasonDetailSkeleton from '../components/SeasonDetailSkeleton'
+import {
+  markSeasonWatchedMutation,
+  toggleEpisodeMutation,
+} from '../lib/seasonWatchMutations'
 
 // tmdbId/seasonNumber changes are handled by remounting (see the keyed
 // wrapper below) rather than resetting state in an effect, so the
@@ -25,10 +29,13 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   const [releaseRule, setReleaseRule] = useState(() => cached?.releaseRule)
   const [episodes, setEpisodes] = useState(() => cached?.episodes ?? null)
   const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
+  const watchedRef = useRef(watched)
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
   const [busyEpisodes, setBusyEpisodes] = useState(new Set())
+  const busyEpisodesRef = useRef(new Set())
   const [isSeasonBusy, setIsSeasonBusy] = useState(false)
+  const isSeasonBusyRef = useRef(false)
 
   useEffect(() => {
     let ignore = false
@@ -57,7 +64,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         setShowName(nextShowName)
         setReleaseRule(nextReleaseRule)
         setEpisodes(seasonData.episodes)
-        setWatched(new Set(watchedList))
+        const nextWatched = new Set(watchedList)
+        watchedRef.current = nextWatched
+        setWatched(nextWatched)
         writeDetailCache(cacheKey, {
           showName: nextShowName,
           releaseRule: nextReleaseRule,
@@ -79,7 +88,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
   // Writes the season's own cache with the new watched set, and patches the
   // parent ShowDetail cache (if present) so its watched counts don't go
-  // stale until its own background refresh runs — same principle as
+  // stale until its own background refresh runs â€” same principle as
   // Watching.jsx's confirmRemove updating its cache right after the mutation
   // succeeds, extended across the two related cache entries.
   function syncWatchedCaches(nextWatchedSet) {
@@ -104,81 +113,57 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     }
   }
 
-  async function toggleEpisode(episode) {
-    const epKey = episodeKey(numericSeasonNumber, episode.episode_number)
-    if (busyEpisodes.has(episode.episode_number)) return
-    setBusyEpisodes((prev) => new Set(prev).add(episode.episode_number))
+  function commitWatched(nextWatchedSet) {
+    const next = new Set(nextWatchedSet)
+    watchedRef.current = next
+    setWatched(next)
+    syncWatchedCaches(next)
+  }
 
-    const wasWatched = watched.has(epKey)
+  async function toggleEpisode(episode) {
+    const episodeNumber = episode.episode_number
+    if (busyEpisodesRef.current.has(episodeNumber)) return
+    busyEpisodesRef.current.add(episodeNumber)
+    setBusyEpisodes(new Set(busyEpisodesRef.current))
+    setError(null)
 
     try {
-      if (wasWatched) {
-        const { error: deleteError } = await supabase
-          .from('watched_episodes')
-          .delete()
-          .eq('tmdb_show_id', numericTmdbId)
-          .eq('season_number', numericSeasonNumber)
-          .eq('episode_number', episode.episode_number)
-        if (deleteError) throw deleteError
-      } else {
-        const { error: upsertError } = await supabase.from('watched_episodes').upsert(
-          {
-            tmdb_show_id: numericTmdbId,
-            season_number: numericSeasonNumber,
-            episode_number: episode.episode_number,
-            episode_name: episode.name,
-            runtime_minutes: episode.runtime,
-            watched_at: new Date().toISOString(),
-          },
-          { onConflict: 'tmdb_show_id,season_number,episode_number' },
-        )
-        if (upsertError) throw upsertError
-      }
-
-      const nextWatched = new Set(watched)
-      if (wasWatched) nextWatched.delete(epKey)
-      else nextWatched.add(epKey)
-      setWatched(nextWatched)
-      syncWatchedCaches(nextWatched)
-    } finally {
-      setBusyEpisodes((prev) => {
-        const next = new Set(prev)
-        next.delete(episode.episode_number)
-        return next
+      await toggleEpisodeMutation({
+        supabase,
+        tmdbShowId: numericTmdbId,
+        seasonNumber: numericSeasonNumber,
+        episode,
+        getWatched: () => watchedRef.current,
+        commitWatched,
       })
+    } catch (err) {
+      setError(err?.message || 'Could not update this episode. Try again.')
+    } finally {
+      busyEpisodesRef.current.delete(episodeNumber)
+      setBusyEpisodes(new Set(busyEpisodesRef.current))
     }
   }
 
   async function markSeasonWatched() {
-    if (isSeasonBusy) return
+    if (isSeasonBusyRef.current) return
+    isSeasonBusyRef.current = true
     setIsSeasonBusy(true)
-
-    // Only aired episodes can be marked watched — same rule the individual
-    // per-episode toggle enforces (see hasAired() in lib/watchHelpers.js).
-    const airedEpisodes = (episodes ?? []).filter((ep) => hasAired(ep, releaseRule))
-    const now = new Date().toISOString()
-    const rows = airedEpisodes.map((ep) => ({
-      tmdb_show_id: numericTmdbId,
-      season_number: numericSeasonNumber,
-      episode_number: ep.episode_number,
-      episode_name: ep.name,
-      runtime_minutes: ep.runtime,
-      watched_at: now,
-    }))
+    setError(null)
 
     try {
-      if (rows.length > 0) {
-        const { error: upsertError } = await supabase
-          .from('watched_episodes')
-          .upsert(rows, { onConflict: 'tmdb_show_id,season_number,episode_number' })
-        if (upsertError) throw upsertError
-      }
-
-      const nextWatched = new Set(watched)
-      for (const ep of airedEpisodes) nextWatched.add(episodeKey(numericSeasonNumber, ep.episode_number))
-      setWatched(nextWatched)
-      syncWatchedCaches(nextWatched)
+      await markSeasonWatchedMutation({
+        supabase,
+        episodes,
+        tmdbShowId: numericTmdbId,
+        seasonNumber: numericSeasonNumber,
+        releaseRule,
+        getWatched: () => watchedRef.current,
+        commitWatched,
+      })
+    } catch (err) {
+      setError(err?.message || 'Could not mark this season watched. Try again.')
     } finally {
+      isSeasonBusyRef.current = false
       setIsSeasonBusy(false)
     }
   }
@@ -195,7 +180,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
           aria-label="Back to show"
           className="shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
         >
-          ‹
+          â€¹
         </Link>
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold text-(--color-text)">
@@ -210,15 +195,18 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       {loading && <SeasonDetailSkeleton />}
 
       {error && (
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-          <span>{error}</span>
+        <div
+          role="alert"
+          className="mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+        >
+          <span className="min-w-0 break-words">{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
             className="shrink-0 text-red-400/80 hover:text-red-400"
           >
-            ✕
+            âœ•
           </button>
         </div>
       )}
@@ -232,7 +220,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
               disabled={isSeasonBusy}
               className="self-start rounded-md bg-(--color-accent-muted) px-3 py-1.5 text-xs font-medium text-(--color-accent) disabled:opacity-60"
             >
-              {isSeasonBusy ? 'Marking…' : 'Mark season watched'}
+              {isSeasonBusy ? 'Markingâ€¦' : 'Mark season watched'}
             </button>
           )}
 
