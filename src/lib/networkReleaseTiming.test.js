@@ -30,11 +30,30 @@ describe('release timing rules', () => {
     expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-12T07:00:00.000Z')
   })
 
-  it('models Apple TV+ as a previous-evening US release', () => {
-    const rule = releaseRuleForShow(1, ['Apple TV+'])
-    expect(new Date(releaseTimestamp('2026-07-10', rule)).toISOString()).toBe('2026-07-10T01:00:00.000Z')
-    expect(releaseDateInIST('2026-07-10', rule)).toBe('2026-07-10')
-  })
+  it.each([285404, 203744, 277439])(
+    'keeps Apple show %s on the TMDB source date and releases the following IST morning',
+    (showId) => {
+      vi.useFakeTimers()
+      const rule = releaseRuleForShow(showId, ['Apple TV+'])
+      expect(new Date(releaseTimestamp('2026-07-14', rule)).toISOString()).toBe('2026-07-15T01:00:00.000Z')
+      expect(releaseDateInIST('2026-07-14', rule)).toBe('2026-07-15')
+
+      vi.setSystemTime(new Date('2026-07-15T00:59:59.000Z'))
+      expect(hasAired({ air_date: '2026-07-14' }, rule)).toBe(false)
+      expect(computeWatchingStatus(
+        { 1: [{ episode_number: 10, name: 'Queens', air_date: '2026-07-14' }] },
+        new Set(), rule, { next_episode_to_air: { air_date: '2026-07-14', episode_number: 10 } },
+      )).toMatchObject({ type: 'countdown', airsSoon: true })
+
+      vi.setSystemTime(new Date('2026-07-15T01:00:00.000Z'))
+      expect(hasAired({ air_date: '2026-07-14' }, rule)).toBe(true)
+      expect(computeWatchingStatus(
+        { 1: [{ episode_number: 10, name: 'Queens', air_date: '2026-07-14' }] },
+        new Set(), rule, { next_episode_to_air: { air_date: '2026-07-14', episode_number: 10 } },
+      )).toMatchObject({ type: 'nextUp', season_number: 1, episode_number: 10 })
+      vi.useRealTimers()
+    },
+  )
 
   it('automatically changes the New York offset across US daylight saving time', () => {
     const rule = releaseRuleForShow(1, ['HBO'])
