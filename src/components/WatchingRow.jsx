@@ -109,7 +109,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
         onClick={() => onRemove(show)}
         disabled={isRemoving}
         aria-label={`Remove ${show.name}`}
-        className="absolute inset-y-0 right-0 flex w-[84px] items-center justify-center bg-red-500/90 text-sm font-medium text-white disabled:opacity-60"
+        className="motion-press absolute inset-y-0 right-0 flex w-[84px] items-center justify-center bg-red-500/90 text-sm font-medium text-white disabled:opacity-60"
       >
         {isRemoving ? '…' : 'Remove'}
       </button>
@@ -168,7 +168,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
           onClick={() => onRemove(show)}
           disabled={isRemoving}
           aria-label={`Remove ${show.name}`}
-          className="watching-row-hover-remove absolute top-1/2 right-3 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-(--color-text-muted) hover:text-red-400 disabled:opacity-60"
+          className="motion-press watching-row-hover-remove absolute top-1/2 right-3 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-(--color-text-muted) hover:text-red-400 disabled:opacity-60"
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
             <path
