@@ -15,7 +15,7 @@ import {
   getShowDetails as realGetShowDetails,
   getSeasonEpisodes as realGetSeasonEpisodes,
 } from './tmdb.js'
-import { dayShiftForNetworks } from './networkReleaseTiming.js'
+import { releaseRuleForShow } from './networkReleaseTiming.js'
 import { hasAired } from './watchHelpers.js'
 import { markTrackedShowFinished } from './finishedShows.js'
 
@@ -58,7 +58,7 @@ export async function buildAiredEpisodeRows(showId, options = {}) {
   const watchedAt = options.watchedAt ?? new Date().toISOString()
 
   const details = options.details ?? (await getShowDetails(showId))
-  const dayShift = dayShiftForNetworks(details.networks)
+  const releaseRule = releaseRuleForShow(showId, details.networks)
   const seasons = (details.seasons ?? [])
     .filter((season) => season.season_number > 0)
     .sort((a, b) => a.season_number - b.season_number)
@@ -76,7 +76,7 @@ export async function buildAiredEpisodeRows(showId, options = {}) {
       return
     }
     for (const ep of outcome.value.episodes ?? []) {
-      if (hasAired(ep, dayShift)) {
+      if (hasAired(ep, releaseRule)) {
         rows.push(makeWatchedRow(showId, season.season_number, ep, watchedAt))
       }
     }

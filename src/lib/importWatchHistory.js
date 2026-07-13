@@ -13,7 +13,7 @@ import {
   getShowDetails as realGetShowDetails,
   getSeasonEpisodes as realGetSeasonEpisodes,
 } from './tmdb.js'
-import { dayShiftForNetworks } from './networkReleaseTiming.js'
+import { releaseRuleForShow } from './networkReleaseTiming.js'
 import { hasAired } from './watchHelpers.js'
 import { buildAiredEpisodeRows } from './bulkMarkWatched.js'
 
@@ -148,7 +148,7 @@ async function processShow(show, ctx) {
     added_at: show.addedAt || now,
   }
 
-  const dayShift = dayShiftForNetworks(details.networks)
+  const releaseRule = releaseRuleForShow(show.tmId, details.networks)
 
   const pEps = pEpByTmId.get(show.tmId) ?? []
   const pSes = pSeByTmId.get(show.tmId) ?? []
@@ -201,7 +201,7 @@ async function processShow(show, ctx) {
     const ep = eps?.find((e) => e.episode_number === r.eN)
     if (ep) {
       // Guard defensively: only import episodes that have actually aired.
-      if (hasAired(ep, dayShift)) addRow(r.sN, r.eN, ep, r.a)
+      if (hasAired(ep, releaseRule)) addRow(r.sN, r.eN, ep, r.a)
     } else {
       // Episode not in TMDB's data (missing season, or TMDB fetch failed). It's
       // still a real watch record the user made, so preserve it — we just can't
@@ -218,7 +218,7 @@ async function processShow(show, ctx) {
     if (!eps) continue // couldn't fetch this season — skip the marker
     let applied = false
     for (const ep of eps) {
-      if (hasAired(ep, dayShift)) {
+      if (hasAired(ep, releaseRule)) {
         addRow(r.sN, ep.episode_number, ep, r.a)
         applied = true
       }
