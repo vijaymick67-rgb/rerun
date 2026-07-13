@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
-import { isVisibleInWatching } from '../lib/finishedShows'
+import { isHiddenShow, isVisibleInWatching } from '../lib/finishedShows'
 import {
   enrichTrackedShowsForWatching,
   selectTrackedShowsForWatching,
@@ -19,7 +19,7 @@ import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 // v3: one-time cache-bust so the Settings bulk-mark-watched writes are picked
 // up — old v2 entries are simply never matched and a fresh Supabase fetch runs.
 export default function Watching() {
-  const [cachedShows] = useState(() => loadWatchingCache())
+  const [cachedShows] = useState(() => loadWatchingCache()?.filter((show) => !isHiddenShow(show)) ?? null)
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)

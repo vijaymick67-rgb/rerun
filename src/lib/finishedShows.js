@@ -9,9 +9,14 @@ export function isPersonallyFinished(show) {
   return show?.finished_at != null
 }
 
+export function isHiddenShow(show) {
+  return show?.hidden_at != null
+}
+
 // Personal completion is intentionally separate from TMDB's series status:
 // a returning show may still be finished for this owner.
 export function isVisibleInWatching(show, status) {
+  if (isHiddenShow(show)) return false
   if (!isPersonallyFinished(show)) return !isHiddenFromWatching(status)
   return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
 }
@@ -50,7 +55,7 @@ export function shouldFinishedShowReturn(show, details, releaseRule) {
 // Stats is history-led. A personal archive must never remove metadata for a
 // show that still has watched episodes.
 export function isRepresentedInStats(show, watchedRows) {
-  return Boolean(show) && (watchedRows?.length ?? 0) > 0
+  return Boolean(show) && !isHiddenShow(show) && (watchedRows?.length ?? 0) > 0
 }
 
 export async function markTrackedShowFinished(supabase, tmdbId, finishedAt = new Date().toISOString()) {
@@ -65,8 +70,34 @@ export async function markTrackedShowFinished(supabase, tmdbId, finishedAt = new
 export async function restoreTrackedShow(supabase, tmdbId) {
   const { error } = await supabase
     .from('tracked_shows')
-    .update({ finished_at: null })
+    .update({ finished_at: null, hidden_at: null })
     .eq('tmdb_id', tmdbId)
+  if (error) throw error
+}
+
+export async function hideTrackedShow(supabase, tmdbId, hiddenAt = new Date().toISOString()) {
+  const { error } = await supabase
+    .from('tracked_shows')
+    .update({ hidden_at: hiddenAt })
+    .eq('tmdb_id', tmdbId)
+  if (error) throw error
+  return hiddenAt
+}
+
+// Browse's explicit add flow reactivates an existing hidden/finished row. This
+// only writes tracked_shows metadata; watched_episodes is intentionally absent.
+export async function upsertTrackedShow(supabase, show, addedAt = new Date().toISOString()) {
+  const { error } = await supabase.from('tracked_shows').upsert(
+    {
+      tmdb_id: show.id,
+      name: show.name,
+      poster_path: show.poster_path,
+      added_at: addedAt,
+      finished_at: null,
+      hidden_at: null,
+    },
+    { onConflict: 'tmdb_id' },
+  )
   if (error) throw error
 }
 

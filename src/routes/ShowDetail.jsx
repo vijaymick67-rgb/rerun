@@ -118,7 +118,7 @@ function ShowDetailInner({ tmdbId }) {
         writeDetailCache(cacheKey, { show: next, seasons, episodesBySeason, watchedList: [...watched] })
       } else {
         await restoreTrackedShow(supabase, numericTmdbId)
-        const next = { ...show, finished_at: null }
+        const next = { ...show, finished_at: null, hidden_at: null }
         setShow(next)
         writeDetailCache(cacheKey, { show: next, seasons, episodesBySeason, watchedList: [...watched] })
       }

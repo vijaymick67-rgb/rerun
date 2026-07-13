@@ -1,17 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey, localTodayISO } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
-import { isRepresentedInStats } from '../lib/finishedShows'
+import {
+  hideTrackedShow,
+  isRepresentedInStats,
+  restoreTrackedShow,
+} from '../lib/finishedShows'
+import { patchShowDetailState } from '../lib/detailCache'
+import { clearWatchingCache, removeWatchingShow } from '../lib/watchingCache'
+import ConfirmDialog from '../components/ConfirmDialog'
+import {
+  filterVisibleStatsRows,
+  isStatsShowBusy,
+  removeShowFromStatsState,
+  statsActionItems,
+  toggleStatsActionSheet,
+} from '../lib/showState'
 
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
 // as Watching.jsx — the underlying TMDB season data is already localStorage-
 // cached, so a revisit paints instantly and refreshes in the background.
 // v2: one-time cache-bust so the Settings bulk-mark-watched writes are picked
 // up — old v1 entries are simply never matched and a fresh Supabase fetch runs.
-const CACHE_KEY = 'stats_cache:v2'
+const CACHE_KEY = 'stats_cache:v3'
 
 // When neither an episode's own runtime nor the show's average typical runtime
 // is known, assume this many minutes per episode. This is the single flat
@@ -206,13 +220,136 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
   return insights
 }
 
+function buildVisibleStatsState(shows, watchedRows) {
+  const totalMinutes = shows.reduce((sum, show) => sum + show.minutes, 0)
+  const insights = buildInsights({
+    shows,
+    watchedRows,
+    totalWatchedEpisodes: watchedRows.length,
+    totalMinutes,
+  })
+  return { shows, watchedRows, totalMinutes, insights }
+}
+
+function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
+  useEffect(() => {
+    if (!show) return undefined
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose, show])
+
+  if (!show) return null
+
+  const titleId = `stats-actions-title-${show.tmdb_id}`
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 px-4"
+      style={{ paddingBottom: 'calc(4rem + env(safe-area-inset-bottom) + 1rem)' }}
+      onClick={onClose}
+    >
+      <div
+        id="stats-actions-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="max-h-[calc(100dvh-6rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-(--color-border) bg-(--color-surface) p-4 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h2 id={titleId} className="min-w-0 break-words text-base font-semibold text-(--color-text)">
+            Actions for {show.name}
+          </h2>
+          <button
+            type="button"
+            aria-label="Close actions"
+            onClick={onClose}
+            className="min-h-11 min-w-11 shrink-0 rounded-lg text-xl leading-none text-(--color-text-muted)"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2">
+          {statsActionItems(show).map((item) => {
+            if (item.id === 'details') {
+              return (
+                <Link
+                  key={item.id}
+                  to={`/watching/${show.tmdb_id}`}
+                  aria-disabled={busy}
+                  onClick={(event) => {
+                    if (busy) {
+                      event.preventDefault()
+                      return
+                    }
+                    onClose()
+                  }}
+                  className="flex min-h-11 w-full items-center rounded-lg border border-(--color-border) px-3 text-left text-sm font-medium text-(--color-text)"
+                >
+                  {item.label}
+                </Link>
+              )
+            }
+
+            if (item.id === 'cancel') {
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={onClose}
+                  className="min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium text-(--color-text-muted)"
+                >
+                  {item.label}
+                </button>
+              )
+            }
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  onClose()
+                  if (item.id === 'restore') onRestore()
+                  if (item.id === 'remove') onRemove()
+                }}
+                disabled={busy}
+                className={`min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
+                  item.destructive ? 'text-red-400' : 'text-(--color-text-muted)'
+                }`}
+              >
+                {busy && item.id === 'restore' ? 'Restoring…' : item.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Stats() {
   const [cached] = useState(() => loadCache())
   const [shows, setShows] = useState(() => cached?.shows ?? [])
+  const [watchedRows, setWatchedRows] = useState(() => cached?.watchedRows ?? [])
   const [totalMinutes, setTotalMinutes] = useState(() => cached?.totalMinutes ?? 0)
   const [insights, setInsights] = useState(() => cached?.insights ?? [])
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
+  const [actionError, setActionError] = useState(null)
+  const [actionSuccess, setActionSuccess] = useState(null)
+  const [openActionId, setOpenActionId] = useState(null)
+  const [busyIds, setBusyIds] = useState(new Set())
+  const busyIdsRef = useRef(new Set())
+  const [confirmingShow, setConfirmingShow] = useState(null)
+
+  const actionShow = openActionId === null
+    ? null
+    : shows.find((show) => show.tmdb_id === openActionId) ?? null
 
   useEffect(() => {
     let ignore = false
@@ -232,9 +369,10 @@ export default function Stats() {
         if (rows.length === 0) {
           if (!ignore) {
             setShows([])
+            setWatchedRows([])
             setTotalMinutes(0)
             setInsights([])
-            saveCache({ shows: [], totalMinutes: 0, insights: [] })
+            saveCache({ shows: [], watchedRows: [], totalMinutes: 0, insights: [] })
           }
           return
         }
@@ -252,8 +390,9 @@ export default function Stats() {
         // Names/posters — every watched show is guaranteed a tracked_shows row.
         const { data: trackedShows, error: trackedError } = await supabase
           .from('tracked_shows')
-          .select('tmdb_id, name, poster_path')
+          .select('tmdb_id, name, poster_path, finished_at, hidden_at')
           .in('tmdb_id', showIds)
+          .is('hidden_at', null)
         if (trackedError) throw trackedError
 
         const trackedById = new Map()
@@ -261,9 +400,19 @@ export default function Stats() {
           trackedById.set(row.tmdb_id, row)
         }
 
+        const visibleRows = filterVisibleStatsRows(trackedShows, rows)
+        const visibleWatchedByShowId = new Map()
+        for (const row of visibleRows) {
+          if (!visibleWatchedByShowId.has(row.tmdb_show_id)) {
+            visibleWatchedByShowId.set(row.tmdb_show_id, [])
+          }
+          visibleWatchedByShowId.get(row.tmdb_show_id).push(row)
+        }
+        const visibleShowIds = [...visibleWatchedByShowId.keys()]
+
         const computed = await Promise.all(
-          showIds.map(async (showId) => {
-            const showWatchedRows = watchedByShowId.get(showId)
+          visibleShowIds.map(async (showId) => {
+            const showWatchedRows = visibleWatchedByShowId.get(showId)
             const tracked = trackedById.get(showId)
 
             try {
@@ -303,6 +452,8 @@ export default function Stats() {
                 tmdb_id: showId,
                 name: tracked?.name ?? details.name ?? 'Unknown show',
                 poster_path: tracked?.poster_path ?? details.poster_path ?? null,
+                finished_at: tracked?.finished_at ?? null,
+                hidden_at: tracked?.hidden_at ?? null,
                 watched,
                 total,
                 networks: details.networks ?? [],
@@ -315,6 +466,8 @@ export default function Stats() {
                 tmdb_id: showId,
                 name: tracked?.name ?? 'Unknown show',
                 poster_path: tracked?.poster_path ?? null,
+                finished_at: tracked?.finished_at ?? null,
+                hidden_at: tracked?.hidden_at ?? null,
                 watched: showWatchedRows.length,
                 total: showWatchedRows.length,
                 networks: [],
@@ -329,7 +482,7 @@ export default function Stats() {
         // Personal finished_at is deliberately not a filter here: Stats is a
         // record of watched history, including archived shows.
         const represented = computed.filter((show) =>
-          isRepresentedInStats(show, watchedByShowId.get(show.tmdb_id)),
+          isRepresentedInStats(show, visibleWatchedByShowId.get(show.tmdb_id)),
         )
 
         const totalRuntimeMinutes = represented.reduce((sum, show) => sum + show.minutes, 0)
@@ -340,15 +493,21 @@ export default function Stats() {
 
         const nextInsights = buildInsights({
           shows: represented,
-          watchedRows: rows,
-          totalWatchedEpisodes: rows.length,
+          watchedRows: visibleRows,
+          totalWatchedEpisodes: visibleRows.length,
           totalMinutes: totalRuntimeMinutes,
         })
 
         setShows(represented)
+        setWatchedRows(visibleRows)
         setTotalMinutes(totalRuntimeMinutes)
         setInsights(nextInsights)
-        saveCache({ shows: represented, totalMinutes: totalRuntimeMinutes, insights: nextInsights })
+        saveCache({
+          shows: represented,
+          watchedRows: visibleRows,
+          totalMinutes: totalRuntimeMinutes,
+          insights: nextInsights,
+        })
       } catch {
         if (!ignore) setError('Failed to load your stats. Try refreshing.')
       } finally {
@@ -361,6 +520,75 @@ export default function Stats() {
       ignore = true
     }
   }, [])
+
+  function commitStatsState(nextShows, nextWatchedRows) {
+    const next = buildVisibleStatsState(nextShows, nextWatchedRows)
+    setShows(next.shows)
+    setWatchedRows(next.watchedRows)
+    setTotalMinutes(next.totalMinutes)
+    setInsights(next.insights)
+    saveCache({
+      shows: next.shows,
+      watchedRows: next.watchedRows,
+      totalMinutes: next.totalMinutes,
+      insights: next.insights,
+    })
+  }
+
+  function setShowBusy(tmdbId, busy) {
+    if (busy) busyIdsRef.current.add(tmdbId)
+    else busyIdsRef.current.delete(tmdbId)
+    setBusyIds((prev) => {
+      const next = new Set(prev)
+      if (busy) next.add(tmdbId)
+      else next.delete(tmdbId)
+      return next
+    })
+  }
+
+  async function restoreShow(show) {
+    if (busyIdsRef.current.has(show.tmdb_id)) return
+    setActionError(null)
+    setActionSuccess(null)
+    setShowBusy(show.tmdb_id, true)
+    try {
+      await restoreTrackedShow(supabase, show.tmdb_id)
+      const nextShows = shows.map((current) =>
+        current.tmdb_id === show.tmdb_id
+          ? { ...current, finished_at: null, hidden_at: null }
+          : current,
+      )
+      commitStatsState(nextShows, watchedRows)
+      patchShowDetailState(show.tmdb_id, { finished_at: null, hidden_at: null })
+      clearWatchingCache()
+      setOpenActionId(null)
+      setActionSuccess(`${show.name} is active in Watching again.`)
+    } catch (err) {
+      setActionError(err?.message || 'Could not restore this show. Try again.')
+    } finally {
+      setShowBusy(show.tmdb_id, false)
+    }
+  }
+
+  async function removeShow(show) {
+    if (busyIdsRef.current.has(show.tmdb_id)) return
+    setConfirmingShow(null)
+    setActionError(null)
+    setActionSuccess(null)
+    setShowBusy(show.tmdb_id, true)
+    try {
+      const hiddenAt = await hideTrackedShow(supabase, show.tmdb_id)
+      const nextState = removeShowFromStatsState(shows, watchedRows, show.tmdb_id)
+      commitStatsState(nextState.shows, nextState.watchedRows)
+      patchShowDetailState(show.tmdb_id, { hidden_at: hiddenAt })
+      removeWatchingShow(show.tmdb_id)
+      setOpenActionId(null)
+    } catch (err) {
+      setActionError(err?.message || 'Could not remove this show. Try again.')
+    } finally {
+      setShowBusy(show.tmdb_id, false)
+    }
+  }
 
   // Pick one insight for the whole day, deterministically from today's date.
   // Deriving it at render (rather than storing the chosen string) means a cache
@@ -397,6 +625,18 @@ export default function Stats() {
         </div>
       )}
 
+      {actionError && (
+        <div role="alert" className="mt-4 min-w-0 break-words rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          {actionError}
+        </div>
+      )}
+
+      {actionSuccess && (
+        <div role="status" className="mt-4 min-w-0 break-words rounded-lg border border-(--color-accent)/30 bg-(--color-accent-muted) px-3 py-2 text-sm text-(--color-accent)">
+          {actionSuccess}
+        </div>
+      )}
+
       {!loading && !error && !hasData && (
         <p className="mt-8 text-center text-(--color-text-muted)">
           No watched episodes yet. Mark some watched, or log a finished show from Browse.
@@ -421,28 +661,77 @@ export default function Stats() {
           )}
 
           <div className="mt-6 grid grid-cols-3 gap-3">
-            {shows.map((show) => (
-              <Link key={show.tmdb_id} to={`/watching/${show.tmdb_id}`} className="block">
-                {show.poster_path ? (
-                  <img
-                    src={POSTER_BASE + show.poster_path}
-                    alt={show.name}
-                    className="aspect-[2/3] w-full rounded-lg border border-(--color-border) object-cover"
-                  />
-                ) : (
-                  <div className="flex aspect-[2/3] w-full items-center justify-center rounded-lg border border-(--color-border) bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-                    No poster
-                  </div>
-                )}
+            {shows.map((show) => {
+              const isBusy = isStatsShowBusy(busyIds, show.tmdb_id)
+              const actionsOpen = openActionId === show.tmdb_id
 
-                <p className="mt-1.5 truncate text-xs font-medium text-(--color-text)">
-                  {show.name}
-                </p>
-              </Link>
-            ))}
+              return (
+                <div key={show.tmdb_id} className="min-w-0">
+                  <div className="relative">
+                    <Link to={`/watching/${show.tmdb_id}`} className="block">
+                      {show.poster_path ? (
+                        <img
+                          src={POSTER_BASE + show.poster_path}
+                          alt={show.name}
+                          className="aspect-[2/3] w-full rounded-lg border border-(--color-border) object-cover"
+                        />
+                      ) : (
+                        <div className="flex aspect-[2/3] w-full items-center justify-center rounded-lg border border-(--color-border) bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
+                          No poster
+                        </div>
+                      )}
+                    </Link>
+
+                    <button
+                      type="button"
+                      aria-label={`Actions for ${show.name}`}
+                      aria-expanded={actionsOpen}
+                      aria-controls="stats-actions-sheet"
+                      onClick={() => {
+                        setActionError(null)
+                        setActionSuccess(null)
+                        setOpenActionId(toggleStatsActionSheet(openActionId, show.tmdb_id))
+                      }}
+                      disabled={isBusy}
+                      className="absolute right-1 top-1 min-h-11 min-w-11 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
+                    >
+                      ⋯
+                    </button>
+                  </div>
+
+                  <p className="mt-1.5 truncate text-xs font-medium text-(--color-text)">
+                    {show.name}
+                  </p>
+
+                </div>
+              )
+            })}
           </div>
         </>
       )}
+
+      <StatsActionSheet
+        show={actionShow}
+        busy={actionShow ? isStatsShowBusy(busyIds, actionShow.tmdb_id) : false}
+        onClose={() => setOpenActionId(null)}
+        onRestore={() => actionShow && restoreShow(actionShow)}
+        onRemove={() => actionShow && setConfirmingShow(actionShow)}
+      />
+
+      <ConfirmDialog
+        open={confirmingShow !== null}
+        title={confirmingShow ? `Remove ${confirmingShow.name} from Rerun?` : 'Remove show?'}
+        message={
+          confirmingShow
+            ? `It will disappear from Stats and Watching, but your watched episodes and watch dates will be preserved. Adding it again later will restore your progress.`
+            : ''
+        }
+        confirmLabel="Remove from Stats"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => confirmingShow && removeShow(confirmingShow)}
+        onCancel={() => setConfirmingShow(null)}
+      />
     </div>
   )
 }
