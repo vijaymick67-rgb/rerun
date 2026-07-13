@@ -38,13 +38,13 @@ body {
 }
 
 .motion-press {
-  transition-property: transform, opacity, background-color, border-color, color;
+  transition-property: transform, scale, opacity, background-color, border-color, color;
   transition-duration: var(--motion-fast);
   transition-timing-function: var(--ease-standard);
 }
 
 .motion-press:active:not(:disabled):not([aria-disabled='true']) {
-  transform: scale(0.98);
+  scale: 0.98;
   opacity: 0.9;
 }
 
@@ -100,7 +100,7 @@ body {
   }
 
   .motion-press:active:not(:disabled):not([aria-disabled='true']) {
-    transform: none;
+    scale: none;
     opacity: 1;
   }
 }
