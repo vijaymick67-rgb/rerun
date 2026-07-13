@@ -12,24 +12,30 @@ import {
 import { patchShowDetailState } from '../lib/detailCache'
 import { clearWatchingCache, removeWatchingShow } from '../lib/watchingCache'
 import ConfirmDialog from '../components/ConfirmDialog'
-import { filterVisibleStatsRows, removeShowFromStatsState } from '../lib/showState'
+import {
+  filterVisibleStatsRows,
+  isStatsShowBusy,
+  removeShowFromStatsState,
+  statsActionItems,
+  toggleStatsActionSheet,
+} from '../lib/showState'
 
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
-// as Watching.jsx — the underlying TMDB season data is already localStorage-
+// as Watching.jsx â€” the underlying TMDB season data is already localStorage-
 // cached, so a revisit paints instantly and refreshes in the background.
 // v2: one-time cache-bust so the Settings bulk-mark-watched writes are picked
-// up — old v1 entries are simply never matched and a fresh Supabase fetch runs.
+// up â€” old v1 entries are simply never matched and a fresh Supabase fetch runs.
 const CACHE_KEY = 'stats_cache:v3'
 
 // When neither an episode's own runtime nor the show's average typical runtime
 // is known, assume this many minutes per episode. This is the single flat
-// fallback for the time banner — search DEFAULT_EPISODE_RUNTIME_MINUTES to
+// fallback for the time banner â€” search DEFAULT_EPISODE_RUNTIME_MINUTES to
 // adjust it if it ever proves too rough.
 const DEFAULT_EPISODE_RUNTIME_MINUTES = 45
 
 const MINUTES_PER_HOUR = 60
 const MINUTES_PER_DAY = 60 * 24
-// A "month" here is a flat 30 days — a deliberate approximation that keeps the
+// A "month" here is a flat 30 days â€” a deliberate approximation that keeps the
 // banner a friendly round figure rather than a precise calendar computation.
 const DAYS_PER_MONTH = 30
 
@@ -53,8 +59,8 @@ function saveCache(payload) {
 }
 
 // Runtime in minutes for a single watched episode, applying the documented
-// fallback chain: the episode's own runtime → the show's average typical
-// runtime → a flat default.
+// fallback chain: the episode's own runtime â†’ the show's average typical
+// runtime â†’ a flat default.
 function episodeRuntimeMinutes(ownRuntime, showRunTimeAvg) {
   if (typeof ownRuntime === 'number' && ownRuntime > 0) return ownRuntime
   if (showRunTimeAvg != null) return showRunTimeAvg
@@ -69,7 +75,7 @@ function averageRunTime(episodeRunTime) {
   return values.reduce((sum, n) => sum + n, 0) / values.length
 }
 
-// Total watched minutes → a "X months Y days" style human string.
+// Total watched minutes â†’ a "X months Y days" style human string.
 function formatWatchTime(totalMinutes) {
   if (totalMinutes < MINUTES_PER_HOUR) return 'under an hour'
   if (totalMinutes < MINUTES_PER_DAY) {
@@ -87,7 +93,7 @@ function formatWatchTime(totalMinutes) {
   return `${monthPart} ${days} day${days === 1 ? '' : 's'}`
 }
 
-// Small deterministic string hash — used to turn today's date into a stable
+// Small deterministic string hash â€” used to turn today's date into a stable
 // index so the insight is the same all day and rotates the next.
 function hashString(str) {
   let hash = 0
@@ -123,17 +129,17 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
     }
   }
 
-  // A simple summary — always valid once anything's been watched.
+  // A simple summary â€” always valid once anything's been watched.
   insights.push(
     `You've watched ${totalWatchedEpisodes} episode${totalWatchedEpisodes === 1 ? '' : 's'} across ${showCount} show${showCount === 1 ? '' : 's'}.`,
   )
 
-  // Total distinct shows — only interesting once there's more than one.
+  // Total distinct shows â€” only interesting once there's more than one.
   if (showCount >= 2) {
     insights.push(`You've dipped into ${showCount} different shows so far.`)
   }
 
-  // Most-watched network — tally each show's watched count against its primary
+  // Most-watched network â€” tally each show's watched count against its primary
   // (first-listed) network to avoid double-counting sibling networks.
   const networkTotals = new Map()
   for (const show of shows) {
@@ -153,25 +159,25 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
     insights.push(`${topNetwork} has been your most-watched network lately.`)
   }
 
-  // Distinct networks watched across — only reads as an insight once there's
+  // Distinct networks watched across â€” only reads as an insight once there's
   // real spread, so gate on at least a couple of different primary networks.
   const distinctNetworks = networkTotals.size
   if (distinctNetworks >= 2) {
     insights.push(`Your watching spans ${distinctNetworks} different networks.`)
   }
 
-  // Biggest watch by episode count — needs a few episodes to be worth calling out.
+  // Biggest watch by episode count â€” needs a few episodes to be worth calling out.
   let biggest = null
   for (const show of shows) {
     if (!biggest || show.watched > biggest.watched) biggest = show
   }
   if (biggest && biggest.watched >= 3) {
     insights.push(
-      `You're ${biggest.watched} episodes deep into ${biggest.name} — your biggest watch yet.`,
+      `You're ${biggest.watched} episodes deep into ${biggest.name} â€” your biggest watch yet.`,
     )
   }
 
-  // Show spanning the most seasons — skip unless the leader is genuinely
+  // Show spanning the most seasons â€” skip unless the leader is genuinely
   // multi-season, otherwise "most seasons" is a meaningless tie at one apiece.
   let mostSeasonsShowId = null
   let mostSeasonsCount = 0
@@ -184,11 +190,11 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
   const mostSeasonsShow = showById.get(mostSeasonsShowId)
   if (mostSeasonsShow && mostSeasonsCount >= 2) {
     insights.push(
-      `You've watched ${mostSeasonsCount} seasons of ${mostSeasonsShow.name} — more than any other show.`,
+      `You've watched ${mostSeasonsCount} seasons of ${mostSeasonsShow.name} â€” more than any other show.`,
     )
   }
 
-  // Most recently finished show — a show counts as finished only when every
+  // Most recently finished show â€” a show counts as finished only when every
   // episode we know about is watched. Needs at least one such show.
   let latestFinishedShow = null
   let latestFinishedAt = -Infinity
@@ -204,7 +210,7 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
     insights.push(`${latestFinishedShow.name} was the last show you finished off.`)
   }
 
-  // Average episode runtime across everything watched — a friendly round
+  // Average episode runtime across everything watched â€” a friendly round
   // figure, only worth showing once there's a decent sample of episodes.
   if (totalWatchedEpisodes >= 5 && totalMinutes > 0) {
     const avgMinutes = Math.round(totalMinutes / totalWatchedEpisodes)
@@ -225,6 +231,107 @@ function buildVisibleStatsState(shows, watchedRows) {
   return { shows, watchedRows, totalMinutes, insights }
 }
 
+function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
+  useEffect(() => {
+    if (!show) return undefined
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose, show])
+
+  if (!show) return null
+
+  const titleId = `stats-actions-title-${show.tmdb_id}`
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 px-4"
+      style={{ paddingBottom: 'calc(4rem + env(safe-area-inset-bottom) + 1rem)' }}
+      onClick={onClose}
+    >
+      <div
+        id="stats-actions-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="max-h-[calc(100dvh-6rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-(--color-border) bg-(--color-surface) p-4 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h2 id={titleId} className="min-w-0 break-words text-base font-semibold text-(--color-text)">
+            Actions for {show.name}
+          </h2>
+          <button
+            type="button"
+            aria-label="Close actions"
+            onClick={onClose}
+            className="min-h-11 min-w-11 shrink-0 rounded-lg text-xl leading-none text-(--color-text-muted)"
+          >
+            Ã—
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2">
+          {statsActionItems(show).map((item) => {
+            if (item.id === 'details') {
+              return (
+                <Link
+                  key={item.id}
+                  to={`/watching/${show.tmdb_id}`}
+                  aria-disabled={busy}
+                  onClick={(event) => {
+                    if (busy) {
+                      event.preventDefault()
+                      return
+                    }
+                    onClose()
+                  }}
+                  className="flex min-h-11 w-full items-center rounded-lg border border-(--color-border) px-3 text-left text-sm font-medium text-(--color-text)"
+                >
+                  {item.label}
+                </Link>
+              )
+            }
+
+            if (item.id === 'cancel') {
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={onClose}
+                  className="min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium text-(--color-text-muted)"
+                >
+                  {item.label}
+                </button>
+              )
+            }
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  onClose()
+                  if (item.id === 'restore') onRestore()
+                  if (item.id === 'remove') onRemove()
+                }}
+                disabled={busy}
+                className={`min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
+                  item.destructive ? 'text-red-400' : 'text-(--color-text-muted)'
+                }`}
+              >
+                {busy && item.id === 'restore' ? 'Restoringâ€¦' : item.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Stats() {
   const [cached] = useState(() => loadCache())
   const [shows, setShows] = useState(() => cached?.shows ?? [])
@@ -240,6 +347,10 @@ export default function Stats() {
   const busyIdsRef = useRef(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
 
+  const actionShow = openActionId === null
+    ? null
+    : shows.find((show) => show.tmdb_id === openActionId) ?? null
+
   useEffect(() => {
     let ignore = false
 
@@ -248,7 +359,7 @@ export default function Stats() {
       try {
         // Every distinct show with at least one watched episode ever. A show
         // with zero ticked episodes simply never appears here, which is the
-        // whole "only watched shows" filter — no extra logic needed.
+        // whole "only watched shows" filter â€” no extra logic needed.
         const watchedRows = await fetchWatchedEpisodes(
           supabase,
           'tmdb_show_id, season_number, episode_number, watched_at',
@@ -276,7 +387,7 @@ export default function Stats() {
         }
         const showIds = [...watchedByShowId.keys()]
 
-        // Names/posters — every watched show is guaranteed a tracked_shows row.
+        // Names/posters â€” every watched show is guaranteed a tracked_shows row.
         const { data: trackedShows, error: trackedError } = await supabase
           .from('tracked_shows')
           .select('tmdb_id, name, poster_path, finished_at, hidden_at')
@@ -314,7 +425,7 @@ export default function Stats() {
                 seasons.map((season) => getSeasonEpisodes(showId, season.season_number)),
               )
 
-              // Map every real episode (seasons > 0) → its runtime, matching
+              // Map every real episode (seasons > 0) â†’ its runtime, matching
               // ShowDetail's header which counts across the loaded seasons.
               const runtimeByKey = new Map()
               seasons.forEach((season, i) => {
@@ -349,7 +460,7 @@ export default function Stats() {
                 minutes,
               }
             } catch {
-              // TMDB fetch failed for this show — degrade gracefully rather than
+              // TMDB fetch failed for this show â€” degrade gracefully rather than
               // dropping it: count each watched row at the flat default runtime.
               return {
                 tmdb_id: showId,
@@ -509,7 +620,7 @@ export default function Stats() {
             aria-label="Dismiss"
             className="shrink-0 text-red-400/80 hover:text-red-400"
           >
-            ✕
+            âœ•
           </button>
         </div>
       )}
@@ -551,7 +662,7 @@ export default function Stats() {
 
           <div className="mt-6 grid grid-cols-3 gap-3">
             {shows.map((show) => {
-              const isBusy = busyIds.has(show.tmdb_id)
+              const isBusy = isStatsShowBusy(busyIds, show.tmdb_id)
               const actionsOpen = openActionId === show.tmdb_id
 
               return (
@@ -575,16 +686,16 @@ export default function Stats() {
                       type="button"
                       aria-label={`Actions for ${show.name}`}
                       aria-expanded={actionsOpen}
-                      aria-controls={`stats-actions-${show.tmdb_id}`}
+                      aria-controls="stats-actions-sheet"
                       onClick={() => {
                         setActionError(null)
                         setActionSuccess(null)
-                        setOpenActionId(actionsOpen ? null : show.tmdb_id)
+                        setOpenActionId(toggleStatsActionSheet(openActionId, show.tmdb_id))
                       }}
                       disabled={isBusy}
-                      className="absolute right-1 top-1 min-h-9 min-w-9 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
+                      className="absolute right-1 top-1 min-h-11 min-w-11 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
                     >
-                      ⋯
+                      â‹¯
                     </button>
                   </div>
 
@@ -592,46 +703,20 @@ export default function Stats() {
                     {show.name}
                   </p>
 
-                  {actionsOpen && (
-                    <div
-                      id={`stats-actions-${show.tmdb_id}`}
-                      className="mt-1 overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface) text-xs"
-                    >
-                      <Link
-                        to={`/watching/${show.tmdb_id}`}
-                        onClick={() => setOpenActionId(null)}
-                        className="block px-2 py-2 font-medium text-(--color-text)"
-                      >
-                        View details
-                      </Link>
-
-                      {show.finished_at && (
-                        <button
-                          type="button"
-                          onClick={() => restoreShow(show)}
-                          disabled={isBusy}
-                          className="block w-full px-2 py-2 text-left text-(--color-text-muted) disabled:opacity-60"
-                        >
-                          {isBusy ? 'Restoring…' : 'Restore to Watching'}
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => setConfirmingShow(show)}
-                        disabled={isBusy}
-                        className="block w-full px-2 py-2 text-left text-red-400 disabled:opacity-60"
-                      >
-                        Remove from Stats
-                      </button>
-                    </div>
-                  )}
                 </div>
               )
             })}
           </div>
         </>
       )}
+
+      <StatsActionSheet
+        show={actionShow}
+        busy={actionShow ? isStatsShowBusy(busyIds, actionShow.tmdb_id) : false}
+        onClose={() => setOpenActionId(null)}
+        onRestore={() => actionShow && restoreShow(actionShow)}
+        onRemove={() => actionShow && setConfirmingShow(actionShow)}
+      />
 
       <ConfirmDialog
         open={confirmingShow !== null}
