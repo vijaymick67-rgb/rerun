@@ -8,10 +8,10 @@ const NETWORK_RELEASE_RULES = {
   'Netflix': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Prime Video': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Amazon Prime Video': { timeZone: 'America/Los_Angeles', hour: 0 },
-  // Apple TV+ weekly episodes are commonly available at 9 PM ET on the
-  // preceding evening, while TMDB records the following release date.
-  'Apple TV+': { timeZone: 'America/New_York', hour: 21, sourceDateOffsetDays: -1 },
-  'Apple TV': { timeZone: 'America/New_York', hour: 21, sourceDateOffsetDays: -1 },
+  // TMDB's Apple air_date is already the source calendar date. A 9 PM ET
+  // release naturally converts to the following morning in IST.
+  'Apple TV+': { timeZone: 'America/New_York', hour: 21 },
+  'Apple TV': { timeZone: 'America/New_York', hour: 21 },
   'Disney+': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Hulu': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Paramount+': { timeZone: 'America/Los_Angeles', hour: 0 },
