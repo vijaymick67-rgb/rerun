@@ -3,7 +3,7 @@ import {
   isHiddenFromWatching,
   WATCHING_COUNTDOWN_WINDOW_DAYS,
 } from './watchHelpers.js'
-import { shiftAirDate } from './networkReleaseTiming.js'
+import { releaseDateInIST } from './networkReleaseTiming.js'
 
 export function isPersonallyFinished(show) {
   return show?.finished_at != null
@@ -28,22 +28,22 @@ function localDateISO(timestamp) {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
-export function shouldFinishedShowReturn(show, details, dayShift = 0) {
+export function shouldFinishedShowReturn(show, details, releaseRule) {
   const airDate = details?.next_episode_to_air?.air_date
-  const remaining = daysUntil(airDate, dayShift)
+  const remaining = daysUntil(airDate, releaseRule)
   if (remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS) return true
 
   // After air day TMDB may clear next_episode_to_air (season finale or
   // full-season drop). A last episode dated after the personal finish is a
   // lightweight signal that new material exists and merits a season scan.
   const lastAirDate = details?.last_episode_to_air?.air_date
-  const daysSinceLastAir = daysUntil(lastAirDate, dayShift)
+  const daysSinceLastAir = daysUntil(lastAirDate, releaseRule)
   const finishedDate = localDateISO(show?.finished_at)
   return Boolean(
     finishedDate &&
       daysSinceLastAir !== null &&
       daysSinceLastAir <= 0 &&
-      shiftAirDate(lastAirDate, dayShift) > finishedDate,
+      releaseDateInIST(lastAirDate, releaseRule) > finishedDate,
   )
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { searchShows, getShowDetails, POSTER_BASE } from '../lib/tmdb'
 import { supabase } from '../lib/supabase'
-import { dayShiftForNetworks } from '../lib/networkReleaseTiming'
+import { releaseRuleForShow } from '../lib/networkReleaseTiming'
 import { daysUntil } from '../lib/watchHelpers'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 
@@ -89,9 +89,9 @@ export default function Browse() {
 
     try {
       const details = await getShowDetails(show.id)
-      const dayShift = dayShiftForNetworks(details.networks)
+      const releaseRule = releaseRuleForShow(show.id, details.networks)
       const premiereDate = details.next_episode_to_air?.air_date ?? details.first_air_date ?? null
-      const daysAway = daysUntil(premiereDate, dayShift)
+      const daysAway = daysUntil(premiereDate, releaseRule)
       if (daysAway !== null && daysAway > DELAYED_ADD_THRESHOLD_DAYS) {
         setDelayedAddMessage(
           "This show premieres in a while! We'll automatically add it to your Watching tab closer to the release date.",

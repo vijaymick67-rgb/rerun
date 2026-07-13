@@ -1,42 +1,50 @@
 import { describe, expect, it, vi } from 'vitest'
-import { dayShiftForNetworks, shiftAirDate } from './networkReleaseTiming'
+import { releaseDateInIST, releaseRuleForShow, releaseTimestamp } from './networkReleaseTiming'
+import { computeWatchingStatus, hasAired } from './watchHelpers'
 
-describe('shiftAirDate', () => {
-  it('shifts forward one IST calendar day for dayShift 1', () => {
-    expect(shiftAirDate('2026-07-09', 1)).toBe('2026-07-10')
+describe('release timing rules', () => {
+  it('keeps HOTD in Airs soon through Sunday night IST and releases it Monday 6:30 AM IST', () => {
+    vi.useFakeTimers()
+    const rule = releaseRuleForShow(94997, ['HBO'])
+    expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-13T01:00:00.000Z')
+    expect(releaseDateInIST('2026-07-12', rule)).toBe('2026-07-13')
+
+    vi.setSystemTime(new Date('2026-07-12T18:00:00.000Z'))
+    expect(hasAired({ air_date: '2026-07-12' }, rule)).toBe(false)
+    expect(computeWatchingStatus(
+      { 1: [{ episode_number: 1, name: 'Episode', air_date: '2026-07-12' }] },
+      new Set(), rule, { next_episode_to_air: { air_date: '2026-07-12', episode_number: 1 } },
+    )).toMatchObject({ type: 'countdown', airsSoon: true })
+
+    vi.setSystemTime(new Date('2026-07-13T01:00:00.000Z'))
+    expect(hasAired({ air_date: '2026-07-12' }, rule)).toBe(true)
+    expect(computeWatchingStatus(
+      { 1: [{ episode_number: 1, name: 'Episode', air_date: '2026-07-12' }] },
+      new Set(), rule, { next_episode_to_air: { air_date: '2026-07-12', episode_number: 1 } },
+    )).toMatchObject({ type: 'nextUp', season_number: 1, episode_number: 1 })
+    vi.useRealTimers()
   })
 
-  it('leaves the date unchanged for dayShift 0', () => {
-    expect(shiftAirDate('2026-07-09', 0)).toBe('2026-07-09')
-  })
-})
-
-describe('dayShiftForNetworks', () => {
-  it('matches network names regardless of case or surrounding whitespace', () => {
-    expect(dayShiftForNetworks([' hbo '])).toBe(1)
-    expect(dayShiftForNetworks(['NETFLIX'])).toBe(0)
-    expect(dayShiftForNetworks(['Apple tv+'])).toBe(1)
+  it('resolves Netflix midnight Pacific in the platform timezone', () => {
+    const rule = releaseRuleForShow(1, ['Netflix'])
+    expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-12T07:00:00.000Z')
   })
 
-  it('matches "Apple TV" (no plus) the same as "Apple TV+"', () => {
-    expect(dayShiftForNetworks(['Apple TV'])).toBe(1)
+  it('models Apple TV+ as a previous-evening US release', () => {
+    const rule = releaseRuleForShow(1, ['Apple TV+'])
+    expect(new Date(releaseTimestamp('2026-07-10', rule)).toISOString()).toBe('2026-07-10T01:00:00.000Z')
+    expect(releaseDateInIST('2026-07-10', rule)).toBe('2026-07-10')
   })
 
-  it('warns and defaults to 0 when no network matches', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(dayShiftForNetworks(['Some Unknown Network'])).toBe(0)
-    expect(warn).toHaveBeenCalledWith(
-      'networkReleaseTiming: no day-shift match for networks',
-      ['Some Unknown Network']
-    )
-    warn.mockRestore()
+  it('automatically changes the New York offset across US daylight saving time', () => {
+    const rule = releaseRuleForShow(1, ['HBO'])
+    expect(new Date(releaseTimestamp('2026-03-01', rule)).toISOString()).toBe('2026-03-02T02:00:00.000Z')
+    expect(new Date(releaseTimestamp('2026-03-15', rule)).toISOString()).toBe('2026-03-16T01:00:00.000Z')
   })
 
-  it('does not warn for an empty/undefined network list', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(dayShiftForNetworks(undefined)).toBe(0)
-    expect(dayShiftForNetworks([])).toBe(0)
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+  it('uses a safe noon-UTC fallback for unknown networks', () => {
+    const rule = releaseRuleForShow(1, ['Unknown Network'])
+    expect(rule.fallback).toBe(true)
+    expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-12T12:00:00.000Z')
   })
 })
