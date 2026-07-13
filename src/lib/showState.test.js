@@ -7,7 +7,13 @@ import {
   upsertTrackedShow,
 } from './finishedShows'
 import { selectTrackedShowsForWatching } from './watchingShows'
-import { filterVisibleStatsRows, removeShowFromStatsState } from './showState'
+import {
+  filterVisibleStatsRows,
+  isStatsShowBusy,
+  removeShowFromStatsState,
+  statsActionItems,
+  toggleStatsActionSheet,
+} from './showState'
 
 function makeSupabase({ error = null } = {}) {
   const calls = []
@@ -127,5 +133,30 @@ describe('preserved-history show state', () => {
     await expect(hideTrackedShow(supabase, 4, 'NOW')).rejects.toThrow('write failed')
     await expect(restoreTrackedShow(supabase, 4)).rejects.toThrow('write failed')
     expect(before).toEqual([{ tmdb_id: 4, watched: 2 }])
+  })
+
+  it('models action-sheet options for active and archived shows', () => {
+    expect(statsActionItems({ tmdb_id: 1, finished_at: null }).map((item) => item.id)).toEqual([
+      'details',
+      'remove',
+      'cancel',
+    ])
+    expect(statsActionItems({ tmdb_id: 2, finished_at: '2026-07-12T00:00:00Z' }).map((item) => item.id)).toEqual([
+      'details',
+      'restore',
+      'remove',
+      'cancel',
+    ])
+  })
+
+  it('opens the selected show action sheet, closes it on cancel, and scopes busy state', () => {
+    expect(toggleStatsActionSheet(null, 2)).toBe(2)
+    expect(toggleStatsActionSheet(2, 2)).toBeNull()
+    expect(toggleStatsActionSheet(2, 3)).toBe(3)
+
+    const busyIds = new Set([2])
+    expect(isStatsShowBusy(busyIds, 2)).toBe(true)
+    expect(isStatsShowBusy(busyIds, 3)).toBe(false)
+    expect(isStatsShowBusy(busyIds, 4)).toBe(false)
   })
 })
