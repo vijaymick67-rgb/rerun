@@ -136,7 +136,7 @@ function ShowDetailInner({ tmdbId }) {
         <Link
           to="/watching"
           aria-label="Back to Watching"
-          className="shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
+          className="motion-press shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
         >
           ‹
         </Link>
@@ -152,13 +152,13 @@ function ShowDetailInner({ tmdbId }) {
       {loading && <ShowDetailSkeleton />}
 
       {error && (
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
           <span>{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
           </button>
@@ -214,7 +214,7 @@ function ShowDetailInner({ tmdbId }) {
               type="button"
               onClick={() => (show.finished_at ? setFinished(false) : setConfirmFinish(true))}
               disabled={savingFinished}
-              className="w-full rounded-md border border-(--color-border) py-2 text-sm font-medium text-(--color-text) disabled:opacity-60"
+              className="motion-press w-full rounded-md border border-(--color-border) py-2 text-sm font-medium text-(--color-text) disabled:opacity-60"
             >
               {savingFinished
                 ? 'Saving…'

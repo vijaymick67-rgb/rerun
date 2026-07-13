@@ -77,7 +77,7 @@ export default function Settings() {
             type="button"
             onClick={handleImport}
             disabled={!file || running}
-            className="w-full rounded-md bg-(--color-accent) py-2 text-sm font-medium text-(--color-bg) disabled:opacity-60"
+            className="motion-press w-full rounded-md bg-(--color-accent) py-2 text-sm font-medium text-(--color-bg) disabled:opacity-60"
           >
             {running ? 'Importing…' : 'Import'}
           </button>
@@ -98,7 +98,7 @@ export default function Settings() {
         )}
 
         {error && (
-          <p className="mt-4 rounded-lg border border-red-400/40 bg-red-400/10 px-3 py-2 text-sm text-red-400">
+          <p className="motion-banner mt-4 rounded-lg border border-red-400/40 bg-red-400/10 px-3 py-2 text-sm text-red-400">
             {error}
           </p>
         )}
@@ -111,7 +111,7 @@ export default function Settings() {
 
 function ImportSummary({ summary }) {
   return (
-    <div className="mt-5 rounded-lg border border-(--color-border) bg-(--color-surface) p-4">
+    <div className="motion-banner mt-5 rounded-lg border border-(--color-border) bg-(--color-surface) p-4">
       <p className="text-sm font-semibold text-(--color-text)">Import complete</p>
 
       <dl className="mt-3 space-y-1.5 text-sm">

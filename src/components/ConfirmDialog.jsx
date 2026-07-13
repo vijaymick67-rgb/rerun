@@ -41,14 +41,14 @@ export default function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-(--color-text-muted)"
+            className="motion-press rounded-md px-3 py-1.5 text-sm font-medium text-(--color-text-muted)"
           >
             {cancelLabel}
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+            className={`motion-press rounded-md px-3 py-1.5 text-sm font-medium ${
               danger
                 ? 'bg-red-500/90 text-white'
                 : 'bg-(--color-accent) text-(--color-bg)'

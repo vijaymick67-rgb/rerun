@@ -178,7 +178,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         <Link
           to={`/watching/${numericTmdbId}`}
           aria-label="Back to show"
-          className="shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
+          className="motion-press shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
         >
           ‹
         </Link>
@@ -197,14 +197,14 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       {error && (
         <div
           role="alert"
-          className="mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+          className="motion-banner mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400"
         >
           <span className="min-w-0 break-words">{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
           </button>
@@ -218,7 +218,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
               type="button"
               onClick={markSeasonWatched}
               disabled={isSeasonBusy}
-              className="self-start rounded-md bg-(--color-accent-muted) px-3 py-1.5 text-xs font-medium text-(--color-accent) disabled:opacity-60"
+              className="motion-press self-start rounded-md bg-(--color-accent-muted) px-3 py-1.5 text-xs font-medium text-(--color-accent) disabled:opacity-60"
             >
               {isSeasonBusy ? 'Marking…' : 'Mark season watched'}
             </button>
@@ -252,7 +252,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
                   type="button"
                   onClick={() => toggleEpisode(ep)}
                   disabled={isBusy || !episodeHasAired}
-                  className={`shrink-0 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-60 ${
+                  className={`motion-press shrink-0 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-60 ${
                     isWatched
                       ? 'bg-(--color-accent) text-(--color-bg)'
                       : 'bg-(--color-surface-raised) text-(--color-text-muted)'
