@@ -15,7 +15,7 @@ export default function TabBar() {
           key={tab.to}
           to={tab.to}
           className={({ isActive }) =>
-            `flex-1 py-3 text-center text-sm ${
+            `motion-press flex-1 py-3 text-center text-sm ${
               isActive
                 ? 'text-(--color-accent)'
                 : 'text-(--color-text-muted)'
