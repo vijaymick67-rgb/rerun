@@ -21,21 +21,21 @@ import {
 } from '../lib/showState'
 
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
-// as Watching.jsx â€” the underlying TMDB season data is already localStorage-
+// as Watching.jsx — the underlying TMDB season data is already localStorage-
 // cached, so a revisit paints instantly and refreshes in the background.
 // v2: one-time cache-bust so the Settings bulk-mark-watched writes are picked
-// up â€” old v1 entries are simply never matched and a fresh Supabase fetch runs.
+// up — old v1 entries are simply never matched and a fresh Supabase fetch runs.
 const CACHE_KEY = 'stats_cache:v3'
 
 // When neither an episode's own runtime nor the show's average typical runtime
 // is known, assume this many minutes per episode. This is the single flat
-// fallback for the time banner â€” search DEFAULT_EPISODE_RUNTIME_MINUTES to
+// fallback for the time banner — search DEFAULT_EPISODE_RUNTIME_MINUTES to
 // adjust it if it ever proves too rough.
 const DEFAULT_EPISODE_RUNTIME_MINUTES = 45
 
 const MINUTES_PER_HOUR = 60
 const MINUTES_PER_DAY = 60 * 24
-// A "month" here is a flat 30 days â€” a deliberate approximation that keeps the
+// A "month" here is a flat 30 days — a deliberate approximation that keeps the
 // banner a friendly round figure rather than a precise calendar computation.
 const DAYS_PER_MONTH = 30
 
@@ -59,8 +59,8 @@ function saveCache(payload) {
 }
 
 // Runtime in minutes for a single watched episode, applying the documented
-// fallback chain: the episode's own runtime â†’ the show's average typical
-// runtime â†’ a flat default.
+// fallback chain: the episode's own runtime → the show's average typical
+// runtime → a flat default.
 function episodeRuntimeMinutes(ownRuntime, showRunTimeAvg) {
   if (typeof ownRuntime === 'number' && ownRuntime > 0) return ownRuntime
   if (showRunTimeAvg != null) return showRunTimeAvg
@@ -75,7 +75,7 @@ function averageRunTime(episodeRunTime) {
   return values.reduce((sum, n) => sum + n, 0) / values.length
 }
 
-// Total watched minutes â†’ a "X months Y days" style human string.
+// Total watched minutes → a "X months Y days" style human string.
 function formatWatchTime(totalMinutes) {
   if (totalMinutes < MINUTES_PER_HOUR) return 'under an hour'
   if (totalMinutes < MINUTES_PER_DAY) {
@@ -93,7 +93,7 @@ function formatWatchTime(totalMinutes) {
   return `${monthPart} ${days} day${days === 1 ? '' : 's'}`
 }
 
-// Small deterministic string hash â€” used to turn today's date into a stable
+// Small deterministic string hash — used to turn today's date into a stable
 // index so the insight is the same all day and rotates the next.
 function hashString(str) {
   let hash = 0
@@ -129,17 +129,17 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
     }
   }
 
-  // A simple summary â€” always valid once anything's been watched.
+  // A simple summary — always valid once anything's been watched.
   insights.push(
     `You've watched ${totalWatchedEpisodes} episode${totalWatchedEpisodes === 1 ? '' : 's'} across ${showCount} show${showCount === 1 ? '' : 's'}.`,
   )
 
-  // Total distinct shows â€” only interesting once there's more than one.
+  // Total distinct shows — only interesting once there's more than one.
   if (showCount >= 2) {
     insights.push(`You've dipped into ${showCount} different shows so far.`)
   }
 
-  // Most-watched network â€” tally each show's watched count against its primary
+  // Most-watched network — tally each show's watched count against its primary
   // (first-listed) network to avoid double-counting sibling networks.
   const networkTotals = new Map()
   for (const show of shows) {
@@ -159,25 +159,25 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
     insights.push(`${topNetwork} has been your most-watched network lately.`)
   }
 
-  // Distinct networks watched across â€” only reads as an insight once there's
+  // Distinct networks watched across — only reads as an insight once there's
   // real spread, so gate on at least a couple of different primary networks.
   const distinctNetworks = networkTotals.size
   if (distinctNetworks >= 2) {
     insights.push(`Your watching spans ${distinctNetworks} different networks.`)
   }
 
-  // Biggest watch by episode count â€” needs a few episodes to be worth calling out.
+  // Biggest watch by episode count — needs a few episodes to be worth calling out.
   let biggest = null
   for (const show of shows) {
     if (!biggest || show.watched > biggest.watched) biggest = show
   }
   if (biggest && biggest.watched >= 3) {
     insights.push(
-      `You're ${biggest.watched} episodes deep into ${biggest.name} â€” your biggest watch yet.`,
+      `You're ${biggest.watched} episodes deep into ${biggest.name} — your biggest watch yet.`,
     )
   }
 
-  // Show spanning the most seasons â€” skip unless the leader is genuinely
+  // Show spanning the most seasons — skip unless the leader is genuinely
   // multi-season, otherwise "most seasons" is a meaningless tie at one apiece.
   let mostSeasonsShowId = null
   let mostSeasonsCount = 0
@@ -190,11 +190,11 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
   const mostSeasonsShow = showById.get(mostSeasonsShowId)
   if (mostSeasonsShow && mostSeasonsCount >= 2) {
     insights.push(
-      `You've watched ${mostSeasonsCount} seasons of ${mostSeasonsShow.name} â€” more than any other show.`,
+      `You've watched ${mostSeasonsCount} seasons of ${mostSeasonsShow.name} — more than any other show.`,
     )
   }
 
-  // Most recently finished show â€” a show counts as finished only when every
+  // Most recently finished show — a show counts as finished only when every
   // episode we know about is watched. Needs at least one such show.
   let latestFinishedShow = null
   let latestFinishedAt = -Infinity
@@ -210,7 +210,7 @@ function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes 
     insights.push(`${latestFinishedShow.name} was the last show you finished off.`)
   }
 
-  // Average episode runtime across everything watched â€” a friendly round
+  // Average episode runtime across everything watched — a friendly round
   // figure, only worth showing once there's a decent sample of episodes.
   if (totalWatchedEpisodes >= 5 && totalMinutes > 0) {
     const avgMinutes = Math.round(totalMinutes / totalWatchedEpisodes)
@@ -269,7 +269,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
             onClick={onClose}
             className="min-h-11 min-w-11 shrink-0 rounded-lg text-xl leading-none text-(--color-text-muted)"
           >
-            Ã—
+            ×
           </button>
         </div>
 
@@ -322,7 +322,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
                   item.destructive ? 'text-red-400' : 'text-(--color-text-muted)'
                 }`}
               >
-                {busy && item.id === 'restore' ? 'Restoringâ€¦' : item.label}
+                {busy && item.id === 'restore' ? 'Restoring…' : item.label}
               </button>
             )
           })}
@@ -359,7 +359,7 @@ export default function Stats() {
       try {
         // Every distinct show with at least one watched episode ever. A show
         // with zero ticked episodes simply never appears here, which is the
-        // whole "only watched shows" filter â€” no extra logic needed.
+        // whole "only watched shows" filter — no extra logic needed.
         const watchedRows = await fetchWatchedEpisodes(
           supabase,
           'tmdb_show_id, season_number, episode_number, watched_at',
@@ -387,7 +387,7 @@ export default function Stats() {
         }
         const showIds = [...watchedByShowId.keys()]
 
-        // Names/posters â€” every watched show is guaranteed a tracked_shows row.
+        // Names/posters — every watched show is guaranteed a tracked_shows row.
         const { data: trackedShows, error: trackedError } = await supabase
           .from('tracked_shows')
           .select('tmdb_id, name, poster_path, finished_at, hidden_at')
@@ -425,7 +425,7 @@ export default function Stats() {
                 seasons.map((season) => getSeasonEpisodes(showId, season.season_number)),
               )
 
-              // Map every real episode (seasons > 0) â†’ its runtime, matching
+              // Map every real episode (seasons > 0) → its runtime, matching
               // ShowDetail's header which counts across the loaded seasons.
               const runtimeByKey = new Map()
               seasons.forEach((season, i) => {
@@ -460,7 +460,7 @@ export default function Stats() {
                 minutes,
               }
             } catch {
-              // TMDB fetch failed for this show â€” degrade gracefully rather than
+              // TMDB fetch failed for this show — degrade gracefully rather than
               // dropping it: count each watched row at the flat default runtime.
               return {
                 tmdb_id: showId,
@@ -620,7 +620,7 @@ export default function Stats() {
             aria-label="Dismiss"
             className="shrink-0 text-red-400/80 hover:text-red-400"
           >
-            âœ•
+            ✕
           </button>
         </div>
       )}
@@ -695,7 +695,7 @@ export default function Stats() {
                       disabled={isBusy}
                       className="absolute right-1 top-1 min-h-11 min-w-11 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
                     >
-                      â‹¯
+                      ⋯
                     </button>
                   </div>
 
