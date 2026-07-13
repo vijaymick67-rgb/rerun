@@ -88,7 +88,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
   // Writes the season's own cache with the new watched set, and patches the
   // parent ShowDetail cache (if present) so its watched counts don't go
-  // stale until its own background refresh runs â€” same principle as
+  // stale until its own background refresh runs — same principle as
   // Watching.jsx's confirmRemove updating its cache right after the mutation
   // succeeds, extended across the two related cache entries.
   function syncWatchedCaches(nextWatchedSet) {
@@ -180,7 +180,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
           aria-label="Back to show"
           className="shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
         >
-          â€¹
+          ‹
         </Link>
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold text-(--color-text)">
@@ -206,7 +206,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             aria-label="Dismiss"
             className="shrink-0 text-red-400/80 hover:text-red-400"
           >
-            âœ•
+            ✕
           </button>
         </div>
       )}
@@ -220,7 +220,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
               disabled={isSeasonBusy}
               className="self-start rounded-md bg-(--color-accent-muted) px-3 py-1.5 text-xs font-medium text-(--color-accent) disabled:opacity-60"
             >
-              {isSeasonBusy ? 'Markingâ€¦' : 'Mark season watched'}
+              {isSeasonBusy ? 'Marking…' : 'Mark season watched'}
             </button>
           )}
 
