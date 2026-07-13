@@ -267,7 +267,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
             type="button"
             aria-label="Close actions"
             onClick={onClose}
-            className="min-h-11 min-w-11 shrink-0 rounded-lg text-xl leading-none text-(--color-text-muted)"
+            className="motion-press min-h-11 min-w-11 shrink-0 rounded-lg text-xl leading-none text-(--color-text-muted)"
           >
             ×
           </button>
@@ -288,7 +288,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
                     }
                     onClose()
                   }}
-                  className="flex min-h-11 w-full items-center rounded-lg border border-(--color-border) px-3 text-left text-sm font-medium text-(--color-text)"
+                  className="motion-press flex min-h-11 w-full items-center rounded-lg border border-(--color-border) px-3 text-left text-sm font-medium text-(--color-text)"
                 >
                   {item.label}
                 </Link>
@@ -301,7 +301,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
                   key={item.id}
                   type="button"
                   onClick={onClose}
-                  className="min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium text-(--color-text-muted)"
+                  className="motion-press min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium text-(--color-text-muted)"
                 >
                   {item.label}
                 </button>
@@ -318,7 +318,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
                   if (item.id === 'remove') onRemove()
                 }}
                 disabled={busy}
-                className={`min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
+                className={`motion-press min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
                   item.destructive ? 'text-red-400' : 'text-(--color-text-muted)'
                 }`}
               >
@@ -612,13 +612,13 @@ export default function Stats() {
       )}
 
       {error && (
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
           <span>{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
           </button>
@@ -626,13 +626,13 @@ export default function Stats() {
       )}
 
       {actionError && (
-        <div role="alert" className="mt-4 min-w-0 break-words rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div role="alert" className="motion-banner mt-4 min-w-0 break-words rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
           {actionError}
         </div>
       )}
 
       {actionSuccess && (
-        <div role="status" className="mt-4 min-w-0 break-words rounded-lg border border-(--color-accent)/30 bg-(--color-accent-muted) px-3 py-2 text-sm text-(--color-accent)">
+        <div role="status" className="motion-banner mt-4 min-w-0 break-words rounded-lg border border-(--color-accent)/30 bg-(--color-accent-muted) px-3 py-2 text-sm text-(--color-accent)">
           {actionSuccess}
         </div>
       )}
@@ -693,7 +693,7 @@ export default function Stats() {
                         setOpenActionId(toggleStatsActionSheet(openActionId, show.tmdb_id))
                       }}
                       disabled={isBusy}
-                      className="absolute right-1 top-1 min-h-11 min-w-11 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
+                      className="motion-press absolute right-1 top-1 min-h-11 min-w-11 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
                     >
                       ⋯
                     </button>
