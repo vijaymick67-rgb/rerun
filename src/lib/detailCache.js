@@ -38,3 +38,13 @@ export function clearDetailCache(key) {
     // ignore
   }
 }
+
+export function patchShowDetailState(tmdbId, patch) {
+  const key = showDetailCacheKey(tmdbId)
+  const cached = readDetailCache(key)
+  if (!cached?.show) return
+  writeDetailCache(key, {
+    ...cached,
+    show: { ...cached.show, ...patch },
+  })
+}

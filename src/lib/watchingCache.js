@@ -26,3 +26,9 @@ export function clearWatchingCache() {
     // best-effort cache
   }
 }
+
+export function removeWatchingShow(tmdbId) {
+  const shows = loadWatchingCache()
+  if (!shows) return
+  saveWatchingCache(shows.filter((show) => show.tmdb_id !== tmdbId && show.id !== tmdbId))
+}

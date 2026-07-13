@@ -4,9 +4,9 @@ import { supabase } from '../lib/supabase'
 import { releaseRuleForShow } from '../lib/networkReleaseTiming'
 import { daysUntil } from '../lib/watchHelpers'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
+import { upsertTrackedShow } from '../lib/finishedShows'
 
 const DEBOUNCE_MS = 400
-const UNIQUE_VIOLATION = '23505'
 const DELAYED_ADD_THRESHOLD_DAYS = 60
 
 export default function Browse() {
@@ -26,10 +26,10 @@ export default function Browse() {
     let ignore = false
     supabase
       .from('tracked_shows')
-      .select('tmdb_id')
+      .select('tmdb_id, hidden_at')
       .then(({ data, error: fetchError }) => {
         if (ignore || fetchError || !data) return
-        setTrackedIds(new Set(data.map((row) => row.tmdb_id)))
+        setTrackedIds(new Set(data.filter((row) => row.hidden_at == null).map((row) => row.tmdb_id)))
       })
     return () => {
       ignore = true
@@ -68,12 +68,12 @@ export default function Browse() {
   async function handleAdd(show) {
     setAddingIds((prev) => new Set(prev).add(show.id))
 
-    const { error: insertError } = await supabase.from('tracked_shows').insert({
-      tmdb_id: show.id,
-      name: show.name,
-      poster_path: show.poster_path,
-      added_at: new Date().toISOString(),
-    })
+    let insertError = null
+    try {
+      await upsertTrackedShow(supabase, show)
+    } catch (err) {
+      insertError = err
+    }
 
     setAddingIds((prev) => {
       const next = new Set(prev)
@@ -81,7 +81,7 @@ export default function Browse() {
       return next
     })
 
-    if (!insertError || insertError.code === UNIQUE_VIOLATION) {
+    if (!insertError) {
       setTrackedIds((prev) => new Set(prev).add(show.id))
     } else {
       return
@@ -112,15 +112,7 @@ export default function Browse() {
     setLoggingIds((prev) => new Set(prev).add(show.id))
 
     try {
-      const { error: insertError } = await supabase.from('tracked_shows').insert({
-        tmdb_id: show.id,
-        name: show.name,
-        poster_path: show.poster_path,
-        added_at: new Date().toISOString(),
-      })
-      if (insertError && insertError.code !== UNIQUE_VIOLATION) {
-        throw insertError
-      }
+      await upsertTrackedShow(supabase, show)
       setTrackedIds((prev) => new Set(prev).add(show.id))
 
       const { rows } = await buildAiredEpisodeRows(show.id)

@@ -1,12 +1,13 @@
 import { computeWatchingStatus } from './watchHelpers.js'
-import { isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
+import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
 import { releaseRuleForShow } from './networkReleaseTiming.js'
 
 // Stage 1: all unfinished shows remain candidates. Finished shows receive only
 // a lightweight show-details request; ineligible archives stop here.
 export async function selectTrackedShowsForWatching(trackedShows, getShowDetails) {
-  const unfinished = trackedShows.filter((show) => !isPersonallyFinished(show))
-  const finished = trackedShows.filter(isPersonallyFinished)
+  const visibleShows = trackedShows.filter((show) => !isHiddenShow(show))
+  const unfinished = visibleShows.filter((show) => !isPersonallyFinished(show))
+  const finished = visibleShows.filter(isPersonallyFinished)
 
   const checkedFinished = await Promise.all(
     finished.map(async (show) => {
