@@ -146,16 +146,16 @@ export default function Browse() {
         <p className="mt-4 text-sm text-(--color-text-muted)">Searching…</p>
       )}
 
-      {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+      {error && <p className="motion-banner mt-4 text-sm text-red-400">{error}</p>}
 
       {delayedAddMessage && (
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-accent)/40 bg-(--color-accent)/10 px-3 py-2 text-sm text-(--color-accent)">
+        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-accent)/40 bg-(--color-accent)/10 px-3 py-2 text-sm text-(--color-accent)">
           <span>{delayedAddMessage}</span>
           <button
             type="button"
             onClick={() => setDelayedAddMessage(null)}
             aria-label="Dismiss"
-            className="shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
+            className="motion-press shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
           >
             ✕
           </button>
@@ -214,7 +214,7 @@ export default function Browse() {
                     type="button"
                     onClick={() => handleAdd(show)}
                     disabled={isTracked || isAdding}
-                    className={`mt-2 w-full rounded-md py-1.5 text-sm font-medium ${
+                    className={`motion-press mt-2 w-full rounded-md py-1.5 text-sm font-medium ${
                       isTracked
                         ? 'bg-(--color-surface-raised) text-(--color-text-muted)'
                         : 'bg-(--color-accent) text-(--color-bg) disabled:opacity-60'
@@ -227,7 +227,7 @@ export default function Browse() {
                     type="button"
                     onClick={() => handleLogWatched(show)}
                     disabled={isLogged || isLogging}
-                    className={`mt-1.5 w-full rounded-md py-1.5 text-xs font-medium ${
+                    className={`motion-press mt-1.5 w-full rounded-md py-1.5 text-xs font-medium ${
                       isLogged
                         ? 'bg-(--color-surface-raised) text-(--color-text-muted)'
                         : 'border border-(--color-border) text-(--color-text-muted) disabled:opacity-60'
