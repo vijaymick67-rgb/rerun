@@ -155,13 +155,13 @@ export default function Watching() {
       )}
 
       {error && (
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
           <span>{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
           </button>
