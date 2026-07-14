@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
-import { episodeKey, hasAired, formatDate } from '../lib/watchHelpers'
+import { getShowDetails, getSeasonEpisodes, getExternalIds } from '../lib/tmdb'
+import { getShowAirstamps } from '../lib/tvmaze'
+import { episodeKey, hasAired, formatDate, episodeReleaseDateInIST } from '../lib/watchHelpers'
 import {
   showDetailCacheKey,
   seasonDetailCacheKey,
@@ -41,31 +42,43 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     async function load() {
       setError(null)
       try {
-        const [{ data: watchedRows, error: watchedError }, details, seasonData] = await Promise.all([
-          supabase
-            .from('watched_episodes')
-            .select('episode_number')
-            .eq('tmdb_show_id', numericTmdbId)
-            .eq('season_number', numericSeasonNumber),
-          getShowDetails(numericTmdbId),
-          getSeasonEpisodes(numericTmdbId, numericSeasonNumber),
-        ])
+        // getShowAirstamps never throws (any failure → {}), so it's safe to
+        // resolve alongside the rest without its own guard. Overlaying the
+        // TVmaze airstamp lets this screen show the true IST release day rather
+        // than the raw TMDB air_date, which sits one IST day early for
+        // evening/night US drops (an HBO Sunday episode lands Monday in IST) —
+        // the same correction the Watching list already applies.
+        const [{ data: watchedRows, error: watchedError }, details, seasonData, airstamps] =
+          await Promise.all([
+            supabase
+              .from('watched_episodes')
+              .select('episode_number')
+              .eq('tmdb_show_id', numericTmdbId)
+              .eq('season_number', numericSeasonNumber),
+            getShowDetails(numericTmdbId),
+            getSeasonEpisodes(numericTmdbId, numericSeasonNumber),
+            getShowAirstamps(numericTmdbId, { getExternalIds }),
+          ])
         if (watchedError) throw watchedError
         if (ignore) return
 
         const nextShowName = details.name ?? ''
+        const seasonEpisodes = (seasonData.episodes ?? []).map((ep) => {
+          const airstamp = airstamps[episodeKey(numericSeasonNumber, ep.episode_number)]
+          return airstamp ? { ...ep, airstamp } : ep
+        })
         const watchedList = (watchedRows ?? []).map((row) =>
           episodeKey(numericSeasonNumber, row.episode_number),
         )
 
         setShowName(nextShowName)
-        setEpisodes(seasonData.episodes)
+        setEpisodes(seasonEpisodes)
         const nextWatched = new Set(watchedList)
         watchedRef.current = nextWatched
         setWatched(nextWatched)
         writeDetailCache(cacheKey, {
           showName: nextShowName,
-          episodes: seasonData.episodes,
+          episodes: seasonEpisodes,
           watchedList,
         })
       } catch {
@@ -234,9 +247,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
                   </p>
                   <p className="text-xs text-(--color-text-muted)">
                     {episodeHasAired
-                      ? formatDate(ep.air_date)
+                      ? formatDate(episodeReleaseDateInIST(ep))
                       : ep.air_date
-                        ? `Airs ${formatDate(ep.air_date)}`
+                        ? `Airs ${formatDate(episodeReleaseDateInIST(ep))}`
                         : 'No air date'}
                   </p>
                 </div>
