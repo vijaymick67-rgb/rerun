@@ -8,12 +8,10 @@ export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 // Bump this whenever a cached shape changes OR a data-correctness fix means
 // previously-cached values may now be wrong. This is the important one: the
 // TMDB cache below lives in localStorage with no expiry, so a show cached
-// before its `networks` were captured holds `networks: []` forever, which
-// silently disables the IST day-shift (dayShiftForNetworks([]) === 0) and
-// leaves the raw US air_date on screen — e.g. Sugar S2E4 stuck on "Jul 9"
-// instead of "Jul 10". A hard refresh reloads the JS bundle but NOT
-// localStorage, so a correct code fix cannot dislodge a stale cached value.
-// Bumping this version wipes the stale entries on next load so they refetch.
+// before a new field was captured holds the old shape forever. A hard refresh
+// reloads the JS bundle but NOT localStorage, so a correct code fix cannot
+// dislodge a stale cached value. Bumping this version wipes the stale entries
+// on next load so they refetch.
 // v4: getShowDetails() now also trims in `next_episode_to_air` — shows
 // cached before this holds it undefined forever, which would silently fall
 // back to "Caught up" instead of a premiere countdown.
