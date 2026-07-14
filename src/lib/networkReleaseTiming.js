@@ -64,14 +64,45 @@ export function resolveReleaseTimestamp(airDate, sources = {}) {
   return releaseTimestamp(airDate)
 }
 
+export function releaseInfoFromTimestamp(timestamp, source = 'prediction') {
+  const ts = coerceInstant(timestamp)
+  if (ts === null) return null
+  return {
+    timestamp: ts,
+    istDate: istDateISO(new Date(ts)),
+    istTime: istTimeDisplay(new Date(ts)),
+    source,
+  }
+}
+
+export function resolveReleaseInfo(airDate, sources = {}) {
+  const override = coerceInstant(sources.manualOverride)
+  if (override !== null) return releaseInfoFromTimestamp(override, 'manualOverride')
+  const airstamp = coerceInstant(sources.airstamp)
+  if (airstamp !== null) return releaseInfoFromTimestamp(airstamp, 'tvmaze')
+  const fallback = releaseTimestamp(airDate)
+  return fallback === null ? null : releaseInfoFromTimestamp(fallback, 'fallback')
+}
+
 // The IST calendar day a resolved release lands on. For the plain anchor this
 // is just the air_date (the anchor sits at 14:00 IST on it); for a TVmaze
 // airstamp or manual override it is the true IST day of that instant, which is
 // how the HBO "US-day-only" drift gets corrected (a Sunday-night US drop shows
 // as its actual Monday-morning IST day). Returns null when nothing resolves.
 export function resolveReleaseDateInIST(airDate, sources = {}) {
-  const ts = resolveReleaseTimestamp(airDate, sources)
-  return ts === null ? null : istDateISO(new Date(ts))
+  return resolveReleaseInfo(airDate, sources)?.istDate ?? null
+}
+
+export function resolveReleaseTimeInIST(airDate, sources = {}) {
+  return resolveReleaseInfo(airDate, sources)?.istTime ?? null
+}
+
+function istTimeDisplay(date) {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS)
+  const hours = shifted.getUTCHours()
+  const minutes = String(shifted.getUTCMinutes()).padStart(2, '0')
+  const hour12 = hours % 12 || 12
+  return `${hour12}:${minutes} ${hours < 12 ? 'AM' : 'PM'}`
 }
 
 // Accept either epoch ms (number) or a parseable date string; reject anything

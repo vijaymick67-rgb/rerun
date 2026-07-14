@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   computeWatchingStatus,
   episodeReleaseDateInIST,
+  formatReleaseDisplay,
+  predictWeeklyNextRelease,
   watchingStatusLabel,
 } from './watchHelpers'
 
@@ -173,5 +175,61 @@ describe('watchingStatusLabel — grammar (Fix E)', () => {
   it('renders the soon wording without a day count', () => {
     expect(watchingStatusLabel({ subtype: 'episode', airsSoon: true })).toBe('New episode soon')
     expect(watchingStatusLabel({ subtype: 'premiere', airsSoon: true })).toBe('Airs soon')
+  })
+})
+
+describe('timestamp-based HBO regressions', () => {
+  it('predicts the next instant and preserves Monday 6:30 AM IST', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-14T04:30:00.000Z'))
+    const prediction = predictWeeklyNextRelease({
+      3: [
+        { episode_number: 3, air_date: '2026-07-05', airstamp: '2026-07-06T01:00:00Z' },
+        { episode_number: 4, air_date: '2026-07-12', airstamp: '2026-07-13T01:00:00Z' },
+      ],
+    })
+    expect(prediction).toMatchObject({
+      timestamp: Date.parse('2026-07-20T01:00:00Z'),
+      istDate: '2026-07-20', istTime: '6:30 AM',
+      source: 'prediction', predicted: true,
+    })
+    expect(prediction.istDate).not.toBe('2026-07-19')
+    expect(prediction.istTime).not.toBe('2:00 PM')
+  })
+
+  it('counts six IST days and never exposes the raw TMDB Sunday', () => {
+    const status = at({}, new Set(), {
+      next_episode_to_air: {
+        air_date: '2026-07-19', season_number: 3, episode_number: 5,
+        airstamp: '2026-07-20T01:00:00+00:00',
+      },
+    }, '2026-07-14T04:30:00.000Z')
+    expect(status).toMatchObject({
+      type: 'countdown', air_date: '2026-07-20', daysUntil: 6,
+      istTime: '6:30 AM', source: 'tvmaze',
+    })
+    expect(status.air_date).not.toBe('2026-07-19')
+  })
+})
+
+describe('release display semantics', () => {
+  it('shows converted IST time for a verified TVmaze release', () => {
+    expect(formatReleaseDisplay({
+      istDate: '2026-07-20', istTime: '6:30 AM', source: 'tvmaze',
+    })).toBe('Jul 20, 2026 · 6:30 AM IST')
+  })
+
+  it('never exposes the internal fallback anchor as airtime', () => {
+    const label = formatReleaseDisplay({
+      istDate: '2026-07-20', istTime: '2:00 PM', source: 'fallback',
+    })
+    expect(label).toBe('Jul 20, 2026')
+    expect(label).not.toContain('2:00 PM IST')
+  })
+
+  it('preserves predicted time and labels it estimated when requested', () => {
+    expect(formatReleaseDisplay({
+      istDate: '2026-07-20', istTime: '6:30 AM', source: 'prediction',
+    }, { labelPrediction: true })).toBe('Jul 20, 2026 · 6:30 AM IST (estimated)')
   })
 })

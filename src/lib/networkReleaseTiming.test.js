@@ -3,6 +3,8 @@ import {
   releaseDateInIST,
   releaseTimestamp,
   resolveReleaseDateInIST,
+  resolveReleaseInfo,
+  resolveReleaseTimeInIST,
   resolveReleaseTimestamp,
 } from './networkReleaseTiming'
 import { hasAired } from './watchHelpers'
@@ -120,6 +122,19 @@ describe('resolveReleaseTimestamp — TVmaze priority chain', () => {
     expect(resolveReleaseDateInIST('2026-07-19', { airstamp: HBO_SUNDAY })).toBe('2026-07-20')
     // The bare anchor would keep it on the US Sunday — this is the drift TVmaze fixes.
     expect(releaseDateInIST('2026-07-19')).toBe('2026-07-19')
+  })
+})
+
+describe('resolved release info', () => {
+  it('returns the authoritative IST date, time, and source', () => {
+    expect(resolveReleaseInfo('2026-07-19', { airstamp: '2026-07-20T01:00:00+00:00' }))
+      .toEqual({
+        timestamp: Date.parse('2026-07-20T01:00:00Z'),
+        istDate: '2026-07-20',
+        istTime: '6:30 AM',
+        source: 'tvmaze',
+      })
+    expect(resolveReleaseTimeInIST('2026-07-19')).toBe('2:00 PM')
   })
 })
 

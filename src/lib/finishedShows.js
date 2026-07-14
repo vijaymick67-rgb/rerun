@@ -1,9 +1,10 @@
 import {
-  daysUntil,
+  daysUntilRelease,
   isHiddenFromWatching,
+  releaseSources,
   WATCHING_COUNTDOWN_WINDOW_DAYS,
 } from './watchHelpers.js'
-import { releaseDateInIST } from './networkReleaseTiming.js'
+import { istDateISO, resolveReleaseInfo } from './networkReleaseTiming.js'
 
 export function isPersonallyFinished(show) {
   return show?.finished_at != null
@@ -25,30 +26,31 @@ export function isVisibleInWatching(show, status) {
 // date and >60 hiding boundary used by countdown rendering are reused here.
 // Negative values are intentionally eligible: cached dated episode metadata
 // lets the normal nextUp scan keep a returned show visible after air day.
-function localDateISO(timestamp) {
+function finishedDateInIST(timestamp) {
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return null
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
+  return istDateISO(date)
 }
 
 export function shouldFinishedShowReturn(show, details) {
-  const airDate = details?.next_episode_to_air?.air_date
-  const remaining = daysUntil(airDate)
+  const nextEpisode = details?.next_episode_to_air
+  const remaining = daysUntilRelease(nextEpisode?.air_date, releaseSources(nextEpisode))
   if (remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS) return true
 
   // After air day TMDB may clear next_episode_to_air (season finale or
   // full-season drop). A last episode dated after the personal finish is a
   // lightweight signal that new material exists and merits a season scan.
-  const lastAirDate = details?.last_episode_to_air?.air_date
-  const daysSinceLastAir = daysUntil(lastAirDate)
-  const finishedDate = localDateISO(show?.finished_at)
+  const lastEpisode = details?.last_episode_to_air
+  const lastRelease = resolveReleaseInfo(lastEpisode?.air_date, releaseSources(lastEpisode))
+  const daysSinceLastAir = lastRelease
+    ? daysUntilRelease(lastEpisode?.air_date, releaseSources(lastEpisode))
+    : null
+  const finishedDate = finishedDateInIST(show?.finished_at)
   return Boolean(
     finishedDate &&
       daysSinceLastAir !== null &&
       daysSinceLastAir <= 0 &&
-      releaseDateInIST(lastAirDate) > finishedDate,
+      lastRelease.istDate > finishedDate,
   )
 }
 

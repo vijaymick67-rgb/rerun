@@ -22,13 +22,13 @@ const TVMAZE_BASE = 'https://api.tvmaze.com'
 // A TVmaze show-id mapping never changes → cached long-lived (no TTL). A
 // *negative* result (show absent from TVmaze) is cached with a TTL so a show
 // later added to TVmaze is eventually rediscovered instead of written off.
-const SHOW_ID_PREFIX = 'tvmaze_showid:v1:'
+const SHOW_ID_PREFIX = 'tvmaze_showid:v2:'
 const NEGATIVE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 // Episode airstamps shift while a season is airing → the same 6h staleness
 // window getShowDetails/getSeasonEpisodes use, revalidated in the background.
-const EPISODES_PREFIX = 'tvmaze_episodes:v1:'
-const EPISODES_TIME_PREFIX = 'tvmaze_episodes_time:v1:'
+const EPISODES_PREFIX = 'tvmaze_episodes:v2:'
+const EPISODES_TIME_PREFIX = 'tvmaze_episodes_time:v2:'
 const EPISODES_MAX_AGE_MS = 6 * 60 * 60 * 1000
 
 function readJson(key) {
@@ -98,10 +98,10 @@ export async function getTvmazeShowId(tmdbId, { getExternalIds }) {
   }
 }
 
-// season:episode → airstamp map for a TVmaze show. Stale-while-revalidate: a
+// season:episode → release-record map for a TVmaze show. Stale-while-revalidate: a
 // fresh cached map is returned as-is; otherwise refetched, falling back to the
 // stale map (or an empty map) if the request fails. Never throws.
-export async function getEpisodeAirstampMap(tvmazeId) {
+export async function getEpisodeReleaseMap(tvmazeId) {
   if (typeof tvmazeId !== 'number') return {}
 
   const cacheKey = EPISODES_PREFIX + tvmazeId
@@ -116,11 +116,15 @@ export async function getEpisodeAirstampMap(tvmazeId) {
     for (const ep of episodes) {
       if (
         ep &&
-        ep.airstamp &&
         Number.isInteger(ep.season) &&
         Number.isInteger(ep.number)
       ) {
-        map[episodeKey(ep.season, ep.number)] = ep.airstamp
+        map[episodeKey(ep.season, ep.number)] = {
+          airstamp: typeof ep.airstamp === 'string' ? ep.airstamp : null,
+          airdate: typeof ep.airdate === 'string' ? ep.airdate : null,
+          airtime: typeof ep.airtime === 'string' ? ep.airtime : null,
+          tvmazeEpisodeId: typeof ep.id === 'number' ? ep.id : null,
+        }
       }
     }
     writeJson(cacheKey, map)
@@ -131,16 +135,19 @@ export async function getEpisodeAirstampMap(tvmazeId) {
   }
 }
 
-// High-level convenience: season:episode → airstamp map for a TMDB show,
+// High-level convenience: season:episode → release-record map for a TMDB show,
 // resolving the TVmaze id and episode list in one call. Returns {} (never
 // throws) when the show has no TVmaze match or any step fails, so the caller
 // falls through to the universal anchor with no special-casing.
-export async function getShowAirstamps(tmdbId, deps) {
+export async function getShowReleaseMap(tmdbId, deps) {
   try {
     const tvmazeId = await getTvmazeShowId(tmdbId, deps)
     if (tvmazeId === null) return {}
-    return await getEpisodeAirstampMap(tvmazeId)
+    return await getEpisodeReleaseMap(tvmazeId)
   } catch {
     return {}
   }
 }
+
+// Backwards-compatible name while callers migrate; values are v2 release objects.
+export const getShowAirstamps = getShowReleaseMap
