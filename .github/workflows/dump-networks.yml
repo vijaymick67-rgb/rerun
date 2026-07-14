@@ -1,0 +1,40 @@
+name: Dump tracked-show networks
+
+# Throwaway helper: runs scripts/dump-networks.js in CI (where the Supabase
+# secrets live) and prints `tmdb_id | name | networks` to the job log, so the
+# SHOW_RELEASE_OVERRIDES map can be built from real data. No local dev
+# environment is needed — the output is read straight from the Actions log.
+#
+# Runs on push to the review branch (paths-filtered so it only fires when this
+# workflow or the dump script changes, not on every commit) and can also be
+# dispatched manually once present on the default branch.
+
+on:
+  push:
+    branches:
+      - claude/review-codex-rerun-work-gt84vu
+    paths:
+      - scripts/dump-networks.js
+      - .github/workflows/dump-networks.yml
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run dump script
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: node scripts/dump-networks.js
