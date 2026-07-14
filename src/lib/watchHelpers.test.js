@@ -3,6 +3,7 @@ import {
   computeWatchingStatus,
   episodeReleaseDateInIST,
   formatReleaseDisplay,
+  hasAired,
   predictWeeklyNextRelease,
   watchingStatusLabel,
 } from './watchHelpers'
@@ -11,7 +12,13 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const ep = (n, airDate) => ({ episode_number: n, name: `E${n}`, air_date: airDate })
+const platform = (name, hour) => ({
+  platform: name, thresholdHourIST: hour, thresholdMinuteIST: 0,
+  confidence: name === 'unknown' ? 'fallback' : 'mapped',
+})
+const ep = (n, airDate, releasePlatform = platform('prime', 14)) => ({
+  episode_number: n, name: `E${n}`, air_date: airDate, releasePlatform,
+})
 
 // Every release is 14:00 IST == 08:30 UTC on its air_date, so these helpers keep
 // the UTC math readable in the tests below.
@@ -24,7 +31,9 @@ const at = (episodesBySeason, watched, details, iso) => {
 describe('computeWatchingStatus — airsSoon 12h threshold (Fix C)', () => {
   // Release instant for 2026-07-20 is 2026-07-20T08:30:00Z. "Soon" is strictly
   // under 12 real hours out, so it turns on at 2 AM IST (20:30 UTC prior day).
-  const details = { next_episode_to_air: { air_date: '2026-07-20', episode_number: 5 } }
+  const details = { next_episode_to_air: {
+    air_date: '2026-07-20', episode_number: 5, releasePlatform: platform('prime', 14),
+  } }
 
   it('is soon under 12h out', () => {
     expect(at({}, new Set(), details, '2026-07-19T21:30:00.000Z')) // 11h out
@@ -184,52 +193,149 @@ describe('timestamp-based HBO regressions', () => {
     vi.setSystemTime(new Date('2026-07-14T04:30:00.000Z'))
     const prediction = predictWeeklyNextRelease({
       3: [
-        { episode_number: 3, air_date: '2026-07-05', airstamp: '2026-07-06T01:00:00Z' },
-        { episode_number: 4, air_date: '2026-07-12', airstamp: '2026-07-13T01:00:00Z' },
+        { episode_number: 3, air_date: '2026-07-05', airstamp: '2026-07-06T01:00:00Z', releasePlatform: platform('hbo', 8) },
+        { episode_number: 4, air_date: '2026-07-12', airstamp: '2026-07-13T01:00:00Z', releasePlatform: platform('hbo', 8) },
       ],
     })
     expect(prediction).toMatchObject({
-      timestamp: Date.parse('2026-07-20T01:00:00Z'),
-      istDate: '2026-07-20', istTime: '6:30 AM',
+      timestamp: Date.parse('2026-07-20T02:30:00Z'),
+      istDate: '2026-07-20', thresholdTimeIST: '08:00',
       source: 'prediction', predicted: true,
     })
     expect(prediction.istDate).not.toBe('2026-07-19')
-    expect(prediction.istTime).not.toBe('2:00 PM')
+    expect(prediction.thresholdTimeIST).toBe('08:00')
   })
 
   it('counts six IST days and never exposes the raw TMDB Sunday', () => {
     const status = at({}, new Set(), {
       next_episode_to_air: {
         air_date: '2026-07-19', season_number: 3, episode_number: 5,
-        airstamp: '2026-07-20T01:00:00+00:00',
+        airstamp: '2026-07-20T01:00:00+00:00', releasePlatform: platform('hbo', 8),
       },
     }, '2026-07-14T04:30:00.000Z')
     expect(status).toMatchObject({
       type: 'countdown', air_date: '2026-07-20', daysUntil: 6,
-      istTime: '6:30 AM', source: 'tvmaze',
+      source: 'platformThreshold',
     })
     expect(status.air_date).not.toBe('2026-07-19')
   })
 })
 
-describe('release display semantics', () => {
-  it('shows converted IST time for a verified TVmaze release', () => {
+describe('episode-list release display semantics', () => {
+  it('always displays date only, including TVmaze and prediction sources', () => {
     expect(formatReleaseDisplay({
-      istDate: '2026-07-20', istTime: '6:30 AM', source: 'tvmaze',
-    })).toBe('Jul 20, 2026 · 6:30 AM IST')
+      istDate: '2026-07-20', thresholdTimeIST: '08:00', source: 'platformThreshold',
+    })).toBe('Jul 20, 2026')
+    const labels = ['Jul 20, 2026', `Airs ${formatReleaseDisplay({ istDate: '2026-07-20', source: 'prediction' })}`]
+    for (const label of labels) {
+      expect(label).not.toMatch(/IST|AM|PM|estimated|08:00|14:00|17:30/)
+    }
+  })
+})
+
+describe('platform threshold boundaries and wording', () => {
+  const hbo = platform('hbo', 8)
+  const future = { air_date: '2026-07-20', season_number: 3, episode_number: 2, releasePlatform: hbo }
+
+  it('moves HBO from days to soon inside 12 hours', () => {
+    expect(at({}, new Set(['2:8']), { next_episode_to_air: future }, '2026-07-19T14:29:00Z'))
+      .toMatchObject({ type: 'countdown', subtype: 'episode', airsSoon: false })
+    expect(at({}, new Set(['2:8']), { next_episode_to_air: future }, '2026-07-19T14:31:00Z'))
+      .toMatchObject({ type: 'countdown', subtype: 'episode', airsSoon: true })
   })
 
-  it('never exposes the internal fallback anchor as airtime', () => {
-    const label = formatReleaseDisplay({
-      istDate: '2026-07-20', istTime: '2:00 PM', source: 'fallback',
+  it('keeps HBO unavailable at 7:59 AM and releases at 8:00 AM IST', () => {
+    vi.useFakeTimers()
+    const episode = { ...future, episode_number: 1 }
+    vi.setSystemTime(new Date('2026-07-20T02:29:00Z'))
+    expect(hasAired(episode)).toBe(false)
+    vi.setSystemTime(new Date('2026-07-20T02:30:00Z'))
+    expect(hasAired(episode)).toBe(true)
+    expect(computeWatchingStatus({ 3: [episode] }, new Set(), {}))
+      .toMatchObject({ type: 'nextUp', season_number: 3, episode_number: 1 })
+  })
+
+  it.each([
+    ['apple', 14, '2026-07-20T08:29:00Z', '2026-07-20T08:30:00Z'],
+    ['netflix', 14, '2026-07-20T08:29:00Z', '2026-07-20T08:30:00Z'],
+    ['prime', 14, '2026-07-20T08:29:00Z', '2026-07-20T08:30:00Z'],
+    ['disney', 14, '2026-07-20T08:29:00Z', '2026-07-20T08:30:00Z'],
+    ['hulu', 14, '2026-07-20T08:29:00Z', '2026-07-20T08:30:00Z'],
+    ['peacock', 16, '2026-07-20T10:29:00Z', '2026-07-20T10:30:00Z'],
+  ])('%s releases exactly at its mapped threshold', (name, hour, before, atThreshold) => {
+    vi.useFakeTimers()
+    const episode = ep(2, '2026-07-20', platform(name, hour))
+    vi.setSystemTime(new Date(before))
+    expect(hasAired(episode)).toBe(false)
+    vi.setSystemTime(new Date(atThreshold))
+    expect(hasAired(episode)).toBe(true)
+  })
+
+  it('reserves Airs wording for a genuine new-season episode one', () => {
+    const watched = new Set(['2:8'])
+    const premiere = at({}, watched, { next_episode_to_air: {
+      air_date: '2026-07-20', season_number: 3, episode_number: 1, releasePlatform: hbo,
+    } }, '2026-07-18T12:00:00Z')
+    const normal = at({}, watched, { next_episode_to_air: future }, '2026-07-18T12:00:00Z')
+    expect(watchingStatusLabel(premiere)).toMatch(/^Airs in/)
+    expect(watchingStatusLabel(normal)).toMatch(/^New episode in/)
+  })
+})
+
+describe('multi-episode release windows', () => {
+  const prime = platform('prime', 14)
+  const batch = [1, 2, 3].map((n) => ep(n, '2026-07-17', prime))
+
+  it('advances one row through a three-episode premiere drop', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T08:30:00Z'))
+    expect(computeWatchingStatus({ 2: batch }, new Set(), {})).toMatchObject({ episode_number: 1 })
+    expect(computeWatchingStatus({ 2: batch }, new Set(['2:1']), {})).toMatchObject({ episode_number: 2 })
+    expect(computeWatchingStatus({ 2: batch }, new Set(['2:1', '2:2']), {})).toMatchObject({ episode_number: 3 })
+    expect(computeWatchingStatus({ 2: batch }, new Set(['2:1', '2:2', '2:3']), {})).not.toMatchObject({ type: 'nextUp' })
+  })
+
+  it('handles a mid-season double drop in episode order', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T08:30:00Z'))
+    const episodes = [ep(4, '2026-07-10', prime), ep(5, '2026-07-17', prime), ep(6, '2026-07-17', prime)]
+    expect(computeWatchingStatus({ 2: episodes }, new Set(['2:4']), {})).toMatchObject({ episode_number: 5 })
+    expect(computeWatchingStatus({ 2: episodes }, new Set(['2:4', '2:5']), {})).toMatchObject({ episode_number: 6 })
+  })
+})
+
+describe('distinct-window prediction and pointer safety', () => {
+  const prime = platform('prime', 14)
+
+  it('ignores zero-day gaps in a batch and predicts from unique weekly windows', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-25T12:00:00Z'))
+    const episodes = [
+      ...[1, 2, 3].map((n) => ep(n, '2026-07-10', prime)),
+      ep(4, '2026-07-17', prime), ep(5, '2026-07-24', prime),
+    ]
+    expect(predictWeeklyNextRelease({ 1: episodes })).toMatchObject({
+      istDate: '2026-07-31', thresholdTimeIST: '14:00', source: 'prediction', predicted: true,
     })
-    expect(label).toBe('Jul 20, 2026')
-    expect(label).not.toContain('2:00 PM IST')
   })
 
-  it('preserves predicted time and labels it estimated when requested', () => {
-    expect(formatReleaseDisplay({
-      istDate: '2026-07-20', istTime: '6:30 AM', source: 'prediction',
-    }, { labelPrediction: true })).toBe('Jul 20, 2026 · 6:30 AM IST (estimated)')
+  it('uses a real future season episode over stale or missing pointers', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-18T12:00:00Z'))
+    const episodes = [ep(1, '2026-07-10', prime), ep(2, '2026-07-20', prime)]
+    const stale = { next_episode_to_air: ep(1, '2026-07-10', prime) }
+    expect(computeWatchingStatus({ 1: episodes }, new Set(['1:1']), stale))
+      .toMatchObject({ type: 'countdown', air_date: '2026-07-20' })
+    expect(computeWatchingStatus({ 1: episodes }, new Set(['1:1']), {}))
+      .toMatchObject({ type: 'countdown', air_date: '2026-07-20' })
+  })
+
+  it('does not predict irregular or ended schedules', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-25T12:00:00Z'))
+    const irregular = { 1: [ep(1, '2026-07-01', prime), ep(2, '2026-07-20', prime)] }
+    expect(predictWeeklyNextRelease(irregular)).toBeNull()
+    const weekly = { 1: [ep(1, '2026-07-10', prime), ep(2, '2026-07-17', prime)] }
+    expect(predictWeeklyNextRelease(weekly, { status: 'Ended' })).toBeNull()
   })
 })

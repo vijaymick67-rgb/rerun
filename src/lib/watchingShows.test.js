@@ -21,7 +21,7 @@ describe('Watching archived-show loading', () => {
       { tmdb_id: 3, name: 'Far return', finished_at: '2026-01-01' },
     ]
     const getShowDetails = vi.fn(async (id) => ({
-      networks: [],
+      networks: ['HBO'],
       seasons: [{ season_number: 1 }],
       next_episode_to_air:
         id === 2 ? null : id === 3 ? { air_date: '2026-09-11', episode_number: 1 } : null,
@@ -45,7 +45,7 @@ describe('Watching archived-show loading', () => {
   it('keeps a returned show eligible after TMDB clears next_episode_to_air on air day', async () => {
     const show = { tmdb_id: 9, name: 'Returning', finished_at: '2026-01-01T00:00:00Z' }
     const upcomingDetails = {
-      networks: [],
+      networks: ['HBO'],
       seasons: [{ season_number: 2 }],
       next_episode_to_air: { air_date: '2026-08-01', episode_number: 1 },
     }
@@ -90,7 +90,7 @@ describe('Watching TVmaze airstamp enrichment', () => {
 
   const baseDeps = () => ({
     getShowDetails: vi.fn(async () => ({
-      networks: [],
+      networks: ['HBO'],
       status: 'Returning Series',
       seasons: [{ season_number: 1 }],
       next_episode_to_air: null,
@@ -164,7 +164,7 @@ describe('Watching TVmaze airstamp enrichment', () => {
   // The airstamp-attached next_episode_to_air must count off the true IST day.
   const hotdDeps = () => ({
     getShowDetails: vi.fn(async () => ({
-      networks: [],
+      networks: ['HBO'],
       status: 'Returning Series',
       seasons: [{ season_number: 1 }],
       next_episode_to_air: { air_date: '2026-07-19', season_number: 1, episode_number: 2 },
@@ -236,5 +236,24 @@ describe('archived TVmaze release enrichment order', () => {
     )
     expect(result.candidates).toEqual([])
     expect(getShowReleaseMap).toHaveBeenCalledWith(77)
+  })
+})
+
+describe('Watching per-show failure isolation', () => {
+  it('keeps successful shows when one show fails to enrich', async () => {
+    const getShowDetails = vi.fn(async (id) => ({
+      networks: ['Netflix'], seasons: [{ season_number: 1 }], id,
+    }))
+    const getSeasonEpisodes = vi.fn(async (id) => {
+      if (id === 2) throw new Error('one show failed')
+      return { episodes: [] }
+    })
+    const result = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 1 }, { tmdb_id: 2 }], new Map(), new Map(),
+      { getShowDetails, getSeasonEpisodes, getShowReleaseMap: async () => ({}) },
+    )
+    expect(result).toHaveLength(2)
+    expect(result[0]).toMatchObject({ tmdb_id: 1, loadError: false })
+    expect(result[1]).toMatchObject({ tmdb_id: 2, loadError: true })
   })
 })
