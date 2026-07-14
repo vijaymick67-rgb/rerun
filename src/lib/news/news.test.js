@@ -3,6 +3,7 @@ import handler, { createNewsHandler, parseNewsLimit } from '../../../api/news.js
 import { dedupeArticles } from './dedupeArticles.js'
 import { normalizeArticle, canonicalizeUrl, stableArticleId } from './normalizeArticle.js'
 import { filterTvNews, isTvNewsArticle } from './tvNewsFilter.js'
+import { createGnewsProvider } from './gnewsProvider.js'
 
 function makeResponse({ status = 200, body = {} } = {}) {
   return {
@@ -124,11 +125,11 @@ describe('news normalization and filtering', () => {
 
 describe('GET /api/news', () => {
   it('validates limits and defaults safely', () => {
-    expect(parseNewsLimit()).toBe(20)
+    expect(parseNewsLimit()).toBe(10)
     expect(parseNewsLimit('1')).toBe(1)
-    expect(parseNewsLimit('30')).toBe(30)
+    expect(parseNewsLimit('10')).toBe(10)
     expect(parseNewsLimit('0')).toBeNull()
-    expect(parseNewsLimit('31')).toBeNull()
+    expect(parseNewsLimit('11')).toBeNull()
     expect(parseNewsLimit('3.5')).toBeNull()
     expect(parseNewsLimit(['2'])).toBeNull()
   })
@@ -213,6 +214,22 @@ describe('GET /api/news', () => {
     expect(Number.isNaN(new Date(res.body.meta.fetchedAt).getTime())).toBe(false)
     expect(requestedUrl.searchParams.get('apikey')).toBe('secret')
     expect(requestedUrl.searchParams.get('q')).toContain('TV series')
+    expect(requestedUrl.searchParams.get('max')).toBe('5')
+  })
+
+  it('never requests more than ten articles from GNews', async () => {
+    let requestedUrl
+    const provider = createGnewsProvider({
+      apiKey: 'secret',
+      fetchImpl: vi.fn(async (url) => {
+        requestedUrl = new URL(url)
+        return makeResponse({ body: { articles: [] } })
+      }),
+    })
+
+    await provider.fetchArticles({ limit: 30 })
+
+    expect(requestedUrl.searchParams.get('max')).toBe('10')
   })
 
   it('returns a safe response for malformed or failed upstream data', async () => {

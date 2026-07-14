@@ -156,6 +156,9 @@ describe('news cache and stale-while-refresh client', () => {
     resolveFetch({ ok: true, json: async () => ({ articles: [article(21)] }) })
     await first.refresh
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl).toHaveBeenCalledWith('/api/news?limit=10', {
+      headers: { Accept: 'application/json' },
+    })
   })
   it('avoids refresh for a fresh cache', () => {
     const local = storage()

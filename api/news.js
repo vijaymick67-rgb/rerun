@@ -4,8 +4,8 @@ import { normalizeArticle } from '../src/lib/news/normalizeArticle.js'
 import { NewsProviderError } from '../src/lib/news/provider.js'
 import { filterTvNews } from '../src/lib/news/tvNewsFilter.js'
 
-const DEFAULT_LIMIT = 20
-const MAX_LIMIT = 30
+const DEFAULT_LIMIT = 10
+const MAX_LIMIT = 10
 const CACHE_CONTROL = 'public, s-maxage=1800, stale-while-revalidate=10800'
 
 function json(res, status, body, headers = {}) {
@@ -53,7 +53,7 @@ export function createNewsHandler({ env = process.env, fetchImpl = globalThis.fe
 
     try {
       const provider = createGnewsProvider({ apiKey: env.GNEWS_API_KEY, fetchImpl })
-      const rawArticles = await provider.fetchArticles({ limit: MAX_LIMIT })
+      const rawArticles = await provider.fetchArticles({ limit })
       const fetchedAt = new Date().toISOString()
       const normalized = rawArticles
         .map((article) => normalizeArticle(article, { fetchedAt }))

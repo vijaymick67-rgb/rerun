@@ -2,6 +2,7 @@ import { createNewsProvider, NewsProviderError } from './provider.js'
 
 const GNEWS_ENDPOINT = 'https://gnews.io/api/v4/search'
 const DEFAULT_TIMEOUT_MS = 8000
+const GNEWS_MAX_ARTICLES = 10
 const TV_NEWS_QUERY = '"TV series" OR television OR "season 2" OR renewed OR cancelled OR showrunner -movie -sports -music -gossip'
 
 async function readJsonResponse(response) {
@@ -20,7 +21,7 @@ export function createGnewsProvider({
 } = {}) {
   return createNewsProvider({
     name: 'gnews',
-    async fetchArticles({ limit = 30 } = {}) {
+    async fetchArticles({ limit = GNEWS_MAX_ARTICLES } = {}) {
       if (!apiKey) {
         throw new NewsProviderError('MISSING_API_KEY', 'The news provider is not configured')
       }
@@ -32,7 +33,7 @@ export function createGnewsProvider({
       url.searchParams.set('q', TV_NEWS_QUERY)
       url.searchParams.set('lang', 'en')
       url.searchParams.set('sortby', 'publishedAt')
-      url.searchParams.set('max', String(Math.min(30, Math.max(1, limit))))
+      url.searchParams.set('max', String(Math.min(GNEWS_MAX_ARTICLES, Math.max(1, limit))))
       url.searchParams.set('apikey', apiKey)
 
       const controller = new AbortController()
@@ -67,4 +68,4 @@ export function createGnewsProvider({
   })
 }
 
-export { DEFAULT_TIMEOUT_MS, GNEWS_ENDPOINT, TV_NEWS_QUERY }
+export { DEFAULT_TIMEOUT_MS, GNEWS_ENDPOINT, GNEWS_MAX_ARTICLES, TV_NEWS_QUERY }
