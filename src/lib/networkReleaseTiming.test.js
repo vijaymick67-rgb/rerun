@@ -1,69 +1,76 @@
-import { describe, expect, it, vi } from 'vitest'
-import { releaseDateInIST, releaseRuleForShow, releaseTimestamp } from './networkReleaseTiming'
-import { computeWatchingStatus, hasAired } from './watchHelpers'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { releaseDateInIST, releaseTimestamp } from './networkReleaseTiming'
+import { hasAired } from './watchHelpers'
 
-describe('release timing rules', () => {
-  it('keeps HOTD in Airs soon through Sunday night IST and releases it Monday 6:30 AM IST', () => {
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+// Renders a timestamp as its IST wall-clock — the human-readable form of the
+// release moment. Uses Intl only to describe the expected instant in the test;
+// the source itself is plain arithmetic (IST is a fixed +05:30, no DST).
+function istStamp(ts) {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  })
+    .formatToParts(new Date(ts))
+    .filter((x) => x.type !== 'literal')
+    .reduce((a, x) => ((a[x.type] = x.value), a), {})
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} IST`
+}
+
+describe('universal release anchor', () => {
+  // FIX A: releaseTimestamp takes only an air_date now — there is no platform
+  // parameter. The release is always 14:00 IST (08:30 UTC) on that date.
+  it('anchors an air_date to 14:00 IST == 08:30 UTC', () => {
+    const ts = releaseTimestamp('2026-07-14')
+    expect(new Date(ts).toISOString()).toBe('2026-07-14T08:30:00.000Z')
+    expect(istStamp(ts)).toBe('2026-07-14 14:00 IST')
+  })
+
+  // The old model gave Netflix, HBO, and Apple TV+ three different release
+  // instants. They now collapse to one formula — the same air_date, whatever
+  // the show, resolves to the same moment.
+  it('applies the same anchor regardless of platform', () => {
+    const netflixShow = releaseTimestamp('2026-03-01') // once midnight PT
+    const hboShow = releaseTimestamp('2026-03-01') // once 9 PM ET
+    const appleShow = releaseTimestamp('2026-03-01') // once midnight PT
+    expect(netflixShow).toBe(hboShow)
+    expect(hboShow).toBe(appleShow)
+    // And it holds in the other half of the year — no DST to shift it.
+    expect(istStamp(releaseTimestamp('2026-01-12'))).toBe('2026-01-12 14:00 IST')
+    expect(istStamp(releaseTimestamp('2026-07-12'))).toBe('2026-07-12 14:00 IST')
+  })
+
+  it('returns null for a missing or malformed air_date', () => {
+    expect(releaseTimestamp(null)).toBeNull()
+    expect(releaseTimestamp('2026-07')).toBeNull()
+    expect(releaseTimestamp('')).toBeNull()
+  })
+
+  // The release lands at 14:00 IST on the air_date itself, so its IST calendar
+  // day is just the air_date — no cross-midnight day shift like the old rules.
+  it('reports the IST release day as the air_date itself', () => {
+    expect(releaseDateInIST('2026-07-14')).toBe('2026-07-14')
+    expect(releaseDateInIST('2026-01-01')).toBe('2026-01-01')
+    expect(releaseDateInIST('nope')).toBeNull()
+  })
+})
+
+describe('hasAired flips exactly at 14:00 IST on the air_date', () => {
+  it('is false just before the instant and true exactly at it', () => {
     vi.useFakeTimers()
-    const rule = releaseRuleForShow(94997, ['HBO'])
-    expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-13T01:00:00.000Z')
-    expect(releaseDateInIST('2026-07-12', rule)).toBe('2026-07-13')
+    // 14:00 IST on 2026-07-14 is 08:30:00 UTC.
+    vi.setSystemTime(new Date('2026-07-14T08:29:59.999Z'))
+    expect(hasAired({ air_date: '2026-07-14' })).toBe(false)
 
-    vi.setSystemTime(new Date('2026-07-12T18:00:00.000Z'))
-    expect(hasAired({ air_date: '2026-07-12' }, rule)).toBe(false)
-    expect(computeWatchingStatus(
-      { 1: [{ episode_number: 1, name: 'Episode', air_date: '2026-07-12' }] },
-      new Set(), rule, { next_episode_to_air: { air_date: '2026-07-12', episode_number: 1 } },
-    )).toMatchObject({ type: 'countdown', airsSoon: true })
+    vi.setSystemTime(new Date('2026-07-14T08:30:00.000Z'))
+    expect(hasAired({ air_date: '2026-07-14' })).toBe(true)
 
-    vi.setSystemTime(new Date('2026-07-13T01:00:00.000Z'))
-    expect(hasAired({ air_date: '2026-07-12' }, rule)).toBe(true)
-    expect(computeWatchingStatus(
-      { 1: [{ episode_number: 1, name: 'Episode', air_date: '2026-07-12' }] },
-      new Set(), rule, { next_episode_to_air: { air_date: '2026-07-12', episode_number: 1 } },
-    )).toMatchObject({ type: 'nextUp', season_number: 1, episode_number: 1 })
-    vi.useRealTimers()
-  })
-
-  it('resolves Netflix midnight Pacific in the platform timezone', () => {
-    const rule = releaseRuleForShow(1, ['Netflix'])
-    expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-12T07:00:00.000Z')
-  })
-
-  it.each([285404, 203744, 277439])(
-    'keeps Apple show %s on the TMDB source date and releases the following IST morning',
-    (showId) => {
-      vi.useFakeTimers()
-      const rule = releaseRuleForShow(showId, ['Apple TV+'])
-      expect(new Date(releaseTimestamp('2026-07-14', rule)).toISOString()).toBe('2026-07-15T01:00:00.000Z')
-      expect(releaseDateInIST('2026-07-14', rule)).toBe('2026-07-15')
-
-      vi.setSystemTime(new Date('2026-07-15T00:59:59.000Z'))
-      expect(hasAired({ air_date: '2026-07-14' }, rule)).toBe(false)
-      expect(computeWatchingStatus(
-        { 1: [{ episode_number: 10, name: 'Queens', air_date: '2026-07-14' }] },
-        new Set(), rule, { next_episode_to_air: { air_date: '2026-07-14', episode_number: 10 } },
-      )).toMatchObject({ type: 'countdown', airsSoon: true })
-
-      vi.setSystemTime(new Date('2026-07-15T01:00:00.000Z'))
-      expect(hasAired({ air_date: '2026-07-14' }, rule)).toBe(true)
-      expect(computeWatchingStatus(
-        { 1: [{ episode_number: 10, name: 'Queens', air_date: '2026-07-14' }] },
-        new Set(), rule, { next_episode_to_air: { air_date: '2026-07-14', episode_number: 10 } },
-      )).toMatchObject({ type: 'nextUp', season_number: 1, episode_number: 10 })
-      vi.useRealTimers()
-    },
-  )
-
-  it('automatically changes the New York offset across US daylight saving time', () => {
-    const rule = releaseRuleForShow(1, ['HBO'])
-    expect(new Date(releaseTimestamp('2026-03-01', rule)).toISOString()).toBe('2026-03-02T02:00:00.000Z')
-    expect(new Date(releaseTimestamp('2026-03-15', rule)).toISOString()).toBe('2026-03-16T01:00:00.000Z')
-  })
-
-  it('uses a safe noon-UTC fallback for unknown networks', () => {
-    const rule = releaseRuleForShow(1, ['Unknown Network'])
-    expect(rule.fallback).toBe(true)
-    expect(new Date(releaseTimestamp('2026-07-12', rule)).toISOString()).toBe('2026-07-12T12:00:00.000Z')
+    // Still aired later the same day.
+    vi.setSystemTime(new Date('2026-07-14T18:00:00.000Z'))
+    expect(hasAired({ air_date: '2026-07-14' })).toBe(true)
   })
 })

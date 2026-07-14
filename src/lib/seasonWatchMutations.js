@@ -5,13 +5,12 @@ export function buildUnwatchedAiredRows({
   watched,
   tmdbShowId,
   seasonNumber,
-  releaseRule,
   watchedAt,
 }) {
   return (episodes ?? [])
     .filter(
       (episode) =>
-        hasAired(episode, releaseRule) &&
+        hasAired(episode) &&
         !watched.has(episodeKey(seasonNumber, episode.episode_number)),
     )
     .map((episode) => ({
@@ -72,7 +71,6 @@ export async function markSeasonWatchedMutation({
   episodes,
   tmdbShowId,
   seasonNumber,
-  releaseRule,
   getWatched,
   commitWatched,
 }) {
@@ -82,7 +80,6 @@ export async function markSeasonWatchedMutation({
     watched: getWatched(),
     tmdbShowId,
     seasonNumber,
-    releaseRule,
     watchedAt,
   })
 

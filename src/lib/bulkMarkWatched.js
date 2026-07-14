@@ -15,7 +15,6 @@ import {
   getShowDetails as realGetShowDetails,
   getSeasonEpisodes as realGetSeasonEpisodes,
 } from './tmdb.js'
-import { releaseRuleForShow } from './networkReleaseTiming.js'
 import { hasAired } from './watchHelpers.js'
 import { markTrackedShowFinished } from './finishedShows.js'
 
@@ -40,10 +39,10 @@ function makeWatchedRow(showId, seasonNumber, episode, watchedAt) {
 
 // Build watched_episodes rows for every already-aired episode of a show.
 //
-// Fetches the show's details (for its `networks` day-shift and season list) and
-// each real (season_number > 0) season's episodes from TMDB, then keeps only
-// episodes that have actually aired — unaired future episodes don't exist to
-// mark yet. Pure assembly: no DB writes.
+// Fetches the show's details (for its season list) and each real
+// (season_number > 0) season's episodes from TMDB, then keeps only episodes
+// that have actually aired — unaired future episodes don't exist to mark yet.
+// Pure assembly: no DB writes.
 //
 // Season fetches are tolerated individually (Promise.allSettled) so one flaky
 // season doesn't abort the whole show — matching the import's per-season
@@ -58,7 +57,6 @@ export async function buildAiredEpisodeRows(showId, options = {}) {
   const watchedAt = options.watchedAt ?? new Date().toISOString()
 
   const details = options.details ?? (await getShowDetails(showId))
-  const releaseRule = releaseRuleForShow(showId, details.networks)
   const seasons = (details.seasons ?? [])
     .filter((season) => season.season_number > 0)
     .sort((a, b) => a.season_number - b.season_number)
@@ -76,7 +74,7 @@ export async function buildAiredEpisodeRows(showId, options = {}) {
       return
     }
     for (const ep of outcome.value.episodes ?? []) {
-      if (hasAired(ep, releaseRule)) {
+      if (hasAired(ep)) {
         rows.push(makeWatchedRow(showId, season.season_number, ep, watchedAt))
       }
     }

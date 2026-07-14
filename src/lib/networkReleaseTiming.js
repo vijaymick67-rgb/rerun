@@ -1,98 +1,41 @@
-// TMDB supplies a calendar air_date, not a release timestamp.  Release rules
-// keep the platform's local wall-clock time and IANA timezone together so the
-// browser applies daylight-saving changes when resolving the real instant.
-const NETWORK_RELEASE_RULES = {
-  'HBO': { timeZone: 'America/New_York', hour: 21 },
-  'HBO Max': { timeZone: 'America/New_York', hour: 21 },
-  'Max': { timeZone: 'America/New_York', hour: 21 },
-  'Netflix': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Prime Video': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Amazon Prime Video': { timeZone: 'America/Los_Angeles', hour: 0 },
-  // TMDB's Apple air_date is already the source calendar date. A 9 PM ET
-  // release naturally converts to the following morning in IST.
-  'Apple TV+': { timeZone: 'America/New_York', hour: 21 },
-  'Apple TV': { timeZone: 'America/New_York', hour: 21 },
-  'Disney+': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Hulu': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Paramount+': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Peacock': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'AMC': { timeZone: 'America/New_York', hour: 21 },
-  'AMC+': { timeZone: 'America/New_York', hour: 21 },
-  'Showtime': { timeZone: 'America/New_York', hour: 21 },
-  'Starz': { timeZone: 'America/New_York', hour: 21 },
-  'FX': { timeZone: 'America/New_York', hour: 21 },
-  'ABC': { timeZone: 'America/New_York', hour: 21 },
-  'CBS': { timeZone: 'America/New_York', hour: 21 },
-  'NBC': { timeZone: 'America/New_York', hour: 21 },
-  'FOX': { timeZone: 'America/New_York', hour: 21 },
-}
+// Universal release anchor.
+//
+// TMDB supplies a calendar air_date, not a release instant. We deliberately no
+// longer model per-platform release times: every show, on every platform,
+// is treated as releasing at 2:00 PM IST on its TMDB air_date. IST (Asia/
+// Kolkata) is UTC+5:30 year-round with no daylight saving, so the release
+// instant is plain arithmetic — no IANA timezone conversion, no date library.
 
-const SHOW_RELEASE_OVERRIDES = {
-  // House of the Dragon: Sunday 9 PM ET → Monday 6:30 AM IST in daylight time.
-  94997: { timeZone: 'America/New_York', hour: 21 },
-}
+export const RELEASE_HOUR_IST = 14 // 2:00 PM, Asia/Kolkata
 
-// A conservative unknown-network fallback.  Noon UTC is 5:30 PM IST, so an
-// unknown TMDB date can never become "Up next" merely because IST hit midnight.
-export const UNKNOWN_RELEASE_RULE = { timeZone: 'UTC', hour: 12, fallback: true }
-
-const NORMALIZED_NETWORK_RELEASE_RULES = Object.fromEntries(
-  Object.entries(NETWORK_RELEASE_RULES).map(([name, rule]) => [name.toLowerCase(), rule]),
-)
+// IST is a fixed +05:30 from UTC (no DST), so 14:00 IST is always 08:30 UTC.
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-function addDays(airDate, days) {
-  const [year, month, day] = airDate.split('-').map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day + days))
-  return [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()]
-}
-
-function zonedParts(date, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-  }).formatToParts(date)
-  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]))
-}
-
-// Converts a wall-clock time in an IANA zone into a UTC timestamp.  The second
-// pass handles the offset change around daylight-saving boundaries.
-function zonedDateTimeToTimestamp(year, month, day, hour, minute, timeZone) {
-  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute)
-  let timestamp = localAsUtc
-  for (let pass = 0; pass < 2; pass++) {
-    const actual = zonedParts(new Date(timestamp), timeZone)
-    const offset = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second) - timestamp
-    timestamp = localAsUtc - offset
-  }
-  return timestamp
-}
-
-export function releaseRuleForShow(tmdbId, networks) {
-  if (SHOW_RELEASE_OVERRIDES[tmdbId]) return SHOW_RELEASE_OVERRIDES[tmdbId]
-  for (const name of networks ?? []) {
-    const rule = NORMALIZED_NETWORK_RELEASE_RULES[name?.trim().toLowerCase()]
-    if (rule) return rule
-  }
-  return UNKNOWN_RELEASE_RULE
-}
-
-export function releaseTimestamp(airDate, rule = UNKNOWN_RELEASE_RULE) {
+// Epoch ms of the release moment for `airDate`: 14:00 IST on that calendar day.
+// Returns null for a missing or malformed date (not a full YYYY-MM-DD).
+export function releaseTimestamp(airDate) {
   if (!airDate || !ISO_DATE_RE.test(airDate)) return null
-  const [year, month, day] = addDays(airDate, rule.sourceDateOffsetDays ?? 0)
-  return zonedDateTimeToTimestamp(year, month, day, rule.hour ?? 0, rule.minute ?? 0, rule.timeZone)
+  const [year, month, day] = airDate.split('-').map(Number)
+  // 14:00 IST == (14:00 wall clock as UTC) − 5:30 == 08:30 UTC the same day.
+  return Date.UTC(year, month - 1, day, RELEASE_HOUR_IST, 0) - IST_OFFSET_MS
 }
 
-export function releaseDateInIST(airDate, rule) {
-  const timestamp = releaseTimestamp(airDate, rule)
-  if (timestamp === null) return null
-  const { year, month, day } = zonedParts(new Date(timestamp), 'Asia/Kolkata')
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+// The IST calendar day the release lands on. Because the anchor is 14:00 IST on
+// the air_date itself, this is simply the (validated) air_date — kept as a named
+// function so callers read as intent rather than a bare pass-through.
+export function releaseDateInIST(airDate) {
+  if (!airDate || !ISO_DATE_RE.test(airDate)) return null
+  return airDate
 }
 
+// Today's date in IST (YYYY-MM-DD). Shifting `now` by the fixed +05:30 offset
+// and reading the UTC components keeps this independent of the host timezone.
 export function istDateISO(now = new Date()) {
-  const { year, month, day } = zonedParts(now, 'Asia/Kolkata')
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const shifted = new Date(now.getTime() + IST_OFFSET_MS)
+  const year = shifted.getUTCFullYear()
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }

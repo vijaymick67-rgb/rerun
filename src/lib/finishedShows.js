@@ -33,22 +33,22 @@ function localDateISO(timestamp) {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
-export function shouldFinishedShowReturn(show, details, releaseRule) {
+export function shouldFinishedShowReturn(show, details) {
   const airDate = details?.next_episode_to_air?.air_date
-  const remaining = daysUntil(airDate, releaseRule)
+  const remaining = daysUntil(airDate)
   if (remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS) return true
 
   // After air day TMDB may clear next_episode_to_air (season finale or
   // full-season drop). A last episode dated after the personal finish is a
   // lightweight signal that new material exists and merits a season scan.
   const lastAirDate = details?.last_episode_to_air?.air_date
-  const daysSinceLastAir = daysUntil(lastAirDate, releaseRule)
+  const daysSinceLastAir = daysUntil(lastAirDate)
   const finishedDate = localDateISO(show?.finished_at)
   return Boolean(
     finishedDate &&
       daysSinceLastAir !== null &&
       daysSinceLastAir <= 0 &&
-      releaseDateInIST(lastAirDate, releaseRule) > finishedDate,
+      releaseDateInIST(lastAirDate) > finishedDate,
   )
 }
 

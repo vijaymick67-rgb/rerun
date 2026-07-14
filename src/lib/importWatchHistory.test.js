@@ -13,7 +13,7 @@ const TMDB = {
   100: {
     name: 'Completed Show',
     poster_path: '/c.jpg',
-    networks: ['HBO'], // dayShift 1
+    networks: ['HBO'],
     status: 'Ended',
     seasons: {
       0: [ep(1, '2014-12-01')], // specials — must be excluded

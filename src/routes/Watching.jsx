@@ -91,7 +91,12 @@ export default function Watching() {
           const rankDiff = statusRank[a.status.type] - statusRank[b.status.type]
           if (rankDiff !== 0) return rankDiff
           if (a.status.type === 'nextUp') return a.status.air_date < b.status.air_date ? -1 : 1
-          if (a.status.type === 'countdown') return a.status.daysUntil - b.status.daysUntil
+          // Clamp at 0: after computeWatchingStatus only emits a countdown for
+          // still-future releases this can't go negative, but guard so a stale
+          // date can never sort ahead of a genuine soonest-first ordering.
+          if (a.status.type === 'countdown') {
+            return Math.max(0, a.status.daysUntil) - Math.max(0, b.status.daysUntil)
+          }
           return new Date(b.added_at) - new Date(a.added_at)
         })
 
