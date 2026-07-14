@@ -80,9 +80,22 @@ export function formatDate(dateString) {
   const releaseDate = releaseDateInIST(dateString)
   if (!releaseDate) return null
   const [year, month, day] = releaseDate.split('-').map(Number)
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat('en-US', {
     timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric',
   }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+// A resolved fallback time is an internal availability anchor, not verified
+// airtime. Only authoritative or intentionally predicted sources may expose a
+// clock time to the user.
+export function formatReleaseDisplay(release, { labelPrediction = false } = {}) {
+  if (!release?.istDate) return null
+  const date = formatDate(release.istDate)
+  if (!date) return null
+  if (!['tvmaze', 'manualOverride', 'prediction'].includes(release.source)) return date
+  if (!release.istTime) return date
+  const estimate = release.source === 'prediction' && labelPrediction ? ' (estimated)' : ''
+  return `${date} · ${release.istTime} IST${estimate}`
 }
 
 // The IST calendar day an episode actually releases on, honoring a TVmaze

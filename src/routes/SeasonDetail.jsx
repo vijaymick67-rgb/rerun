@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, getExternalIds } from '../lib/tmdb'
 import { getShowReleaseMap } from '../lib/tvmaze'
-import { episodeKey, hasAired, formatDate, episodeReleaseInfo } from '../lib/watchHelpers'
+import { episodeKey, hasAired, formatReleaseDisplay, episodeReleaseInfo } from '../lib/watchHelpers'
 import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import {
   showDetailCacheKey,
@@ -236,9 +236,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             const isBusy = busyEpisodes.has(ep.episode_number)
             const episodeHasAired = hasAired(ep)
             const release = episodeReleaseInfo(ep)
-            const releaseLabel = release
-              ? `${formatDate(release.istDate)} · ${release.istTime} IST`
-              : null
+            const releaseLabel = formatReleaseDisplay(release, { labelPrediction: true })
 
             return (
               <div
