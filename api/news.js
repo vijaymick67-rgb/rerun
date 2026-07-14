@@ -68,7 +68,13 @@ export function createNewsHandler({ env = process.env, fetchImpl = globalThis.fe
       )
     } catch (error) {
       const providerCode = error instanceof NewsProviderError ? error.code : 'UNKNOWN'
-      console.error('news_provider_error', { provider: 'gnews', code: providerCode })
+      const diagnostics = { provider: 'gnews', code: providerCode }
+      if (error instanceof NewsProviderError && error.upstream) {
+        if (error.upstream.status !== null) diagnostics.upstreamStatus = error.upstream.status
+        if (error.upstream.code !== null) diagnostics.upstreamCode = error.upstream.code
+        if (error.upstream.message !== null) diagnostics.upstreamMessage = error.upstream.message
+      }
+      console.error('news_provider_error', diagnostics)
       json(
         res,
         502,

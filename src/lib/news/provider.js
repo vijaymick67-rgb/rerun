@@ -1,9 +1,10 @@
 export class NewsProviderError extends Error {
-  constructor(code, message, cause) {
+  constructor(code, message, cause, upstream = null) {
     super(message)
     this.name = 'NewsProviderError'
     this.code = code
     this.cause = cause
+    this.upstream = upstream
   }
 }
 

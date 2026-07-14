@@ -14,6 +14,29 @@ async function readJsonResponse(response) {
   }
 }
 
+function safeDiagnostic(value, apiKey) {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  let text = String(value).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 500)
+  if (!text) return null
+  if (apiKey) text = text.split(apiKey).join('[REDACTED]')
+  return text.replace(/https?:\/\/\S+/gi, '[REDACTED_URL]')
+}
+
+function upstreamDiagnostics(response, payload, apiKey) {
+  const providerError = payload?.error
+  const code = providerError && typeof providerError === 'object'
+    ? providerError.code
+    : payload?.code
+  const message = providerError && typeof providerError === 'object'
+    ? providerError.message
+    : providerError ?? payload?.message ?? payload?.errors?.[0]
+  return {
+    status: Number.isInteger(response?.status) ? response.status : null,
+    code: safeDiagnostic(code, apiKey),
+    message: safeDiagnostic(message, apiKey),
+  }
+}
+
 export function createGnewsProvider({
   apiKey,
   fetchImpl = globalThis.fetch,
@@ -57,7 +80,12 @@ export function createGnewsProvider({
 
       const payload = await readJsonResponse(response)
       if (!response.ok) {
-        throw new NewsProviderError('UPSTREAM_ERROR', 'The news provider returned an error', payload)
+        throw new NewsProviderError(
+          'UPSTREAM_ERROR',
+          'The news provider returned an error',
+          payload,
+          upstreamDiagnostics(response, payload, apiKey),
+        )
       }
       if (!Array.isArray(payload?.articles)) {
         throw new NewsProviderError('MALFORMED_RESPONSE', 'The news provider returned malformed data')
@@ -68,4 +96,6 @@ export function createGnewsProvider({
   })
 }
 
-export { DEFAULT_TIMEOUT_MS, GNEWS_ENDPOINT, GNEWS_MAX_ARTICLES, TV_NEWS_QUERY }
+export {
+  DEFAULT_TIMEOUT_MS, GNEWS_ENDPOINT, GNEWS_MAX_ARTICLES, TV_NEWS_QUERY, upstreamDiagnostics,
+}

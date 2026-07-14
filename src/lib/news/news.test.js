@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import handler, { createNewsHandler, parseNewsLimit } from '../../../api/news.js'
 import { dedupeArticles } from './dedupeArticles.js'
 import { normalizeArticle, canonicalizeUrl, stableArticleId } from './normalizeArticle.js'
@@ -51,6 +51,8 @@ function article(overrides = {}) {
     ...overrides,
   }
 }
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('news normalization and filtering', () => {
   it('canonicalizes URLs and creates a stable ID', () => {
@@ -250,7 +252,40 @@ describe('GET /api/news', () => {
     expect(errorSpy).toHaveBeenCalledWith('news_provider_error', {
       provider: 'gnews',
       code: 'UPSTREAM_ERROR',
+      upstreamStatus: 500,
+      upstreamMessage: '[REDACTED]',
     })
+    errorSpy.mockRestore()
+  })
+
+  it.each([
+    [401, { error: { code: 'API_KEY_INVALID', message: 'Invalid API key secret-key' } }, 'API_KEY_INVALID', 'Invalid API key [REDACTED]'],
+    [403, { errors: ['Plan does not allow this request'] }, null, 'Plan does not allow this request'],
+    [400, { code: 'INVALID_ARGUMENT', message: 'Invalid max parameter' }, 'INVALID_ARGUMENT', 'Invalid max parameter'],
+  ])('logs safe diagnostics for an upstream %i response', async (
+    status, body, upstreamCode, upstreamMessage,
+  ) => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = makeHttpResponse()
+    const newsHandler = createNewsHandler({
+      env: { GNEWS_API_KEY: 'secret-key' },
+      fetchImpl: vi.fn(async () => makeResponse({ status, body })),
+    })
+
+    await newsHandler({ method: 'GET', query: {} }, res)
+
+    expect(res.statusCode).toBe(502)
+    expect(res.body).toEqual({
+      error: { code: 'NEWS_PROVIDER_ERROR', message: 'News is temporarily unavailable' },
+    })
+    const logged = errorSpy.mock.calls[0][1]
+    expect(logged).toMatchObject({
+      provider: 'gnews', code: 'UPSTREAM_ERROR', upstreamStatus: status, upstreamMessage,
+    })
+    if (upstreamCode) expect(logged.upstreamCode).toBe(upstreamCode)
+    else expect(logged).not.toHaveProperty('upstreamCode')
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('secret-key')
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('apikey=')
     errorSpy.mockRestore()
   })
 
