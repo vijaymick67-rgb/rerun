@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, hasAired, formatDate } from '../lib/watchHelpers'
-import { releaseRuleForShow } from '../lib/networkReleaseTiming'
 import {
   showDetailCacheKey,
   seasonDetailCacheKey,
@@ -26,7 +25,6 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
   const [cached] = useState(() => readDetailCache(cacheKey))
   const [showName, setShowName] = useState(() => cached?.showName ?? '')
-  const [releaseRule, setReleaseRule] = useState(() => cached?.releaseRule)
   const [episodes, setEpisodes] = useState(() => cached?.episodes ?? null)
   const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
   const watchedRef = useRef(watched)
@@ -56,20 +54,17 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         if (ignore) return
 
         const nextShowName = details.name ?? ''
-        const nextReleaseRule = releaseRuleForShow(numericTmdbId, details.networks)
         const watchedList = (watchedRows ?? []).map((row) =>
           episodeKey(numericSeasonNumber, row.episode_number),
         )
 
         setShowName(nextShowName)
-        setReleaseRule(nextReleaseRule)
         setEpisodes(seasonData.episodes)
         const nextWatched = new Set(watchedList)
         watchedRef.current = nextWatched
         setWatched(nextWatched)
         writeDetailCache(cacheKey, {
           showName: nextShowName,
-          releaseRule: nextReleaseRule,
           episodes: seasonData.episodes,
           watchedList,
         })
@@ -95,7 +90,6 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     const watchedList = [...nextWatchedSet]
     writeDetailCache(cacheKey, {
       showName,
-      releaseRule,
       episodes,
       watchedList,
     })
@@ -156,7 +150,6 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         episodes,
         tmdbShowId: numericTmdbId,
         seasonNumber: numericSeasonNumber,
-        releaseRule,
         getWatched: () => watchedRef.current,
         commitWatched,
       })
@@ -169,7 +162,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   }
 
   const hasUnwatchedAiredEpisodes = (episodes ?? []).some(
-    (ep) => hasAired(ep, releaseRule) && !watched.has(episodeKey(numericSeasonNumber, ep.episode_number)),
+    (ep) => hasAired(ep) && !watched.has(episodeKey(numericSeasonNumber, ep.episode_number)),
   )
 
   return (
@@ -228,7 +221,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             const epKey = episodeKey(numericSeasonNumber, ep.episode_number)
             const isWatched = watched.has(epKey)
             const isBusy = busyEpisodes.has(ep.episode_number)
-            const episodeHasAired = hasAired(ep, releaseRule)
+            const episodeHasAired = hasAired(ep)
 
             return (
               <div
@@ -241,9 +234,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
                   </p>
                   <p className="text-xs text-(--color-text-muted)">
                     {episodeHasAired
-                      ? formatDate(ep.air_date, releaseRule)
+                      ? formatDate(ep.air_date)
                       : ep.air_date
-                        ? `Airs ${formatDate(ep.air_date, releaseRule)}`
+                        ? `Airs ${formatDate(ep.air_date)}`
                         : 'No air date'}
                   </p>
                 </div>

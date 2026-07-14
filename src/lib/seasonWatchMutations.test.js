@@ -5,7 +5,6 @@ import {
   toggleEpisodeMutation,
 } from './seasonWatchMutations'
 
-const RELEASE_RULE = { timeZone: 'UTC', hour: 0 }
 const NOW = '2026-07-12T00:00:00.000Z'
 
 function episode(number, airDate) {
@@ -43,7 +42,6 @@ describe('season watch mutations', () => {
       watched: new Set(['1:1']),
       tmdbShowId: 7,
       seasonNumber: 1,
-      releaseRule: RELEASE_RULE,
       watchedAt: NOW,
     })
 
@@ -68,7 +66,6 @@ describe('season watch mutations', () => {
       episodes: [episode(1, '2020-01-01'), episode(2, '2020-01-02')],
       tmdbShowId: 7,
       seasonNumber: 1,
-      releaseRule: RELEASE_RULE,
       getWatched: () => new Set(['1:1', '1:2']),
       commitWatched,
     })
@@ -86,7 +83,6 @@ describe('season watch mutations', () => {
       episodes: [episode(1, '2020-01-01'), episode(2, '2020-01-02')],
       tmdbShowId: 7,
       seasonNumber: 1,
-      releaseRule: RELEASE_RULE,
       getWatched: () => new Set(['1:1']),
       commitWatched,
     })
@@ -132,7 +128,6 @@ describe('season watch mutations', () => {
         episodes: [episode(1, '2020-01-01')],
         tmdbShowId: 7,
         seasonNumber: 1,
-        releaseRule: RELEASE_RULE,
         getWatched: () => new Set(),
         commitWatched,
       }),

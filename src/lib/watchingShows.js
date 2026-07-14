@@ -1,6 +1,5 @@
 import { computeWatchingStatus } from './watchHelpers.js'
 import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
-import { releaseRuleForShow } from './networkReleaseTiming.js'
 
 // Stage 1: all unfinished shows remain candidates. Finished shows receive only
 // a lightweight show-details request; ineligible archives stop here.
@@ -13,9 +12,8 @@ export async function selectTrackedShowsForWatching(trackedShows, getShowDetails
     finished.map(async (show) => {
       try {
         const details = await getShowDetails(show.tmdb_id, { refreshDynamic: true })
-        const releaseRule = releaseRuleForShow(show.tmdb_id, details.networks)
-        return shouldFinishedShowReturn(show, details, releaseRule)
-          ? { show, details, releaseRule }
+        return shouldFinishedShowReturn(show, details)
+          ? { show, details }
           : null
       } catch {
         return null
@@ -27,7 +25,7 @@ export async function selectTrackedShowsForWatching(trackedShows, getShowDetails
   return {
     candidates: [...unfinished, ...returning.map((entry) => entry.show)],
     preloadedById: new Map(
-      returning.map((entry) => [entry.show.tmdb_id, { details: entry.details, releaseRule: entry.releaseRule }]),
+      returning.map((entry) => [entry.show.tmdb_id, { details: entry.details }]),
     ),
   }
 }
@@ -46,12 +44,10 @@ export async function enrichTrackedShowsForWatching(
       const episodesBySeason = {}
       let loadError = false
       let details = preloadedById.get(show.tmdb_id)?.details ?? null
-      let releaseRule = preloadedById.get(show.tmdb_id)?.releaseRule
 
       try {
         if (!details) {
           details = await getShowDetails(show.tmdb_id)
-          releaseRule = releaseRuleForShow(show.tmdb_id, details.networks)
         }
         const seasons = (details.seasons ?? [])
           .filter((season) => season.season_number > 0)
@@ -71,7 +67,7 @@ export async function enrichTrackedShowsForWatching(
       return {
         ...show,
         loadError,
-        status: computeWatchingStatus(episodesBySeason, watched, releaseRule, details),
+        status: computeWatchingStatus(episodesBySeason, watched, details),
       }
     }),
   )

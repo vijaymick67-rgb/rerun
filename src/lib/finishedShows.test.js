@@ -64,10 +64,10 @@ describe('personal finished state', () => {
   })
 
   it('returns a finished show inside 60 days with unchanged countdown wording', () => {
-    const premiere = computeWatchingStatus({}, new Set(), 0, {
+    const premiere = computeWatchingStatus({}, new Set(), {
       next_episode_to_air: { air_date: '2026-08-01', episode_number: 1 },
     })
-    const episode = computeWatchingStatus({}, new Set(), 0, {
+    const episode = computeWatchingStatus({}, new Set(), {
       next_episode_to_air: { air_date: '2026-08-01', episode_number: 2 },
     })
     expect(shouldFinishedShowReturn(
