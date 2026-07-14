@@ -57,24 +57,23 @@ export function BrowseNewsView({ state, trackedShows = [], loading = false, erro
   const general = selectGeneralNews(state, trackedShows).slice(0, 6)
   const hasUsableCache = mine.length > 0 || general.length > 0
   return (
-    <section aria-labelledby="browse-news-heading" className="mt-10 min-w-0 border-t border-(--color-border) pt-6">
-      <div className="flex items-baseline justify-between gap-3">
-        <h2 id="browse-news-heading" className="text-lg font-semibold text-(--color-text)">News</h2>
-        <span aria-live="polite" className="text-xs text-(--color-text-muted)">{refreshing ? 'Refreshing…' : ''}</span>
-      </div>
-      {loading && !hasUsableCache ? <div className="mt-4"><NewsSkeleton /></div> : <>
+    <section aria-label="Browse news" className="mt-6 min-w-0">
+      {loading && !hasUsableCache ? <NewsSkeleton /> : <>
         {error && !hasUsableCache && <div className="mt-3 rounded-lg bg-(--color-surface) p-3 text-sm text-(--color-text-muted)">
           News is temporarily unavailable. <button type="button" onClick={onRetry}
             className="motion-press min-h-11 font-medium text-(--color-accent)">Retry</button>
         </div>}
-        <div className="mt-5">
-          <h2 className="text-base font-semibold text-(--color-text)">News about your shows</h2>
+        <div>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-base font-semibold text-(--color-text)">Latest from your shows</h2>
+            <span aria-live="polite" className="text-xs text-(--color-text-muted)">{refreshing ? 'Refreshing…' : ''}</span>
+          </div>
           {mine.length ? <div className="mt-2 space-y-2">{mine.map((article) =>
             <NewsStoryCard key={article.id} article={article} onDismiss={onDismiss} />)}</div>
-            : <p className="mt-2 text-sm text-(--color-text-muted)">No news about your shows right now.</p>}
+            : <p className="mt-2 text-sm text-(--color-text-muted)">No new updates from your shows.</p>}
         </div>
-        <div className="mt-7">
-          <h2 className="text-base font-semibold text-(--color-text)">Interesting TV news</h2>
+        <div className="mt-6">
+          <h2 className="text-base font-semibold text-(--color-text)">TV headlines</h2>
           {general.length ? <div className="mt-2 space-y-2">{general.map((article) =>
             <NewsStoryCard key={article.id} article={article} />)}</div>
             : <p className="mt-2 text-sm text-(--color-text-muted)">No TV news available right now.</p>}

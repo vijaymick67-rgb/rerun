@@ -18,6 +18,7 @@ const MOVIE_ONLY = /\b(?:movie|film|cinema|theatrical|filmmaker|box office)\b/i
 const SCRIPTED_TV = /\bscripted (?:television|tv|streaming)?\s*series\b|\b(?:limited|drama|comedy) series\b|\bmini-?series\b|\bsitcom\b/i
 const CORPORATE = /\b(?:merger|acquisition|deal|lawsuit|legal battle|earnings|shares?|stock|financial)\b/i
 const CORPORATE_TV_CONTEXT = /\b(?:streaming|television programming|tv programming|studio|broadcast network|cable network|viewer access|subscribers?)\b/i
+const PERSONALITY_SIDELIGHT = /\b(?:star|presenter|host|anchor|broadcaster|reality star)\b.*\b(?:owner|house|home|property|apology|controversy|remark)\b/i
 
 function hasStrongTvSignal(text) {
   return STRONG_TV_FORMATS.some((pattern) => pattern.test(text)) ||
@@ -35,6 +36,7 @@ export function isTvNewsArticle(article) {
   if (SPORTS.test(text)) return false
   if (MUSIC.test(text) && !SCRIPTED_TV.test(text)) return false
   if (PRESENTER_CONTROVERSY.test(title) && !SERIES_CONTEXT.test(text)) return false
+  if (PERSONALITY_SIDELIGHT.test(title) && !(PROGRAMMING_ACTIONS.test(text) && SERIES_CONTEXT.test(text))) return false
   if (HARDWARE_OR_TELECOM.test(text)) return false
   if (MOVIE_ONLY.test(text) && !/\b(?:television|tv) adaptation\b|\btelevision series\b|\btv series\b/i.test(text)) return false
   if (CORPORATE.test(text) && !CORPORATE_TV_CONTEXT.test(text)) return false

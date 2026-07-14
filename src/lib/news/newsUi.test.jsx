@@ -196,8 +196,9 @@ describe('news UI', () => {
       ...Array.from({ length: 8 }, (_, i) => article(i + 30, `New comedy series story ${i}`, i)),
     ], shows)
     const html = renderToStaticMarkup(<BrowseNewsView state={state} trackedShows={shows} />)
-    expect(html).toContain('News about your shows')
-    expect(html).toContain('Interesting TV news')
+    expect(html).toContain('Latest from your shows')
+    expect(html).toContain('TV headlines')
+    expect(html).not.toMatch(/>News<\/h2>/)
     expect((html.match(/aria-label="Dismiss/g) ?? [])).toHaveLength(10)
     expect((html.match(/<article/g) ?? [])).toHaveLength(16)
   })
@@ -215,7 +216,7 @@ describe('news UI', () => {
   it('renders a stable image fallback and safe empty/error states', () => {
     expect(renderToStaticMarkup(<NewsStoryCard article={article(20)} />)).toContain('data-news-image-fallback="true"')
     const empty = renderToStaticMarkup(<BrowseNewsView state={emptyNewsState()} trackedShows={shows} />)
-    expect(empty).toContain('No news about your shows right now.')
+    expect(empty).toContain('No new updates from your shows.')
     expect(empty).toContain('No TV news available right now.')
     expect(renderToStaticMarkup(<BrowseNewsView state={emptyNewsState()} error />)).toContain('Retry')
   })
