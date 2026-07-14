@@ -1,4 +1,4 @@
-const CACHE_KEY = 'watching_cache:v3'
+const CACHE_KEY = 'watching_cache:v4'
 
 export function loadWatchingCache() {
   try {

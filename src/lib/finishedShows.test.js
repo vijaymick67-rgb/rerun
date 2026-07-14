@@ -79,6 +79,23 @@ describe('personal finished state', () => {
     expect(watchingStatusLabel(episode)).toBe('New episode in 20 days')
   })
 
+  it('waits for the final platform threshold before returning from last episode metadata', () => {
+    const show = { finished_at: '2026-07-01T00:00:00Z' }
+    const details = {
+      last_episode_to_air: {
+        air_date: '2026-07-19', airstamp: '2026-07-20T01:00:00Z',
+        releasePlatform: {
+          platform: 'hbo', thresholdHourIST: 8, thresholdMinuteIST: 0,
+          confidence: 'mapped',
+        },
+      },
+    }
+    vi.setSystemTime(new Date('2026-07-20T02:29:00Z'))
+    expect(shouldFinishedShowReturn(show, details)).toBe(false)
+    vi.setSystemTime(new Date('2026-07-20T02:30:00Z'))
+    expect(shouldFinishedShowReturn(show, details)).toBe(true)
+  })
+
   it('restoring makes a show eligible for Watching again', async () => {
     const supabase = makeSupabase()
     supabase.finished.set(7, '2026-07-12T00:00:00Z')

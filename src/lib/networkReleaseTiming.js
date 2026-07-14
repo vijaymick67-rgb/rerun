@@ -1,37 +1,34 @@
-// Universal release anchor.
-//
-// TMDB supplies a calendar air_date, not a release instant. We deliberately no
-// longer model per-platform release times: every show, on every platform,
-// is treated as releasing at 2:00 PM IST on its TMDB air_date. IST (Asia/
-// Kolkata) is UTC+5:30 year-round with no daylight saving, so the release
-// instant is plain arithmetic — no IANA timezone conversion, no date library.
+import { RELEASE_PLATFORMS } from './releasePlatforms.js'
 
-export const RELEASE_HOUR_IST = 14 // 2:00 PM, Asia/Kolkata
-
-// IST is a fixed +05:30 from UTC (no DST), so 14:00 IST is always 08:30 UTC.
-const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000
-
+export const RELEASE_HOUR_IST = RELEASE_PLATFORMS.unknown.thresholdHourIST
+export const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-// Epoch ms of the release moment for `airDate`: 14:00 IST on that calendar day.
-// Returns null for a missing or malformed date (not a full YYYY-MM-DD).
+export function isValidISODate(value) {
+  if (!ISO_DATE_RE.test(value ?? '')) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+export function timestampFromISTDate(istDate, hour = RELEASE_HOUR_IST, minute = 0) {
+  if (
+    !isValidISODate(istDate) ||
+    !Number.isInteger(hour) || hour < 0 || hour > 23 ||
+    !Number.isInteger(minute) || minute < 0 || minute > 59
+  ) return null
+  const [year, month, day] = istDate.split('-').map(Number)
+  return Date.UTC(year, month - 1, day, hour, minute) - IST_OFFSET_MS
+}
+
 export function releaseTimestamp(airDate) {
-  if (!airDate || !ISO_DATE_RE.test(airDate)) return null
-  const [year, month, day] = airDate.split('-').map(Number)
-  // 14:00 IST == (14:00 wall clock as UTC) − 5:30 == 08:30 UTC the same day.
-  return Date.UTC(year, month - 1, day, RELEASE_HOUR_IST, 0) - IST_OFFSET_MS
+  return timestampFromISTDate(airDate)
 }
 
-// The IST calendar day the release lands on. Because the anchor is 14:00 IST on
-// the air_date itself, this is simply the (validated) air_date — kept as a named
-// function so callers read as intent rather than a bare pass-through.
 export function releaseDateInIST(airDate) {
-  if (!airDate || !ISO_DATE_RE.test(airDate)) return null
-  return airDate
+  return isValidISODate(airDate) ? airDate : null
 }
 
-// Today's date in IST (YYYY-MM-DD). Shifting `now` by the fixed +05:30 offset
-// and reading the UTC components keeps this independent of the host timezone.
 export function istDateISO(now = new Date()) {
   const shifted = new Date(now.getTime() + IST_OFFSET_MS)
   const year = shifted.getUTCFullYear()
@@ -40,77 +37,99 @@ export function istDateISO(now = new Date()) {
   return `${year}-${month}-${day}`
 }
 
-// --- Priority-chain resolver (TVmaze integration) -------------------------
-//
-// The universal 14:00-IST anchor above is a *fallback*, not the only source.
-// TVmaze's per-episode `airstamp` is a full ISO 8601 instant carrying the
-// network's real UTC offset (e.g. "2026-07-19T21:00:00-04:00"), so it already
-// pins the release moment timezone-correctly — no arithmetic. Given an episode's
-// TMDB air_date plus any higher-priority signals, resolve the release instant
-// (epoch ms) in strict priority order:
-//   1. manualOverride — an explicit human correction (epoch ms or ISO string);
-//      always wins, even over TVmaze.
-//   2. airstamp — TVmaze's absolute ISO 8601 timestamp, parsed with new Date().
-//   3. releaseTimestamp(airDate) — the existing universal anchor, unchanged,
-//      reached only when neither higher source has data (new/niche/regional
-//      shows TVmaze doesn't cover).
-// Returns epoch ms, or null when nothing resolves. This is additive: callers
-// that pass no sources get exactly the old anchor behaviour.
-export function resolveReleaseTimestamp(airDate, sources = {}) {
-  const override = coerceInstant(sources.manualOverride)
-  if (override !== null) return override
-  const airstamp = coerceInstant(sources.airstamp)
-  if (airstamp !== null) return airstamp
-  return releaseTimestamp(airDate)
+function timeLabel(hour, minute) {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
-export function releaseInfoFromTimestamp(timestamp, source = 'prediction') {
-  const ts = coerceInstant(timestamp)
-  if (ts === null) return null
+function instantToISTParts(value) {
+  const timestamp = coerceInstant(value)
+  if (timestamp === null) return null
+  const shifted = new Date(timestamp + IST_OFFSET_MS)
   return {
-    timestamp: ts,
-    istDate: istDateISO(new Date(ts)),
-    istTime: istTimeDisplay(new Date(ts)),
-    source,
+    timestamp,
+    istDate: istDateISO(new Date(timestamp)),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
   }
 }
 
-export function resolveReleaseInfo(airDate, sources = {}) {
-  const override = coerceInstant(sources.manualOverride)
-  if (override !== null) return releaseInfoFromTimestamp(override, 'manualOverride')
-  const airstamp = coerceInstant(sources.airstamp)
-  if (airstamp !== null) return releaseInfoFromTimestamp(airstamp, 'tvmaze')
-  const fallback = releaseTimestamp(airDate)
-  return fallback === null ? null : releaseInfoFromTimestamp(fallback, 'fallback')
+function normalizedOverride(override) {
+  if (!override) return null
+  if (typeof override === 'object' && isValidISODate(override.date)) {
+    const hour = Number.isInteger(override.thresholdHourIST) ? override.thresholdHourIST : 0
+    const minute = Number.isInteger(override.thresholdMinuteIST) ? override.thresholdMinuteIST : 0
+    return { date: override.date, hour, minute }
+  }
+  const parts = instantToISTParts(override)
+  return parts ? { date: parts.istDate, hour: parts.hour, minute: parts.minute } : null
 }
 
-// The IST calendar day a resolved release lands on. For the plain anchor this
-// is just the air_date (the anchor sits at 14:00 IST on it); for a TVmaze
-// airstamp or manual override it is the true IST day of that instant, which is
-// how the HBO "US-day-only" drift gets corrected (a Sunday-night US drop shows
-// as its actual Monday-morning IST day). Returns null when nothing resolves.
-export function resolveReleaseDateInIST(airDate, sources = {}) {
-  return resolveReleaseInfo(airDate, sources)?.istDate ?? null
+export function resolveReleaseInfo(airDate, sources = {}, platformInfo = {}) {
+  const override = normalizedOverride(sources.manualOverride ?? sources.newsOverride)
+  const platform = platformInfo.platform ?? 'unknown'
+  const confidence = platformInfo.confidence ?? 'fallback'
+  if (override) {
+    return {
+      timestamp: timestampFromISTDate(override.date, override.hour, override.minute),
+      istDate: override.date,
+      thresholdTimeIST: timeLabel(override.hour, override.minute),
+      platform,
+      source: 'manualOverride',
+      dateSource: 'manualOverride',
+      predicted: false,
+      confidence,
+    }
+  }
+
+  const airstamp = instantToISTParts(sources.airstamp)
+  const tvmazeAirdate = isValidISODate(sources.airdate) ? sources.airdate : null
+  const tmdbDate = isValidISODate(airDate) ? airDate : null
+  const istDate = airstamp?.istDate ?? tvmazeAirdate ?? tmdbDate
+  if (!istDate) return null
+  const hour = platformInfo.thresholdHourIST ?? RELEASE_PLATFORMS.unknown.thresholdHourIST
+  const minute = platformInfo.thresholdMinuteIST ?? 0
+  return {
+    timestamp: timestampFromISTDate(istDate, hour, minute),
+    istDate,
+    thresholdTimeIST: timeLabel(hour, minute),
+    platform,
+    source: 'platformThreshold',
+    dateSource: airstamp ? 'tvmazeAirstamp' : tvmazeAirdate ? 'tvmazeAirdate' : 'tmdb',
+    predicted: false,
+    confidence,
+  }
 }
 
-export function resolveReleaseTimeInIST(airDate, sources = {}) {
-  return resolveReleaseInfo(airDate, sources)?.istTime ?? null
+export function releaseInfoFromTimestamp(timestamp, source = 'prediction', metadata = {}) {
+  const parts = instantToISTParts(timestamp)
+  if (!parts) return null
+  return {
+    timestamp: parts.timestamp,
+    istDate: parts.istDate,
+    thresholdTimeIST: timeLabel(parts.hour, parts.minute),
+    platform: metadata.platform ?? 'unknown',
+    source,
+    dateSource: metadata.dateSource ?? source,
+    predicted: source === 'prediction',
+    confidence: metadata.confidence ?? 'fallback',
+  }
 }
 
-function istTimeDisplay(date) {
-  const shifted = new Date(date.getTime() + IST_OFFSET_MS)
-  const hours = shifted.getUTCHours()
-  const minutes = String(shifted.getUTCMinutes()).padStart(2, '0')
-  const hour12 = hours % 12 || 12
-  return `${hour12}:${minutes} ${hours < 12 ? 'AM' : 'PM'}`
+export function resolveReleaseTimestamp(airDate, sources = {}, platformInfo = {}) {
+  return resolveReleaseInfo(airDate, sources, platformInfo)?.timestamp ?? null
 }
 
-// Accept either epoch ms (number) or a parseable date string; reject anything
-// that doesn't yield a finite instant so resolution falls cleanly to the next
-// source in the chain.
+export function resolveReleaseDateInIST(airDate, sources = {}, platformInfo = {}) {
+  return resolveReleaseInfo(airDate, sources, platformInfo)?.istDate ?? null
+}
+
+export function resolveReleaseTimeInIST(airDate, sources = {}, platformInfo = {}) {
+  return resolveReleaseInfo(airDate, sources, platformInfo)?.thresholdTimeIST ?? null
+}
+
 function coerceInstant(value) {
   if (value === null || value === undefined) return null
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  const ms = new Date(value).getTime()
-  return Number.isFinite(ms) ? ms : null
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : null
 }

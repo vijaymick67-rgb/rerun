@@ -121,9 +121,8 @@ export async function searchShows(query) {
 }
 
 // Full show details including season list (not individual episodes — see
-// getSeasonEpisodes) and network names. Release timing no longer depends on the
-// network — every show releases at 2 PM IST on its air_date (see
-// lib/networkReleaseTiming.js) — but `networks` is still carried for display.
+// getSeasonEpisodes) and original network names. The release engine derives its
+// platform threshold from this already-fetched metadata.
 //
 // Cache key bumped across versions so shows cached before a field was added
 // here get re-trimmed from the underlying tmdbFetch response (already cached

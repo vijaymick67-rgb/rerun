@@ -1,10 +1,16 @@
 import {
-  daysUntilRelease,
+  episodeReleaseInfo,
   isHiddenFromWatching,
-  releaseSources,
+  localTodayISO,
   WATCHING_COUNTDOWN_WINDOW_DAYS,
 } from './watchHelpers.js'
-import { istDateISO, resolveReleaseInfo } from './networkReleaseTiming.js'
+import { istDateISO } from './networkReleaseTiming.js'
+
+function daysBetween(fromISO, toISO) {
+  const [fy, fm, fd] = fromISO.split('-').map(Number)
+  const [ty, tm, td] = toISO.split('-').map(Number)
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000)
+}
 
 export function isPersonallyFinished(show) {
   return show?.finished_at != null
@@ -34,22 +40,20 @@ function finishedDateInIST(timestamp) {
 
 export function shouldFinishedShowReturn(show, details) {
   const nextEpisode = details?.next_episode_to_air
-  const remaining = daysUntilRelease(nextEpisode?.air_date, releaseSources(nextEpisode))
+  const nextRelease = episodeReleaseInfo(nextEpisode)
+  const remaining = nextRelease ? daysBetween(localTodayISO(), nextRelease.istDate) : null
   if (remaining !== null && remaining <= WATCHING_COUNTDOWN_WINDOW_DAYS) return true
 
   // After air day TMDB may clear next_episode_to_air (season finale or
   // full-season drop). A last episode dated after the personal finish is a
   // lightweight signal that new material exists and merits a season scan.
   const lastEpisode = details?.last_episode_to_air
-  const lastRelease = resolveReleaseInfo(lastEpisode?.air_date, releaseSources(lastEpisode))
-  const daysSinceLastAir = lastRelease
-    ? daysUntilRelease(lastEpisode?.air_date, releaseSources(lastEpisode))
-    : null
+  const lastRelease = episodeReleaseInfo(lastEpisode)
   const finishedDate = finishedDateInIST(show?.finished_at)
   return Boolean(
     finishedDate &&
-      daysSinceLastAir !== null &&
-      daysSinceLastAir <= 0 &&
+      lastRelease &&
+      lastRelease.timestamp <= Date.now() &&
       lastRelease.istDate > finishedDate,
   )
 }

@@ -3,8 +3,9 @@ import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, getExternalIds } from '../lib/tmdb'
 import { getShowReleaseMap } from '../lib/tvmaze'
-import { episodeKey, hasAired, formatReleaseDisplay, episodeReleaseInfo } from '../lib/watchHelpers'
+import { episodeKey, hasAired, formatDate, episodeReleaseInfo } from '../lib/watchHelpers'
 import { attachEpisodeReleaseData } from '../lib/watchingShows'
+import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import {
   showDetailCacheKey,
   seasonDetailCacheKey,
@@ -64,8 +65,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         if (ignore) return
 
         const nextShowName = details.name ?? ''
+        const platformInfo = classifyReleasePlatform(details)
         const seasonEpisodes = (seasonData.episodes ?? []).map((ep) => {
-          return attachEpisodeReleaseData(ep, airstamps, numericSeasonNumber)
+          return attachEpisodeReleaseData(ep, airstamps, numericSeasonNumber, platformInfo)
         })
         const watchedList = (watchedRows ?? []).map((row) =>
           episodeKey(numericSeasonNumber, row.episode_number),
@@ -236,7 +238,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             const isBusy = busyEpisodes.has(ep.episode_number)
             const episodeHasAired = hasAired(ep)
             const release = episodeReleaseInfo(ep)
-            const releaseLabel = formatReleaseDisplay(release, { labelPrediction: true })
+            const releaseLabel = release ? formatDate(release.istDate) : null
 
             return (
               <div

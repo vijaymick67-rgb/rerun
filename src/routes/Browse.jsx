@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { daysUntil, daysUntilRelease, releaseSources } from '../lib/watchHelpers'
 import { getShowReleaseMap } from '../lib/tvmaze'
 import { attachEpisodeReleaseData } from '../lib/watchingShows'
+import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { upsertTrackedShow } from '../lib/finishedShows'
 
@@ -91,10 +92,13 @@ export default function Browse() {
     try {
       const details = await getShowDetails(show.id)
       const releaseMap = await getShowReleaseMap(show.id, { getExternalIds })
-      const nextEpisode = attachEpisodeReleaseData(details.next_episode_to_air, releaseMap)
+      const platformInfo = classifyReleasePlatform(details)
+      const nextEpisode = attachEpisodeReleaseData(
+        details.next_episode_to_air, releaseMap, undefined, platformInfo,
+      )
       const premiereDate = nextEpisode?.air_date ?? details.first_air_date ?? null
       const daysAway = nextEpisode
-        ? daysUntilRelease(premiereDate, releaseSources(nextEpisode))
+        ? daysUntilRelease(premiereDate, releaseSources(nextEpisode), platformInfo)
         : daysUntil(premiereDate)
       if (daysAway !== null && daysAway > DELAYED_ADD_THRESHOLD_DAYS) {
         setDelayedAddMessage(
