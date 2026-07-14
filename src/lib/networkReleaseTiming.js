@@ -6,12 +6,14 @@ const NETWORK_RELEASE_RULES = {
   'HBO Max': { timeZone: 'America/New_York', hour: 21 },
   'Max': { timeZone: 'America/New_York', hour: 21 },
   'Netflix': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Prime Video': { timeZone: 'America/Los_Angeles', hour: 0 },
-  'Amazon Prime Video': { timeZone: 'America/Los_Angeles', hour: 0 },
-  // TMDB's Apple air_date is already the source calendar date. A 9 PM ET
-  // release naturally converts to the following morning in IST.
-  'Apple TV+': { timeZone: 'America/New_York', hour: 21 },
-  'Apple TV': { timeZone: 'America/New_York', hour: 21 },
+  // Prime library titles drop at midnight UTC (5:30 AM IST) year-round — no DST.
+  'Prime Video': { timeZone: 'Etc/GMT', hour: 0 },
+  'Amazon Prime Video': { timeZone: 'Etc/GMT', hour: 0 },
+  // Apple TV+ drops at midnight PT (12 AM PST/PDT) on the TMDB air_date, which
+  // is ~12:30-1:30 PM IST the SAME day. Confirmed against dated 2026 episodes
+  // (Sugar, Silo, Foundation). The old 9 PM ET rule pushed it a day late.
+  'Apple TV+': { timeZone: 'America/Los_Angeles', hour: 0 },
+  'Apple TV': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Disney+': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Hulu': { timeZone: 'America/Los_Angeles', hour: 0 },
   'Paramount+': { timeZone: 'America/Los_Angeles', hour: 0 },
@@ -27,8 +29,20 @@ const NETWORK_RELEASE_RULES = {
   'FOX': { timeZone: 'America/New_York', hour: 21 },
 }
 
+// Per-show overrides keyed by tmdb_show_id. Five platforms run two schedules
+// each, so a single network rule is provably wrong for shows on the "other"
+// schedule. An entry here takes precedence over the network fallback in
+// releaseRuleForShow. Dead-simple map — no heuristics, no network-name parsing.
+//
+// Seed candidates (add the ones on your Watching list; don't guess IDs):
+//   HBO Max  — prestige (HOTD, The Pitt) = 9 PM ET; back-catalog = 3 AM ET
+//   Disney+  — prestige live-action (Loki S2+, Ahsoka) = 9 PM ET
+//   Hulu     — ALL FX-branded series = 9 PM ET simulcast (2026 policy)
+//   Peacock  — reality/linear crossover = 9 PM ET
+//   Prime    — possible flagship exceptions, UNCONFIRMED — do not hardcode
 const SHOW_RELEASE_OVERRIDES = {
-  // House of the Dragon: Sunday 9 PM ET → Monday 6:30 AM IST in daylight time.
+  // House of the Dragon (HBO prestige): Sunday 9 PM ET → Monday 6:30 AM IST
+  // in daylight time. Pinned here so it holds even if network detection misses.
   94997: { timeZone: 'America/New_York', hour: 21 },
 }
 
@@ -41,12 +55,6 @@ const NORMALIZED_NETWORK_RELEASE_RULES = Object.fromEntries(
 )
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-
-function addDays(airDate, days) {
-  const [year, month, day] = airDate.split('-').map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day + days))
-  return [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()]
-}
 
 function zonedParts(date, timeZone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -79,9 +87,12 @@ export function releaseRuleForShow(tmdbId, networks) {
   return UNKNOWN_RELEASE_RULE
 }
 
+// Day comes straight from the TMDB per-episode air_date; the rule only carries
+// {timeZone, hour}. No day-shift table — the wall-clock instant in the
+// platform's IANA zone lands on the correct IST calendar day on its own.
 export function releaseTimestamp(airDate, rule = UNKNOWN_RELEASE_RULE) {
   if (!airDate || !ISO_DATE_RE.test(airDate)) return null
-  const [year, month, day] = addDays(airDate, rule.sourceDateOffsetDays ?? 0)
+  const [year, month, day] = airDate.split('-').map(Number)
   return zonedDateTimeToTimestamp(year, month, day, rule.hour ?? 0, rule.minute ?? 0, rule.timeZone)
 }
 

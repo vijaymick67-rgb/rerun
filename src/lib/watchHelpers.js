@@ -1,5 +1,10 @@
 import { istDateISO, releaseDateInIST, releaseTimestamp } from './networkReleaseTiming.js'
 
+// "1 day" not "1 days" — TMDB countdowns routinely land on 1.
+function pluralizeDays(n) {
+  return n === 1 ? '1 day' : `${n} days`
+}
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export function episodeKey(seasonNumber, episodeNumber) {
@@ -74,8 +79,10 @@ export function computeNextUp(episodesBySeason, watched, releaseRule) {
   return null
 }
 
-// Airs today/tomorrow renders as "Airs soon" instead of a day count.
-const AIRS_SOON_THRESHOLD_DAYS = 1
+// A release counts as "soon" strictly under 24 real hours out — measured from
+// the timezone-aware release instant, not a calendar-day diff (which spanned
+// ~0h–48h and mislabelled everything within a day or two as "soon").
+const AIRS_SOON_WINDOW_MS = 24 * 60 * 60 * 1000
 
 // Richer status for a tracked show, covering the cases computeNextUp alone
 // can't distinguish: an unaired premiere, a mid-run gap awaiting a renewal
@@ -85,15 +92,23 @@ export function computeWatchingStatus(episodesBySeason, watched, releaseRule, de
   const nextUp = computeNextUp(episodesBySeason, watched, releaseRule)
   if (nextUp) return { type: 'nextUp', ...nextUp }
 
+  // TMDB's next_episode_to_air lags for hours after an episode actually drops
+  // (worsened by the 6h getShowDetails cache), so nextAirDate is frequently
+  // today or in the past. Only surface a countdown when the real, timezone-
+  // aware release instant is still ahead of now — a stale/past date means the
+  // episode already aired and we should fall through to caughtUp rather than
+  // count down to a moment that has passed. This must not depend on TMDB
+  // freshness.
   const nextAirDate = details?.next_episode_to_air?.air_date
+  const releaseTs = releaseTimestamp(nextAirDate, releaseRule)
   const daysUntilAir = daysUntil(nextAirDate, releaseRule)
-  if (nextAirDate && daysUntilAir !== null) {
+  if (releaseTs !== null && releaseTs > Date.now() && daysUntilAir !== null) {
     return {
       type: 'countdown',
       subtype: details.next_episode_to_air.episode_number === 1 ? 'premiere' : 'episode',
       air_date: releaseDateInIST(nextAirDate, releaseRule),
       daysUntil: daysUntilAir,
-      airsSoon: daysUntilAir <= AIRS_SOON_THRESHOLD_DAYS,
+      airsSoon: releaseTs - Date.now() < AIRS_SOON_WINDOW_MS,
     }
   }
 
@@ -122,6 +137,6 @@ export function watchingStatusLabel(status) {
   const isPremiere = status.subtype === 'premiere'
   if (status.airsSoon) return isPremiere ? 'Airs soon' : 'New episode soon'
   return isPremiere
-    ? `Airs in ${status.daysUntil} days`
-    : `New episode in ${status.daysUntil} days`
+    ? `Airs in ${pluralizeDays(status.daysUntil)}`
+    : `New episode in ${pluralizeDays(status.daysUntil)}`
 }
