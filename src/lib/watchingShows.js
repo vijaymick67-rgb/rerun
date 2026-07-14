@@ -3,7 +3,11 @@ import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './
 
 // Stage 1: all unfinished shows remain candidates. Finished shows receive only
 // a lightweight show-details request; ineligible archives stop here.
-export async function selectTrackedShowsForWatching(trackedShows, getShowDetails) {
+export async function selectTrackedShowsForWatching(
+  trackedShows,
+  getShowDetails,
+  getShowReleaseMap,
+) {
   const visibleShows = trackedShows.filter((show) => !isHiddenShow(show))
   const unfinished = visibleShows.filter((show) => !isPersonallyFinished(show))
   const finished = visibleShows.filter(isPersonallyFinished)
@@ -12,8 +16,10 @@ export async function selectTrackedShowsForWatching(trackedShows, getShowDetails
     finished.map(async (show) => {
       try {
         const details = await getShowDetails(show.tmdb_id, { refreshDynamic: true })
-        return shouldFinishedShowReturn(show, details)
-          ? { show, details }
+        const releaseMap = getShowReleaseMap ? await getShowReleaseMap(show.tmdb_id) : {}
+        const enrichedDetails = attachDetailsReleaseData(details, releaseMap)
+        return shouldFinishedShowReturn(show, enrichedDetails)
+          ? { show, details: enrichedDetails, releaseMap }
           : null
       } catch {
         return null
@@ -25,7 +31,10 @@ export async function selectTrackedShowsForWatching(trackedShows, getShowDetails
   return {
     candidates: [...unfinished, ...returning.map((entry) => entry.show)],
     preloadedById: new Map(
-      returning.map((entry) => [entry.show.tmdb_id, { details: entry.details }]),
+      returning.map((entry) => [entry.show.tmdb_id, {
+        details: entry.details,
+        releaseMap: entry.releaseMap,
+      }]),
     ),
   }
 }
@@ -36,14 +45,16 @@ export async function enrichTrackedShowsForWatching(
   candidates,
   watchedByShowId,
   preloadedById,
-  { getShowDetails, getSeasonEpisodes, getShowAirstamps },
+  { getShowDetails, getSeasonEpisodes, getShowReleaseMap, getShowAirstamps },
 ) {
+  const loadReleaseMap = getShowReleaseMap ?? getShowAirstamps
   return Promise.all(
     candidates.map(async (show) => {
       const watched = watchedByShowId.get(show.tmdb_id) ?? new Set()
       let episodesBySeason = {}
       let loadError = false
       let details = preloadedById.get(show.tmdb_id)?.details ?? null
+      let releaseMap = preloadedById.get(show.tmdb_id)?.releaseMap ?? null
 
       try {
         if (!details) {
@@ -65,11 +76,11 @@ export async function enrichTrackedShowsForWatching(
         // both the season episodes and next_episode_to_air. getShowAirstamps
         // never throws and returns {} when the show has no TVmaze match, so a
         // missing/failed lookup leaves every episode on the universal anchor.
-        if (getShowAirstamps) {
-          const airstamps = await getShowAirstamps(show.tmdb_id)
-          if (airstamps && Object.keys(airstamps).length > 0) {
-            episodesBySeason = attachAirstamps(episodesBySeason, airstamps)
-            details = attachNextEpisodeAirstamp(details, airstamps)
+        if (loadReleaseMap) {
+          releaseMap ??= await loadReleaseMap(show.tmdb_id)
+          if (releaseMap && Object.keys(releaseMap).length > 0) {
+            episodesBySeason = attachReleaseData(episodesBySeason, releaseMap)
+            details = attachDetailsReleaseData(details, releaseMap)
           }
         }
       } catch {
@@ -85,27 +96,35 @@ export async function enrichTrackedShowsForWatching(
   )
 }
 
-// Return a copy of episodesBySeason with each episode's TVmaze `airstamp`
-// attached where a season:episode match exists. Episodes without a match are
-// left untouched (they keep resolving via the universal anchor).
-function attachAirstamps(episodesBySeason, airstamps) {
+// Return a copy with each episode's structured TVmaze release record attached.
+export function attachReleaseData(episodesBySeason, releaseMap) {
   const out = {}
   for (const [seasonNumber, episodes] of Object.entries(episodesBySeason)) {
     out[seasonNumber] = (episodes ?? []).map((ep) => {
-      const airstamp = airstamps[episodeKey(Number(seasonNumber), ep.episode_number)]
-      return airstamp ? { ...ep, airstamp } : ep
+      return attachEpisodeReleaseData(ep, releaseMap, Number(seasonNumber))
     })
   }
   return out
 }
 
-// Attach the matching TVmaze airstamp to details.next_episode_to_air, so the
-// countdown branch resolves off the true release instant too. No-op when the
-// pointer is absent or has no TVmaze match.
-function attachNextEpisodeAirstamp(details, airstamps) {
-  const next = details?.next_episode_to_air
-  if (!next) return details
-  const airstamp = airstamps[episodeKey(next.season_number, next.episode_number)]
-  if (!airstamp) return details
-  return { ...details, next_episode_to_air: { ...next, airstamp } }
+// Attach the matching TVmaze fields to an episode pointer or season row.
+export function attachEpisodeReleaseData(episode, releaseMap, seasonNumber) {
+  if (!episode) return episode
+  const release = releaseMap?.[episodeKey(seasonNumber ?? episode.season_number, episode.episode_number)]
+  if (!release) return episode
+  // Accept v1 string maps in tests/in-memory callers, while persisted v1 keys
+  // are isolated by the v2 cache prefixes.
+  return {
+    ...episode,
+    ...(typeof release === 'string' ? { airstamp: release } : release),
+  }
+}
+
+export function attachDetailsReleaseData(details, releaseMap) {
+  if (!details) return details
+  return {
+    ...details,
+    next_episode_to_air: attachEpisodeReleaseData(details.next_episode_to_air, releaseMap),
+    last_episode_to_air: attachEpisodeReleaseData(details.last_episode_to_air, releaseMap),
+  }
 }

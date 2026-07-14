@@ -210,3 +210,31 @@ describe('Watching TVmaze airstamp enrichment', () => {
     })
   })
 })
+
+describe('archived TVmaze release enrichment order', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('attaches next-episode release truth before eligibility', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-14T04:30:00.000Z'))
+    const show = { tmdb_id: 77, finished_at: '2026-01-01T00:00:00Z' }
+    const getShowDetails = vi.fn(async () => ({
+      next_episode_to_air: {
+        air_date: '2026-09-12', season_number: 3, episode_number: 5,
+      },
+    }))
+    // Raw TMDB is 60 days away, but the authoritative instant lands 61 IST
+    // calendar days away and must keep this archive filtered out.
+    const getShowReleaseMap = vi.fn(async () => ({
+      '3:5': {
+        airstamp: '2026-09-13T01:00:00Z', airdate: '2026-09-12',
+        airtime: '21:00', tvmazeEpisodeId: 305,
+      },
+    }))
+    const result = await selectTrackedShowsForWatching(
+      [show], getShowDetails, getShowReleaseMap,
+    )
+    expect(result.candidates).toEqual([])
+    expect(getShowReleaseMap).toHaveBeenCalledWith(77)
+  })
+})

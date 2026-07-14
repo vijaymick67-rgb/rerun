@@ -1,8 +1,8 @@
 import {
   istDateISO,
   releaseDateInIST,
-  releaseTimestamp,
-  resolveReleaseDateInIST,
+  releaseInfoFromTimestamp,
+  resolveReleaseInfo,
   resolveReleaseTimestamp,
 } from './networkReleaseTiming.js'
 
@@ -10,7 +10,7 @@ import {
 // priority chain (resolveReleaseTimestamp) expects. `airstamp` comes from
 // TVmaze; `releaseOverride` is reserved for an explicit human correction. Absent
 // on plain TMDB episodes, in which case resolution falls to the anchor.
-function releaseSources(episode) {
+export function releaseSources(episode) {
   return { manualOverride: episode?.releaseOverride, airstamp: episode?.airstamp }
 }
 
@@ -35,9 +35,7 @@ export function localTodayISO() {
 function daysBetween(fromISO, toISO) {
   const [fy, fm, fd] = fromISO.split('-').map(Number)
   const [ty, tm, td] = toISO.split('-').map(Number)
-  const fromDate = new Date(fy, fm - 1, fd)
-  const toDate = new Date(ty, tm - 1, td)
-  return Math.round((toDate - fromDate) / 86400000)
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000)
 }
 
 // Days from today until an air date. Returns null when there's no date to
@@ -51,9 +49,9 @@ export function daysUntil(airDate) {
 // Days from today (IST) until a resolved release instant — used for countdowns
 // whose moment may come from a TVmaze airstamp rather than an air_date, where
 // the IST calendar day is read off the instant itself. Returns null for no ts.
-function daysUntilInstant(ts) {
-  if (ts === null) return null
-  return daysBetween(localTodayISO(), istDateISO(new Date(ts)))
+export function daysUntilRelease(airDate, sources = {}) {
+  const info = resolveReleaseInfo(airDate, sources)
+  return info ? daysBetween(localTodayISO(), info.istDate) : null
 }
 
 // Bug fix: "today" used to come from new Date().toISOString(), which converts
@@ -81,8 +79,10 @@ export function hasAired(episode) {
 export function formatDate(dateString) {
   const releaseDate = releaseDateInIST(dateString)
   if (!releaseDate) return null
-  const date = new Date(releaseDate + 'T00:00:00')
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  const [year, month, day] = releaseDate.split('-').map(Number)
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric',
+  }).format(new Date(Date.UTC(year, month - 1, day)))
 }
 
 // The IST calendar day an episode actually releases on, honoring a TVmaze
@@ -92,7 +92,11 @@ export function formatDate(dateString) {
 // (an HBO Sunday-night episode lands Monday in IST). Callers that only have a
 // plain air_date get exactly releaseDateInIST(air_date) back.
 export function episodeReleaseDateInIST(episode) {
-  return resolveReleaseDateInIST(episode?.air_date, releaseSources(episode))
+  return episodeReleaseInfo(episode)?.istDate ?? null
+}
+
+export function episodeReleaseInfo(episode) {
+  return resolveReleaseInfo(episode?.air_date, releaseSources(episode))
 }
 
 // First unwatched episode that has already aired, scanning seasons in order.
@@ -105,11 +109,13 @@ export function computeNextUp(episodesBySeason, watched) {
     for (const ep of episodesBySeason[seasonNumber]) {
       const key = episodeKey(seasonNumber, ep.episode_number)
       if (!watched.has(key) && hasAired(ep)) {
+        const release = episodeReleaseInfo(ep)
         return {
           season_number: seasonNumber,
           episode_number: ep.episode_number,
           name: ep.name,
-          air_date: resolveReleaseDateInIST(ep.air_date, releaseSources(ep)),
+          air_date: release?.istDate ?? null,
+          release,
         }
       }
     }
@@ -132,11 +138,11 @@ function airedEpisodesByRelease(episodesBySeason) {
   const now = Date.now()
   for (const episodes of Object.values(episodesBySeason ?? {})) {
     for (const ep of episodes ?? []) {
-      const ts = resolveReleaseTimestamp(ep.air_date, releaseSources(ep))
-      if (ts !== null && ts <= now) aired.push({ air_date: ep.air_date, ts })
+      const release = episodeReleaseInfo(ep)
+      if (release && release.timestamp <= now) aired.push(release)
     }
   }
-  return aired.sort((a, b) => a.ts - b.ts)
+  return aired.sort((a, b) => a.timestamp - b.timestamp)
 }
 
 // Fix D: when TMDB's next_episode_to_air is missing or stale/past and the show
@@ -146,7 +152,7 @@ function airedEpisodesByRelease(episodesBySeason) {
 // and always superseded by the next real next_episode_to_air. No prediction is
 // attempted with fewer than 2 aired episodes (new/irregular shows). Returns a
 // predicted air_date string, or null when cadence can't be established.
-function predictWeeklyNextAirDate(episodesBySeason) {
+export function predictWeeklyNextRelease(episodesBySeason) {
   const aired = airedEpisodesByRelease(episodesBySeason)
   if (aired.length < 2) return null
 
@@ -154,14 +160,11 @@ function predictWeeklyNextAirDate(episodesBySeason) {
   const prev = aired[aired.length - 2]
   // ~7 days apart, with a day of slack for scheduling jitter. A wider gap means
   // a mid-season break or irregular schedule — don't guess those.
-  if (Math.abs(last.ts - prev.ts - WEEK_MS) > DAY_MS) return null
-
-  const [y, m, d] = last.air_date.split('-').map(Number)
-  const next = new Date(Date.UTC(y, m - 1, d) + WEEK_MS)
-  const yyyy = next.getUTCFullYear()
-  const mm = String(next.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(next.getUTCDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+  if (Math.abs(last.timestamp - prev.timestamp - WEEK_MS) > DAY_MS) return null
+  return {
+    ...releaseInfoFromTimestamp(last.timestamp + WEEK_MS, 'prediction'),
+    predicted: true,
+  }
 }
 
 // Richer status for a tracked show, covering the cases computeNextUp alone
@@ -181,11 +184,15 @@ export function computeWatchingStatus(episodesBySeason, watched, details) {
   const nextSources = releaseSources(nextEp)
   const releaseTs = resolveReleaseTimestamp(nextEp?.air_date, nextSources)
   if (releaseTs !== null && releaseTs > Date.now()) {
+    const release = resolveReleaseInfo(nextEp?.air_date, nextSources)
     return {
       type: 'countdown',
       subtype: nextEp.episode_number === 1 ? 'premiere' : 'episode',
-      air_date: resolveReleaseDateInIST(nextEp?.air_date, nextSources),
-      daysUntil: daysUntilInstant(releaseTs),
+      air_date: release.istDate,
+      istTime: release.istTime,
+      source: release.source,
+      release,
+      daysUntil: daysUntilRelease(nextEp?.air_date, nextSources),
       airsSoon: releaseTs - Date.now() < AIRS_SOON_WINDOW_MS,
     }
   }
@@ -194,15 +201,17 @@ export function computeWatchingStatus(episodesBySeason, watched, details) {
   // cadence, count down to a predicted date one week past the last aired episode
   // so the UI shows "airs in N days" instead of going blank for the week. The
   // next real fetch overrides this automatically via the branch above.
-  const predictedAirDate = predictWeeklyNextAirDate(episodesBySeason)
-  const predictedTs = releaseTimestamp(predictedAirDate)
-  if (predictedTs !== null && predictedTs > Date.now()) {
+  const prediction = predictWeeklyNextRelease(episodesBySeason)
+  if (prediction && prediction.timestamp > Date.now()) {
     return {
       type: 'countdown',
       subtype: 'episode',
-      air_date: predictedAirDate,
-      daysUntil: daysUntil(predictedAirDate),
-      airsSoon: predictedTs - Date.now() < AIRS_SOON_WINDOW_MS,
+      air_date: prediction.istDate,
+      istTime: prediction.istTime,
+      source: prediction.source,
+      release: prediction,
+      daysUntil: daysBetween(localTodayISO(), prediction.istDate),
+      airsSoon: prediction.timestamp - Date.now() < AIRS_SOON_WINDOW_MS,
       predicted: true,
     }
   }

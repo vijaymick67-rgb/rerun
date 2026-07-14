@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, getExternalIds } from '../lib/tmdb'
-import { getShowAirstamps } from '../lib/tvmaze'
-import { episodeKey, hasAired, formatDate, episodeReleaseDateInIST } from '../lib/watchHelpers'
+import { getShowReleaseMap } from '../lib/tvmaze'
+import { episodeKey, hasAired, formatDate, episodeReleaseInfo } from '../lib/watchHelpers'
+import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import {
   showDetailCacheKey,
   seasonDetailCacheKey,
@@ -57,15 +58,14 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
               .eq('season_number', numericSeasonNumber),
             getShowDetails(numericTmdbId),
             getSeasonEpisodes(numericTmdbId, numericSeasonNumber),
-            getShowAirstamps(numericTmdbId, { getExternalIds }),
+            getShowReleaseMap(numericTmdbId, { getExternalIds }),
           ])
         if (watchedError) throw watchedError
         if (ignore) return
 
         const nextShowName = details.name ?? ''
         const seasonEpisodes = (seasonData.episodes ?? []).map((ep) => {
-          const airstamp = airstamps[episodeKey(numericSeasonNumber, ep.episode_number)]
-          return airstamp ? { ...ep, airstamp } : ep
+          return attachEpisodeReleaseData(ep, airstamps, numericSeasonNumber)
         })
         const watchedList = (watchedRows ?? []).map((row) =>
           episodeKey(numericSeasonNumber, row.episode_number),
@@ -235,6 +235,10 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             const isWatched = watched.has(epKey)
             const isBusy = busyEpisodes.has(ep.episode_number)
             const episodeHasAired = hasAired(ep)
+            const release = episodeReleaseInfo(ep)
+            const releaseLabel = release
+              ? `${formatDate(release.istDate)} · ${release.istTime} IST`
+              : null
 
             return (
               <div
@@ -246,11 +250,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
                     {ep.episode_number}. {ep.name || 'Untitled'}
                   </p>
                   <p className="text-xs text-(--color-text-muted)">
-                    {episodeHasAired
-                      ? formatDate(episodeReleaseDateInIST(ep))
-                      : ep.air_date
-                        ? `Airs ${formatDate(episodeReleaseDateInIST(ep))}`
-                        : 'No air date'}
+                    {releaseLabel
+                      ? episodeHasAired ? releaseLabel : `Airs ${releaseLabel}`
+                      : 'No air date'}
                   </p>
                 </div>
 

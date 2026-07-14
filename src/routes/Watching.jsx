@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getExternalIds, getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
-import { getShowAirstamps } from '../lib/tvmaze'
+import { getShowReleaseMap } from '../lib/tvmaze'
 import { episodeKey } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import { isHiddenShow, isVisibleInWatching } from '../lib/finishedShows'
@@ -51,6 +51,7 @@ export default function Watching() {
         const { candidates, preloadedById } = await selectTrackedShowsForWatching(
           trackedShows,
           getShowDetails,
+          (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
         )
 
         if (candidates.length === 0) {
@@ -85,7 +86,7 @@ export default function Watching() {
           {
             getShowDetails,
             getSeasonEpisodes,
-            getShowAirstamps: (tmdbId) => getShowAirstamps(tmdbId, { getExternalIds }),
+            getShowReleaseMap: (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
           },
         )
 

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { searchShows, getShowDetails, POSTER_BASE } from '../lib/tmdb'
+import { searchShows, getExternalIds, getShowDetails, POSTER_BASE } from '../lib/tmdb'
 import { supabase } from '../lib/supabase'
-import { daysUntil } from '../lib/watchHelpers'
+import { daysUntil, daysUntilRelease, releaseSources } from '../lib/watchHelpers'
+import { getShowReleaseMap } from '../lib/tvmaze'
+import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { upsertTrackedShow } from '../lib/finishedShows'
 
@@ -88,8 +90,12 @@ export default function Browse() {
 
     try {
       const details = await getShowDetails(show.id)
-      const premiereDate = details.next_episode_to_air?.air_date ?? details.first_air_date ?? null
-      const daysAway = daysUntil(premiereDate)
+      const releaseMap = await getShowReleaseMap(show.id, { getExternalIds })
+      const nextEpisode = attachEpisodeReleaseData(details.next_episode_to_air, releaseMap)
+      const premiereDate = nextEpisode?.air_date ?? details.first_air_date ?? null
+      const daysAway = nextEpisode
+        ? daysUntilRelease(premiereDate, releaseSources(nextEpisode))
+        : daysUntil(premiereDate)
       if (daysAway !== null && daysAway > DELAYED_ADD_THRESHOLD_DAYS) {
         setDelayedAddMessage(
           "This show premieres in a while! We'll automatically add it to your Watching tab closer to the release date.",

@@ -16,8 +16,8 @@ function installLocalStorage() {
 
 // A canned TVmaze /episodes payload: HBO-style Sunday-night drop.
 const TVMAZE_EPISODES = [
-  { season: 1, number: 1, airstamp: '2026-07-19T21:00:00-04:00' },
-  { season: 1, number: 2, airstamp: '2026-07-26T21:00:00-04:00' },
+  { id: 101, season: 1, number: 1, airdate: '2026-07-19', airtime: '21:00', airstamp: '2026-07-19T21:00:00-04:00' },
+  { id: 102, season: 1, number: 2, airdate: '2026-07-26', airtime: '21:00', airstamp: '2026-07-26T21:00:00-04:00' },
   // Malformed rows are skipped, not thrown on.
   { season: 1, number: null, airstamp: '2026-08-02T21:00:00-04:00' },
   { season: 2, number: 1, airstamp: null },
@@ -44,8 +44,9 @@ describe('getShowAirstamps — TMDB→TVmaze bridge (happy path)', () => {
     const map = await getShowAirstamps(1, { getExternalIds })
 
     expect(map).toEqual({
-      '1:1': '2026-07-19T21:00:00-04:00',
-      '1:2': '2026-07-26T21:00:00-04:00',
+      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101 },
+      '1:2': { airstamp: '2026-07-26T21:00:00-04:00', airdate: '2026-07-26', airtime: '21:00', tvmazeEpisodeId: 102 },
+      '2:1': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: null },
     })
     // The IMDb id is passed to TVmaze's lookup endpoint.
     expect(global.fetch).toHaveBeenCalledWith(
