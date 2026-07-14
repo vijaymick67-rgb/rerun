@@ -8,6 +8,7 @@ import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { upsertTrackedShow } from '../lib/finishedShows'
 import BrowseNews from '../components/BrowseNews'
+import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 
 const DEBOUNCE_MS = 400
 const DELAYED_ADD_THRESHOLD_DAYS = 60
@@ -93,6 +94,7 @@ export default function Browse() {
 
     if (!insertError) {
       setTrackedIds((prev) => new Set(prev).add(show.id))
+      setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
     } else {
       return
     }
@@ -130,6 +132,7 @@ export default function Browse() {
     try {
       await upsertTrackedShow(supabase, show)
       setTrackedIds((prev) => new Set(prev).add(show.id))
+      setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
 
       const { rows } = await buildAiredEpisodeRows(show.id)
       await upsertWatchedRows(rows)

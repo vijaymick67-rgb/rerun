@@ -6,9 +6,10 @@ import { createNewsClient, NEWS_REFRESH_MS } from './client.js'
 import { matchArticleToTrackedShow } from './matchTrackedShows.js'
 import {
   dismissMyShowsArticle, emptyNewsState, mergeNews, NEWS_CACHE_KEY,
-  readNewsCache, selectGeneralNews, writeNewsCache,
+  readNewsCache, selectGeneralNews, visibleMyShowsArticles, writeNewsCache,
 } from './newsStore.js'
 import { formatRelativeTime } from './relativeTime.js'
+import { upsertTrackedShowForNews } from './trackedShows.js'
 
 const shows = [
   { tmdb_id: 1, name: 'House of the Dragon' },
@@ -47,6 +48,36 @@ describe('tracked-show news matching', () => {
   it('rejects malformed articles safely', () => {
     expect(matchArticleToTrackedShow(null, shows).matched).toBe(false)
     expect(matchArticleToTrackedShow({}, shows).matched).toBe(false)
+  })
+})
+
+describe('in-session tracked-show updates', () => {
+  it('makes a newly added show eligible for My Shows news without a reload', () => {
+    const cached = mergeNews(emptyNewsState(), [
+      article(70, 'Severance renewed after acclaimed season'),
+    ], shows)
+    expect(visibleMyShowsArticles(cached)).toHaveLength(0)
+
+    const existing = [{ tmdb_id: 1, name: 'House of the Dragon', hidden_at: null }]
+    const tracked = upsertTrackedShowForNews(existing, { id: 70, name: 'Severance' })
+    const rematched = mergeNews(cached, Object.values(cached.articles), tracked, cached.lastSuccess)
+
+    expect(tracked).toEqual([
+      existing[0],
+      { tmdb_id: 70, name: 'Severance' },
+    ])
+    expect(visibleMyShowsArticles(rematched)).toMatchObject([
+      { id: 'a70', matchedShowId: 70, matchedShowName: 'Severance' },
+    ])
+  })
+
+  it('updates an existing record in place and deduplicates by tmdb_id', () => {
+    const first = { tmdb_id: 1, name: 'Old name', hidden_at: null }
+    const second = { tmdb_id: 2, name: 'Other show' }
+    expect(upsertTrackedShowForNews([first, second], { id: 1, title: 'New name' })).toEqual([
+      { tmdb_id: 1, name: 'New name', hidden_at: null },
+      second,
+    ])
   })
 })
 
