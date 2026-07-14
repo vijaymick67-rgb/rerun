@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { releaseDateInIST, releaseTimestamp } from './networkReleaseTiming'
+import {
+  releaseDateInIST,
+  releaseTimestamp,
+  resolveReleaseDateInIST,
+  resolveReleaseTimestamp,
+} from './networkReleaseTiming'
 import { hasAired } from './watchHelpers'
 
 afterEach(() => {
@@ -56,6 +61,65 @@ describe('universal release anchor', () => {
     expect(releaseDateInIST('2026-07-14')).toBe('2026-07-14')
     expect(releaseDateInIST('2026-01-01')).toBe('2026-01-01')
     expect(releaseDateInIST('nope')).toBeNull()
+  })
+})
+
+describe('resolveReleaseTimestamp — TVmaze priority chain', () => {
+  // TVmaze's airstamp is a full ISO 8601 instant with a real UTC offset — e.g.
+  // HBO's Sunday-night 9 PM ET drop. This is the whole point of the feature:
+  // parse it directly, don't fall back to the calendar-day anchor.
+  const HBO_SUNDAY = '2026-07-19T21:00:00-04:00' // Sun 9 PM ET
+  const HBO_SUNDAY_MS = Date.parse('2026-07-20T01:00:00.000Z')
+
+  // TEST 5 — airstamp parsing: new Date() handles the offset format, and the
+  // instant equals the same moment expressed in UTC.
+  it('parses a TVmaze offset airstamp to the correct absolute instant', () => {
+    expect(new Date(HBO_SUNDAY).toISOString()).toBe('2026-07-20T01:00:00.000Z')
+    expect(resolveReleaseTimestamp('2026-07-19', { airstamp: HBO_SUNDAY })).toBe(HBO_SUNDAY_MS)
+  })
+
+  // TEST 1 — a show with TVmaze data uses the airstamp-derived instant, NOT the
+  // universal-anchor calculation off the TMDB air_date.
+  it('prefers the airstamp over the universal anchor', () => {
+    const resolved = resolveReleaseTimestamp('2026-07-19', { airstamp: HBO_SUNDAY })
+    expect(resolved).toBe(HBO_SUNDAY_MS)
+    expect(resolved).not.toBe(releaseTimestamp('2026-07-19'))
+  })
+
+  // TEST 2 — priority order: a manual override is an explicit human correction
+  // and wins even when TVmaze also has data.
+  it('lets a manual override win over TVmaze airstamp', () => {
+    const override = Date.parse('2026-07-25T00:00:00.000Z')
+    expect(
+      resolveReleaseTimestamp('2026-07-19', { manualOverride: override, airstamp: HBO_SUNDAY }),
+    ).toBe(override)
+    // ISO-string overrides are accepted too, still beating the airstamp.
+    expect(
+      resolveReleaseTimestamp('2026-07-19', {
+        manualOverride: '2026-07-25T00:00:00.000Z',
+        airstamp: HBO_SUNDAY,
+      }),
+    ).toBe(override)
+  })
+
+  // TEST 3 — no TVmaze match (empty sources) falls through to the universal
+  // anchor with byte-for-byte the same result as before the feature existed.
+  it('falls through to the universal anchor when no higher source is present', () => {
+    expect(resolveReleaseTimestamp('2026-07-19')).toBe(releaseTimestamp('2026-07-19'))
+    expect(resolveReleaseTimestamp('2026-07-19', {})).toBe(releaseTimestamp('2026-07-19'))
+    // A malformed airstamp is ignored, not thrown — it just falls through.
+    expect(resolveReleaseTimestamp('2026-07-19', { airstamp: 'not-a-date' })).toBe(
+      releaseTimestamp('2026-07-19'),
+    )
+  })
+
+  // TEST 4 — HOTD regression: the airstamp resolves to the correct IST Monday
+  // morning (Sun 9 PM ET → Mon 06:30 IST), the exact case the manual day_offset
+  // override was invented to patch. The anchor alone would land on Sunday.
+  it('resolves an HBO Sunday drop to the correct IST Monday (HOTD regression)', () => {
+    expect(resolveReleaseDateInIST('2026-07-19', { airstamp: HBO_SUNDAY })).toBe('2026-07-20')
+    // The bare anchor would keep it on the US Sunday — this is the drift TVmaze fixes.
+    expect(releaseDateInIST('2026-07-19')).toBe('2026-07-19')
   })
 })
 

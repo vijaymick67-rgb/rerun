@@ -219,6 +219,19 @@ export async function getSeasonEpisodes(tmdbId, seasonNumber, options = {}) {
   return cacheTimedResult(cacheKey, trimmed)
 }
 
+// TMDB external IDs (imdb_id, tvdb_id, …) for a show. Used to bridge a TMDB
+// show to its TVmaze entry (TVmaze keys /lookup/shows on imdb=). External IDs
+// never change, so this is cached long-lived (no TTL) like search results — the
+// TVmaze bridge only needs to resolve once per show. Returns { imdb_id }, where
+// imdb_id may be null when TMDB has none (→ no TVmaze match, silent fallback).
+export async function getExternalIds(tmdbId) {
+  const cacheKey = `/tv/${tmdbId}/external_ids`
+  const cached = readCache(cacheKey)
+  if (cached) return cached
+  const data = await tmdbFetch(`/tv/${tmdbId}/external_ids`)
+  return cacheResult(cacheKey, { imdb_id: data.imdb_id ?? null })
+}
+
 // A single episode's runtime in minutes (real per-episode runtime, not an estimate).
 export async function getEpisodeRuntime(tmdbId, seasonNumber, episodeNumber) {
   const cacheKey = `/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}:runtime`

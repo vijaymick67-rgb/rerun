@@ -81,3 +81,81 @@ describe('Watching archived-show loading', () => {
     expect(isRepresentedInStats(enriched[0], [{ tmdb_show_id: 9, key: episodeKey(1, 1) }])).toBe(true)
   })
 })
+
+describe('Watching TVmaze airstamp enrichment', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const baseDeps = () => ({
+    getShowDetails: vi.fn(async () => ({
+      networks: [],
+      status: 'Returning Series',
+      seasons: [{ season_number: 1 }],
+      next_episode_to_air: null,
+    })),
+    getSeasonEpisodes: vi.fn(async () => ({
+      // TMDB air_date is the US Sunday; the real IST drop is Monday morning.
+      episodes: [{ episode_number: 1, name: 'Premiere', air_date: '2026-07-19' }],
+    })),
+  })
+
+  it('gates on the TVmaze airstamp, not the universal anchor', async () => {
+    // now: Mon 2026-07-20 04:00 IST (Sun 22:30 UTC) — PAST the 14:00-IST anchor
+    // for the Sunday air_date, but BEFORE the real HBO drop (Mon 06:30 IST).
+    vi.setSystemTime(new Date('2026-07-19T22:30:00.000Z'))
+    const deps = baseDeps()
+    // HBO Sunday 9 PM ET → Mon 01:00 UTC → Mon 06:30 IST.
+    const getShowAirstamps = vi.fn(async () => ({ '1:1': '2026-07-19T21:00:00-04:00' }))
+
+    const enriched = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 5, name: 'Dragons' }],
+      new Map(),
+      new Map(),
+      { ...deps, getShowAirstamps },
+    )
+
+    // Anchor logic would say ep1 already aired (nextUp). The airstamp says it
+    // hasn't dropped yet → not nextUp.
+    expect(enriched[0].status.type).not.toBe('nextUp')
+    expect(getShowAirstamps).toHaveBeenCalledWith(5)
+  })
+
+  it('marks the episode aired once the airstamp instant passes', async () => {
+    // now: Mon 2026-07-20 08:00 IST (02:30 UTC) — past the 06:30 IST drop.
+    vi.setSystemTime(new Date('2026-07-20T02:30:00.000Z'))
+    const deps = baseDeps()
+    const getShowAirstamps = vi.fn(async () => ({ '1:1': '2026-07-19T21:00:00-04:00' }))
+
+    const enriched = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 5, name: 'Dragons' }],
+      new Map(),
+      new Map(),
+      { ...deps, getShowAirstamps },
+    )
+
+    expect(enriched[0].status).toMatchObject({
+      type: 'nextUp',
+      season_number: 1,
+      episode_number: 1,
+    })
+  })
+
+  it('falls back to the universal anchor when TVmaze has no match', async () => {
+    // Same instant as the first test, but no TVmaze data: the anchor says the
+    // Sunday air_date already released at 14:00 IST → nextUp.
+    vi.setSystemTime(new Date('2026-07-19T22:30:00.000Z'))
+    const deps = baseDeps()
+    const getShowAirstamps = vi.fn(async () => ({})) // no match
+
+    const enriched = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 5, name: 'Dragons' }],
+      new Map(),
+      new Map(),
+      { ...deps, getShowAirstamps },
+    )
+
+    expect(enriched[0].status).toMatchObject({ type: 'nextUp', episode_number: 1 })
+  })
+})

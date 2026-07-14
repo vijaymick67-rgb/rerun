@@ -1,0 +1,146 @@
+// TVmaze release-timestamp source.
+//
+// TMDB gives only a calendar air_date; TVmaze's episode `airstamp` is a full
+// ISO 8601 instant with the network's real UTC offset, so it pins the release
+// moment timezone-correctly with no arithmetic. This module bridges a TMDB show
+// to its TVmaze entry (via the show's IMDb id) and exposes a
+// season:episode → airstamp map keyed with Rerun's existing episodeKey scheme.
+//
+// Everything here degrades silently. Any failure — no IMDb id, no TVmaze match,
+// 404, network error, rate limit, malformed JSON — resolves to null / an empty
+// map so callers fall straight through to the universal-anchor fallback. It
+// never throws and never blocks the UI. A show with no TVmaze data behaves
+// exactly as it did before this module existed.
+//
+// Caching mirrors tmdb.js's stale-while-revalidate pattern (localStorage, JSON,
+// a parallel time key). No API key is required by TVmaze, so none is added.
+
+import { episodeKey } from './watchHelpers.js'
+
+const TVMAZE_BASE = 'https://api.tvmaze.com'
+
+// A TVmaze show-id mapping never changes → cached long-lived (no TTL). A
+// *negative* result (show absent from TVmaze) is cached with a TTL so a show
+// later added to TVmaze is eventually rediscovered instead of written off.
+const SHOW_ID_PREFIX = 'tvmaze_showid:v1:'
+const NEGATIVE_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+// Episode airstamps shift while a season is airing → the same 6h staleness
+// window getShowDetails/getSeasonEpisodes use, revalidated in the background.
+const EPISODES_PREFIX = 'tvmaze_episodes:v1:'
+const EPISODES_TIME_PREFIX = 'tvmaze_episodes_time:v1:'
+const EPISODES_MAX_AGE_MS = 6 * 60 * 60 * 1000
+
+function readJson(key) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function writeJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // localStorage full/unavailable — cache is best-effort
+  }
+}
+
+function readTime(key) {
+  try {
+    const value = Number(localStorage.getItem(key))
+    return Number.isFinite(value) && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+// GET → parsed JSON, or null on any non-OK status (404 no-match, 429 rate
+// limit, 5xx) or transport/parse error. Callers treat null as "no data".
+async function fetchJson(url) {
+  const res = await fetch(url)
+  if (!res.ok) return null
+  return res.json()
+}
+
+// Resolve (and cache) the TVmaze show id for a TMDB show, bridging via IMDb.
+// `getExternalIds` is injected (the tmdb.js function) so this stays testable
+// without a live TMDB proxy. Returns a number, or null when unmatched/failed.
+export async function getTvmazeShowId(tmdbId, { getExternalIds }) {
+  const cached = readJson(SHOW_ID_PREFIX + tmdbId)
+  if (cached) {
+    // Positive mappings are immutable → use forever.
+    if (typeof cached.id === 'number') return cached.id
+    // Fresh negative → don't hammer the lookup; stale negative → retry below.
+    if (Date.now() - (cached.at ?? 0) < NEGATIVE_MAX_AGE_MS) return null
+  }
+
+  try {
+    const external = await getExternalIds(tmdbId)
+    const imdbId = external?.imdb_id
+    if (!imdbId) {
+      writeJson(SHOW_ID_PREFIX + tmdbId, { id: null, at: Date.now() })
+      return null
+    }
+    const show = await fetchJson(
+      `${TVMAZE_BASE}/lookup/shows?imdb=${encodeURIComponent(imdbId)}`,
+    )
+    const id = typeof show?.id === 'number' ? show.id : null
+    writeJson(SHOW_ID_PREFIX + tmdbId, { id, at: Date.now() })
+    return id
+  } catch {
+    // Network/parse error: reuse a stale positive mapping if we have one.
+    return typeof cached?.id === 'number' ? cached.id : null
+  }
+}
+
+// season:episode → airstamp map for a TVmaze show. Stale-while-revalidate: a
+// fresh cached map is returned as-is; otherwise refetched, falling back to the
+// stale map (or an empty map) if the request fails. Never throws.
+export async function getEpisodeAirstampMap(tvmazeId) {
+  if (typeof tvmazeId !== 'number') return {}
+
+  const cacheKey = EPISODES_PREFIX + tvmazeId
+  const cached = readJson(cacheKey)
+  const cachedAt = readTime(EPISODES_TIME_PREFIX + tvmazeId)
+  if (cached && cachedAt && Date.now() - cachedAt < EPISODES_MAX_AGE_MS) return cached
+
+  try {
+    const episodes = await fetchJson(`${TVMAZE_BASE}/shows/${tvmazeId}/episodes`)
+    if (!Array.isArray(episodes)) return cached ?? {}
+    const map = {}
+    for (const ep of episodes) {
+      if (
+        ep &&
+        ep.airstamp &&
+        Number.isInteger(ep.season) &&
+        Number.isInteger(ep.number)
+      ) {
+        map[episodeKey(ep.season, ep.number)] = ep.airstamp
+      }
+    }
+    writeJson(cacheKey, map)
+    writeJson(EPISODES_TIME_PREFIX + tvmazeId, Date.now())
+    return map
+  } catch {
+    return cached ?? {}
+  }
+}
+
+// High-level convenience: season:episode → airstamp map for a TMDB show,
+// resolving the TVmaze id and episode list in one call. Returns {} (never
+// throws) when the show has no TVmaze match or any step fails, so the caller
+// falls through to the universal anchor with no special-casing.
+export async function getShowAirstamps(tmdbId, deps) {
+  try {
+    const tvmazeId = await getTvmazeShowId(tmdbId, deps)
+    if (tvmazeId === null) return {}
+    return await getEpisodeAirstampMap(tvmazeId)
+  } catch {
+    return {}
+  }
+}
