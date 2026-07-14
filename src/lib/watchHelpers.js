@@ -85,6 +85,16 @@ export function formatDate(dateString) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+// The IST calendar day an episode actually releases on, honoring a TVmaze
+// airstamp or manual override when present and otherwise falling back to the
+// air_date anchor. This is what should be *displayed*: the raw TMDB air_date is
+// a US calendar day, so for an evening/night US drop it sits one IST day early
+// (an HBO Sunday-night episode lands Monday in IST). Callers that only have a
+// plain air_date get exactly releaseDateInIST(air_date) back.
+export function episodeReleaseDateInIST(episode) {
+  return resolveReleaseDateInIST(episode?.air_date, releaseSources(episode))
+}
+
 // First unwatched episode that has already aired, scanning seasons in order.
 export function computeNextUp(episodesBySeason, watched) {
   const seasonNumbers = Object.keys(episodesBySeason)

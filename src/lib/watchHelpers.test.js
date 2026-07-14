@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { computeWatchingStatus, watchingStatusLabel } from './watchHelpers'
+import {
+  computeWatchingStatus,
+  episodeReleaseDateInIST,
+  watchingStatusLabel,
+} from './watchHelpers'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -121,6 +125,36 @@ describe('computeWatchingStatus — no-cadence guard (Fix D)', () => {
       '2026-07-08T12:00:00.000Z',
     )
     expect(status).toEqual({ type: 'caughtUp' })
+  })
+})
+
+describe('episodeReleaseDateInIST — airstamp-aware display date', () => {
+  // An HBO Sunday 9 PM ET drop: the raw TMDB air_date is the US Sunday, but the
+  // real release lands Monday in IST. The displayed date must follow the
+  // airstamp, not the calendar-day anchor — this is the "one day early" bug.
+  it('uses the airstamp IST day over the raw air_date for an evening US drop', () => {
+    expect(
+      episodeReleaseDateInIST({ air_date: '2026-07-19', airstamp: '2026-07-19T21:00:00-04:00' }),
+    ).toBe('2026-07-20')
+  })
+
+  it('falls back to the air_date itself when no airstamp is present', () => {
+    expect(episodeReleaseDateInIST({ air_date: '2026-07-19' })).toBe('2026-07-19')
+  })
+
+  it('lets a manual override win over both the airstamp and the anchor', () => {
+    expect(
+      episodeReleaseDateInIST({
+        air_date: '2026-07-19',
+        airstamp: '2026-07-19T21:00:00-04:00',
+        releaseOverride: '2026-07-25T09:00:00+05:30',
+      }),
+    ).toBe('2026-07-25')
+  })
+
+  it('returns null for an episode with no usable date', () => {
+    expect(episodeReleaseDateInIST({ air_date: null })).toBeNull()
+    expect(episodeReleaseDateInIST({})).toBeNull()
   })
 })
 

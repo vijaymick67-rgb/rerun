@@ -158,4 +158,55 @@ describe('Watching TVmaze airstamp enrichment', () => {
 
     expect(enriched[0].status).toMatchObject({ type: 'nextUp', episode_number: 1 })
   })
+
+  // The reported HOTD countdown: from 2026-07-14, an HBO Sunday-night episode
+  // (US air_date 2026-07-19, real IST drop Mon 2026-07-20) is 6 days out, not 5.
+  // The airstamp-attached next_episode_to_air must count off the true IST day.
+  const hotdDeps = () => ({
+    getShowDetails: vi.fn(async () => ({
+      networks: [],
+      status: 'Returning Series',
+      seasons: [{ season_number: 1 }],
+      next_episode_to_air: { air_date: '2026-07-19', season_number: 1, episode_number: 2 },
+    })),
+    getSeasonEpisodes: vi.fn(async () => ({
+      episodes: [{ episode_number: 1, name: 'Premiere', air_date: '2026-07-12' }],
+    })),
+  })
+
+  it('counts down to the airstamp IST day (6 days, not the anchor 5)', async () => {
+    vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z')) // 2026-07-14 IST
+    const getShowAirstamps = vi.fn(async () => ({ '1:2': '2026-07-19T21:00:00-04:00' }))
+
+    const enriched = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 5, name: 'Dragons' }],
+      new Map([[5, new Set(['1:1'])]]),
+      new Map(),
+      { ...hotdDeps(), getShowAirstamps },
+    )
+
+    expect(enriched[0].status).toMatchObject({
+      type: 'countdown',
+      air_date: '2026-07-20',
+      daysUntil: 6,
+    })
+  })
+
+  it('without the airstamp the bare anchor lands one IST day early (5 days)', async () => {
+    vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z')) // 2026-07-14 IST
+    const getShowAirstamps = vi.fn(async () => ({})) // no TVmaze match
+
+    const enriched = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 5, name: 'Dragons' }],
+      new Map([[5, new Set(['1:1'])]]),
+      new Map(),
+      { ...hotdDeps(), getShowAirstamps },
+    )
+
+    expect(enriched[0].status).toMatchObject({
+      type: 'countdown',
+      air_date: '2026-07-19',
+      daysUntil: 5,
+    })
+  })
 })
