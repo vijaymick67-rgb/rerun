@@ -1,5 +1,6 @@
 import { canonicalizeUrl, stableArticleId } from './normalizeArticle.js'
 import { matchArticleToTrackedShow } from './matchTrackedShows.js'
+import { isTvNewsArticle } from './tvNewsFilter.js'
 
 export const NEWS_CACHE_KEY = 'rerun_news_cache:v1'
 export const NEWS_CACHE_VERSION = 1
@@ -111,6 +112,7 @@ export function selectGeneralNews(state, trackedShows) {
   const myShowsIds = new Set([...current.visibleIds, ...current.queuedIds, ...current.dismissedIds])
   return Object.values(current.articles)
     .filter((article) => !myShowsIds.has(article.id) && !matchArticleToTrackedShow(article, trackedShows).matched)
+    .filter(isTvNewsArticle)
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id))
     .slice(0, GENERAL_VISIBLE_LIMIT)
 }

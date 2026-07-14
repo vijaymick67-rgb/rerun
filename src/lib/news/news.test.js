@@ -115,12 +115,38 @@ describe('news normalization and filtering', () => {
     expect(result[0].sourceName).toBe('Variety')
   })
 
-  it('accepts TV-series development and rejects obvious unrelated categories', () => {
-    expect(isTvNewsArticle(article())).toBe(true)
-    expect(isTvNewsArticle(article({ title: 'The movie wins the box office weekend' }))).toBe(false)
-    expect(isTvNewsArticle(article({ title: 'Star scores a hat-trick in the football final' }))).toBe(false)
-    expect(isTvNewsArticle(article({ title: 'Singer announces a new album and tour' }))).toBe(false)
-    expect(isTvNewsArticle(article({ title: 'Celebrity relationship gossip spreads online', description: '' }))).toBe(false)
+  it.each([
+    'HBO renews The Last of Us for season 3',
+    'Netflix releases first trailer for new limited series',
+    'Apple TV+ sets premiere date for Severance season 3',
+    'FX casts lead actor in upcoming drama series',
+    'Peacock cancels comedy series after two seasons',
+  ])('accepts strong TV-entertainment news: %s', (title) => {
+    expect(isTvNewsArticle(article({ title, description: '' }))).toBe(true)
+  })
+
+  it.each([
+    'Iran executes 2 Islamic State members convicted of armed rebellion',
+    'Fans at HR Derby given massive mitts to catch dingers',
+    "TV presenter's apology slammed after insensitive remark on air",
+    'Government network begins new election series on TV',
+    'Police investigate crime series shared on TV network',
+    'Football league launches weekly television series',
+    'K-pop band announces TV music series',
+    'New OLED television series enters production',
+  ])('rejects irrelevant broad-word news: %s', (title) => {
+    expect(isTvNewsArticle(article({ title, description: '' }))).toBe(false)
+  })
+
+  it('requires corporate coverage to connect directly to TV programming', () => {
+    expect(isTvNewsArticle(article({
+      title: 'Paramount and Warner Bros. discuss merger',
+      description: 'The deal could reshape streaming and television programming for subscribers.',
+    }))).toBe(true)
+    expect(isTvNewsArticle(article({
+      title: 'Paramount and Warner Bros. face merger lawsuit',
+      description: 'Investors debated shares and financing.',
+    }))).toBe(false)
     expect(filterTvNews([article(), article({ title: 'Film festival fashion gossip' })])).toHaveLength(1)
   })
 })
@@ -165,7 +191,7 @@ describe('GET /api/news', () => {
     expect(limitRes.body.error.code).toBe('INVALID_LIMIT')
   })
 
-  it('returns normalized, filtered, deduplicated articles with safe metadata', async () => {
+  it('returns normalized, deduplicated candidates with safe metadata', async () => {
     let requestedUrl
     const fetchImpl = vi.fn(async (url) => {
       requestedUrl = new URL(url)
@@ -205,14 +231,14 @@ describe('GET /api/news', () => {
 
     expect(res.statusCode).toBe(200)
     expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=1800, stale-while-revalidate=10800')
-    expect(res.body.articles).toHaveLength(1)
+    expect(res.body.articles).toHaveLength(2)
     expect(res.body.articles[0]).toMatchObject({
       title: 'A TV series is renewed for season 2',
       sourceName: 'Variety',
       provider: 'gnews',
     })
     expect(res.body.articles[0]).not.toHaveProperty('source')
-    expect(res.body.meta).toMatchObject({ provider: 'gnews', cached: false, count: 1 })
+    expect(res.body.meta).toMatchObject({ provider: 'gnews', cached: false, count: 2 })
     expect(Number.isNaN(new Date(res.body.meta.fetchedAt).getTime())).toBe(false)
     expect(requestedUrl.searchParams.get('apikey')).toBe('secret')
     expect(requestedUrl.searchParams.get('q')).toBe('television')
