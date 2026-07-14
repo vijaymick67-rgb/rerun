@@ -13,7 +13,7 @@ export function createNewsClient() {
       if (request) return { cached, refresh: request }
       if (!force && (fresh || attempted)) return { cached, refresh: null }
       attempted = true
-      request = Promise.resolve().then(() => fetchImpl('/api/news?limit=30', { headers: { Accept: 'application/json' } }))
+      request = Promise.resolve().then(() => fetchImpl('/api/news?limit=10', { headers: { Accept: 'application/json' } }))
         .then(async (response) => {
           if (!response?.ok) throw new Error('news unavailable')
           const payload = await response.json()
