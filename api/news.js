@@ -2,7 +2,6 @@ import { createGnewsProvider } from '../src/lib/news/gnewsProvider.js'
 import { dedupeArticles } from '../src/lib/news/dedupeArticles.js'
 import { normalizeArticle } from '../src/lib/news/normalizeArticle.js'
 import { NewsProviderError } from '../src/lib/news/provider.js'
-import { filterTvNews } from '../src/lib/news/tvNewsFilter.js'
 
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 10
@@ -58,7 +57,9 @@ export function createNewsHandler({ env = process.env, fetchImpl = globalThis.fe
       const normalized = rawArticles
         .map((article) => normalizeArticle(article, { fetchedAt }))
         .filter(Boolean)
-      const articles = dedupeArticles(filterTvNews(normalized)).slice(0, limit)
+      // Generic relevance is evaluated in the client after tracked-show matching,
+      // so personal stories are not discarded before the user's shows are known.
+      const articles = dedupeArticles(normalized).slice(0, limit)
 
       json(
         res,

@@ -125,19 +125,28 @@ describe('My Shows inbox', () => {
 
 describe('general news rotation', () => {
   it('excludes visible, queued, and dismissed My Shows stories', () => {
-    let state = mergeNews(emptyNewsState(), [...Array.from({ length: 11 }, (_, i) => myArticle(i)), article(40)], shows)
+    let state = mergeNews(emptyNewsState(), [...Array.from({ length: 11 }, (_, i) => myArticle(i)), article(40, 'New television series announced')], shows)
     state = dismissMyShowsArticle(state, 'a0')
     expect(selectGeneralNews(state, shows).map((item) => item.id)).toEqual(['a40'])
   })
   it('selects the freshest six and removes duplicate identities', () => {
-    const items = Array.from({ length: 8 }, (_, i) => article(i + 20, `TV industry story ${i}`, i))
+    const items = Array.from({ length: 8 }, (_, i) => article(i + 20, `New television series industry story ${i}`, i))
     const state = mergeNews(emptyNewsState(), [...items, { ...items[0] }], shows)
     expect(selectGeneralNews(state, shows).map((item) => item.id)).toEqual(items.slice(0, 6).map((item) => item.id))
   })
   it('rotates after a successful merge', () => {
-    const old = mergeNews(emptyNewsState(), Array.from({ length: 6 }, (_, i) => article(i + 20, `TV story ${i}`, i + 10)), shows)
-    const next = mergeNews(old, [article(99, 'Fresh TV story', -1)], shows)
+    const old = mergeNews(emptyNewsState(), Array.from({ length: 6 }, (_, i) => article(i + 20, `Drama series story ${i}`, i + 10)), shows)
+    const next = mergeNews(old, [article(99, 'Fresh limited series trailer', -1)], shows)
     expect(selectGeneralNews(next, shows)[0].id).toBe('a99')
+  })
+
+  it('keeps a directly named tracked-show story even when generic relevance rejects it', () => {
+    const tracked = [{ tmdb_id: 70, name: 'Severance' }]
+    const candidate = article(70, 'Severance star comments on election network coverage')
+    const state = mergeNews(emptyNewsState(), [candidate], tracked)
+
+    expect(visibleMyShowsArticles(state)).toMatchObject([{ id: 'a70', matchedShowName: 'Severance' }])
+    expect(selectGeneralNews(state, tracked)).toEqual([])
   })
 })
 
@@ -184,7 +193,7 @@ describe('news UI', () => {
   it('renders both headings and enforces card limits', () => {
     const state = mergeNews(emptyNewsState(), [
       ...Array.from({ length: 12 }, (_, i) => myArticle(i)),
-      ...Array.from({ length: 8 }, (_, i) => article(i + 30, `TV business story ${i}`, i)),
+      ...Array.from({ length: 8 }, (_, i) => article(i + 30, `New comedy series story ${i}`, i)),
     ], shows)
     const html = renderToStaticMarkup(<BrowseNewsView state={state} trackedShows={shows} />)
     expect(html).toContain('News about your shows')
