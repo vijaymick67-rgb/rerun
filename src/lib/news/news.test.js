@@ -129,6 +129,7 @@ describe('news normalization and filtering', () => {
     'Iran executes 2 Islamic State members convicted of armed rebellion',
     'Fans at HR Derby given massive mitts to catch dingers',
     "TV presenter's apology slammed after insensitive remark on air",
+    "'Ghost Hunters' star listed as owner of R.I.'s 'Conjuring' house",
     'Government network begins new election series on TV',
     'Police investigate crime series shared on TV network',
     'Football league launches weekly television series',
@@ -136,6 +137,13 @@ describe('news normalization and filtering', () => {
     'New OLED television series enters production',
   ])('rejects irrelevant broad-word news: %s', (title) => {
     expect(isTvNewsArticle(article({ title, description: '' }))).toBe(false)
+  })
+
+  it('rejects a TV personality property story despite TV-series context', () => {
+    expect(isTvNewsArticle(article({
+      title: "'Ghost Hunters' star listed as owner of R.I.'s 'Conjuring' house",
+      description: 'The TV series made the property famous with viewers.',
+    }))).toBe(false)
   })
 
   it('requires corporate coverage to connect directly to TV programming', () => {

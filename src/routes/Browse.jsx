@@ -157,7 +157,7 @@ export default function Browse() {
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search for a show…"
+        placeholder="Find a show…"
         className="mt-3 w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
       />
 
@@ -181,12 +181,6 @@ export default function Browse() {
         </div>
       )}
 
-      {!loading && !error && !query.trim() && (
-        <p className="mt-8 text-center text-(--color-text-muted)">
-          Search for a show
-        </p>
-      )}
-
       {!loading && !error && searched && query.trim() && results.length === 0 && (
         <p className="mt-8 text-center text-(--color-text-muted)">
           No results
@@ -194,7 +188,11 @@ export default function Browse() {
       )}
 
       {!loading && !error && results.length > 0 && (
-        <div className="mt-4 grid grid-cols-2 gap-3">
+        <section aria-labelledby="search-results-heading" className="mt-5">
+          <h2 id="search-results-heading" className="text-base font-semibold text-(--color-text)">
+            Search results
+          </h2>
+          <div className="mt-2 grid grid-cols-2 gap-3">
           {results.map((show) => {
             const isTracked = trackedIds.has(show.id)
             const isAdding = addingIds.has(show.id)
@@ -258,10 +256,13 @@ export default function Browse() {
               </div>
             )
           })}
-        </div>
+          </div>
+        </section>
       )}
 
-      <BrowseNews trackedShows={trackedShows} trackedShowsReady={trackedShowsReady} />
+      {!query.trim() && (
+        <BrowseNews trackedShows={trackedShows} trackedShowsReady={trackedShowsReady} />
+      )}
     </div>
   )
 }
