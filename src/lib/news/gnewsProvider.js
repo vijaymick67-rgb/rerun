@@ -3,7 +3,7 @@ import { createNewsProvider, NewsProviderError } from './provider.js'
 const GNEWS_ENDPOINT = 'https://gnews.io/api/v4/search'
 const DEFAULT_TIMEOUT_MS = 8000
 const GNEWS_MAX_ARTICLES = 10
-const TV_NEWS_QUERY = '"TV series" OR television OR "season 2" OR renewed OR cancelled OR showrunner -movie -sports -music -gossip'
+const TV_NEWS_QUERY = 'television'
 
 async function readJsonResponse(response) {
   const body = await response.text()
@@ -24,12 +24,17 @@ function safeDiagnostic(value, apiKey) {
 
 function upstreamDiagnostics(response, payload, apiKey) {
   const providerError = payload?.error
+  const errorEntries = payload?.errors && !Array.isArray(payload.errors) && typeof payload.errors === 'object'
+    ? Object.entries(payload.errors)
+    : []
+  const [attribute, attributeError] = errorEntries[0] ?? []
+  const attributeMessage = Array.isArray(attributeError) ? attributeError[0] : attributeError
   const code = providerError && typeof providerError === 'object'
     ? providerError.code
-    : payload?.code
+    : payload?.code ?? attribute
   const message = providerError && typeof providerError === 'object'
     ? providerError.message
-    : providerError ?? payload?.message ?? payload?.errors?.[0]
+    : providerError ?? payload?.message ?? payload?.errors?.[0] ?? attributeMessage
   return {
     status: Number.isInteger(response?.status) ? response.status : null,
     code: safeDiagnostic(code, apiKey),

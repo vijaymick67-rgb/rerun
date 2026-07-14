@@ -215,7 +215,7 @@ describe('GET /api/news', () => {
     expect(res.body.meta).toMatchObject({ provider: 'gnews', cached: false, count: 1 })
     expect(Number.isNaN(new Date(res.body.meta.fetchedAt).getTime())).toBe(false)
     expect(requestedUrl.searchParams.get('apikey')).toBe('secret')
-    expect(requestedUrl.searchParams.get('q')).toContain('TV series')
+    expect(requestedUrl.searchParams.get('q')).toBe('television')
     expect(requestedUrl.searchParams.get('max')).toBe('5')
   })
 
@@ -231,6 +231,9 @@ describe('GET /api/news', () => {
 
     await provider.fetchArticles({ limit: 30 })
 
+    expect(requestedUrl.searchParams.get('q')).toBe('television')
+    expect(requestedUrl.searchParams.get('lang')).toBe('en')
+    expect(requestedUrl.searchParams.get('sortby')).toBe('publishedAt')
     expect(requestedUrl.searchParams.get('max')).toBe('10')
   })
 
@@ -262,6 +265,8 @@ describe('GET /api/news', () => {
     [401, { error: { code: 'API_KEY_INVALID', message: 'Invalid API key secret-key' } }, 'API_KEY_INVALID', 'Invalid API key [REDACTED]'],
     [403, { errors: ['Plan does not allow this request'] }, null, 'Plan does not allow this request'],
     [400, { code: 'INVALID_ARGUMENT', message: 'Invalid max parameter' }, 'INVALID_ARGUMENT', 'Invalid max parameter'],
+    [400, { errors: { q: 'The query has a syntax error' } }, 'q', 'The query has a syntax error'],
+    [400, { errors: { max: ['The max value is invalid'] } }, 'max', 'The max value is invalid'],
   ])('logs safe diagnostics for an upstream %i response', async (
     status, body, upstreamCode, upstreamMessage,
   ) => {
