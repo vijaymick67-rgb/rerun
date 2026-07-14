@@ -39,3 +39,47 @@ export function istDateISO(now = new Date()) {
   const day = String(shifted.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+
+// --- Priority-chain resolver (TVmaze integration) -------------------------
+//
+// The universal 14:00-IST anchor above is a *fallback*, not the only source.
+// TVmaze's per-episode `airstamp` is a full ISO 8601 instant carrying the
+// network's real UTC offset (e.g. "2026-07-19T21:00:00-04:00"), so it already
+// pins the release moment timezone-correctly — no arithmetic. Given an episode's
+// TMDB air_date plus any higher-priority signals, resolve the release instant
+// (epoch ms) in strict priority order:
+//   1. manualOverride — an explicit human correction (epoch ms or ISO string);
+//      always wins, even over TVmaze.
+//   2. airstamp — TVmaze's absolute ISO 8601 timestamp, parsed with new Date().
+//   3. releaseTimestamp(airDate) — the existing universal anchor, unchanged,
+//      reached only when neither higher source has data (new/niche/regional
+//      shows TVmaze doesn't cover).
+// Returns epoch ms, or null when nothing resolves. This is additive: callers
+// that pass no sources get exactly the old anchor behaviour.
+export function resolveReleaseTimestamp(airDate, sources = {}) {
+  const override = coerceInstant(sources.manualOverride)
+  if (override !== null) return override
+  const airstamp = coerceInstant(sources.airstamp)
+  if (airstamp !== null) return airstamp
+  return releaseTimestamp(airDate)
+}
+
+// The IST calendar day a resolved release lands on. For the plain anchor this
+// is just the air_date (the anchor sits at 14:00 IST on it); for a TVmaze
+// airstamp or manual override it is the true IST day of that instant, which is
+// how the HBO "US-day-only" drift gets corrected (a Sunday-night US drop shows
+// as its actual Monday-morning IST day). Returns null when nothing resolves.
+export function resolveReleaseDateInIST(airDate, sources = {}) {
+  const ts = resolveReleaseTimestamp(airDate, sources)
+  return ts === null ? null : istDateISO(new Date(ts))
+}
+
+// Accept either epoch ms (number) or a parseable date string; reject anything
+// that doesn't yield a finite instant so resolution falls cleanly to the next
+// source in the chain.
+function coerceInstant(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const ms = new Date(value).getTime()
+  return Number.isFinite(ms) ? ms : null
+}

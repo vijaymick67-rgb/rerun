@@ -1,4 +1,18 @@
-import { istDateISO, releaseDateInIST, releaseTimestamp } from './networkReleaseTiming.js'
+import {
+  istDateISO,
+  releaseDateInIST,
+  releaseTimestamp,
+  resolveReleaseDateInIST,
+  resolveReleaseTimestamp,
+} from './networkReleaseTiming.js'
+
+// Higher-priority release signals an episode object may carry, in the shape the
+// priority chain (resolveReleaseTimestamp) expects. `airstamp` comes from
+// TVmaze; `releaseOverride` is reserved for an explicit human correction. Absent
+// on plain TMDB episodes, in which case resolution falls to the anchor.
+function releaseSources(episode) {
+  return { manualOverride: episode?.releaseOverride, airstamp: episode?.airstamp }
+}
 
 // "1 day" not "1 days" — TMDB countdowns routinely land on 1.
 function pluralizeDays(n) {
@@ -34,6 +48,14 @@ export function daysUntil(airDate) {
   return daysBetween(localTodayISO(), releaseDate)
 }
 
+// Days from today (IST) until a resolved release instant — used for countdowns
+// whose moment may come from a TVmaze airstamp rather than an air_date, where
+// the IST calendar day is read off the instant itself. Returns null for no ts.
+function daysUntilInstant(ts) {
+  if (ts === null) return null
+  return daysBetween(localTodayISO(), istDateISO(new Date(ts)))
+}
+
 // Bug fix: "today" used to come from new Date().toISOString(), which converts
 // to UTC first — for IST (UTC+5:30) that's a different calendar day than the
 // user's local "today" for the ~5.5 hours after local midnight, and air_date
@@ -45,8 +67,14 @@ export function daysUntil(airDate) {
 // every "Up next" path from a date-only midnight flip.
 export function hasAired(episode) {
   const airDate = episode.air_date
-  if (!airDate || !ISO_DATE_RE.test(airDate)) return false
-  const timestamp = releaseTimestamp(airDate)
+  // A TVmaze airstamp (or manual override) can stand on its own even when
+  // air_date is missing/malformed, so try the priority chain first and only
+  // require a well-formed air_date when there's no higher-priority source.
+  const sources = releaseSources(episode)
+  if (sources.airstamp == null && sources.manualOverride == null) {
+    if (!airDate || !ISO_DATE_RE.test(airDate)) return false
+  }
+  const timestamp = resolveReleaseTimestamp(airDate, sources)
   return timestamp !== null && Date.now() >= timestamp
 }
 
@@ -71,7 +99,7 @@ export function computeNextUp(episodesBySeason, watched) {
           season_number: seasonNumber,
           episode_number: ep.episode_number,
           name: ep.name,
-          air_date: releaseDateInIST(ep.air_date),
+          air_date: resolveReleaseDateInIST(ep.air_date, releaseSources(ep)),
         }
       }
     }
@@ -94,7 +122,7 @@ function airedEpisodesByRelease(episodesBySeason) {
   const now = Date.now()
   for (const episodes of Object.values(episodesBySeason ?? {})) {
     for (const ep of episodes ?? []) {
-      const ts = releaseTimestamp(ep.air_date)
+      const ts = resolveReleaseTimestamp(ep.air_date, releaseSources(ep))
       if (ts !== null && ts <= now) aired.push({ air_date: ep.air_date, ts })
     }
   }
@@ -139,14 +167,15 @@ export function computeWatchingStatus(episodesBySeason, watched, details) {
   // today or in the past. Only surface a countdown when the 14:00-IST release
   // instant is still ahead of now — a stale/past date means the episode already
   // aired and we should fall through rather than count down to a passed moment.
-  const nextAirDate = details?.next_episode_to_air?.air_date
-  const releaseTs = releaseTimestamp(nextAirDate)
+  const nextEp = details?.next_episode_to_air
+  const nextSources = releaseSources(nextEp)
+  const releaseTs = resolveReleaseTimestamp(nextEp?.air_date, nextSources)
   if (releaseTs !== null && releaseTs > Date.now()) {
     return {
       type: 'countdown',
-      subtype: details.next_episode_to_air.episode_number === 1 ? 'premiere' : 'episode',
-      air_date: releaseDateInIST(nextAirDate),
-      daysUntil: daysUntil(nextAirDate),
+      subtype: nextEp.episode_number === 1 ? 'premiere' : 'episode',
+      air_date: resolveReleaseDateInIST(nextEp?.air_date, nextSources),
+      daysUntil: daysUntilInstant(releaseTs),
       airsSoon: releaseTs - Date.now() < AIRS_SOON_WINDOW_MS,
     }
   }

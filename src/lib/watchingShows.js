@@ -1,4 +1,4 @@
-import { computeWatchingStatus } from './watchHelpers.js'
+import { computeWatchingStatus, episodeKey } from './watchHelpers.js'
 import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
 
 // Stage 1: all unfinished shows remain candidates. Finished shows receive only
@@ -36,12 +36,12 @@ export async function enrichTrackedShowsForWatching(
   candidates,
   watchedByShowId,
   preloadedById,
-  { getShowDetails, getSeasonEpisodes },
+  { getShowDetails, getSeasonEpisodes, getShowAirstamps },
 ) {
   return Promise.all(
     candidates.map(async (show) => {
       const watched = watchedByShowId.get(show.tmdb_id) ?? new Set()
-      const episodesBySeason = {}
+      let episodesBySeason = {}
       let loadError = false
       let details = preloadedById.get(show.tmdb_id)?.details ?? null
 
@@ -60,6 +60,18 @@ export async function enrichTrackedShowsForWatching(
         seasons.forEach((season, index) => {
           episodesBySeason[season.season_number] = episodeArrays[index].episodes
         })
+
+        // Overlay TVmaze airstamps (a smarter first-choice release source) onto
+        // both the season episodes and next_episode_to_air. getShowAirstamps
+        // never throws and returns {} when the show has no TVmaze match, so a
+        // missing/failed lookup leaves every episode on the universal anchor.
+        if (getShowAirstamps) {
+          const airstamps = await getShowAirstamps(show.tmdb_id)
+          if (airstamps && Object.keys(airstamps).length > 0) {
+            episodesBySeason = attachAirstamps(episodesBySeason, airstamps)
+            details = attachNextEpisodeAirstamp(details, airstamps)
+          }
+        }
       } catch {
         loadError = true
       }
@@ -71,4 +83,29 @@ export async function enrichTrackedShowsForWatching(
       }
     }),
   )
+}
+
+// Return a copy of episodesBySeason with each episode's TVmaze `airstamp`
+// attached where a season:episode match exists. Episodes without a match are
+// left untouched (they keep resolving via the universal anchor).
+function attachAirstamps(episodesBySeason, airstamps) {
+  const out = {}
+  for (const [seasonNumber, episodes] of Object.entries(episodesBySeason)) {
+    out[seasonNumber] = (episodes ?? []).map((ep) => {
+      const airstamp = airstamps[episodeKey(Number(seasonNumber), ep.episode_number)]
+      return airstamp ? { ...ep, airstamp } : ep
+    })
+  }
+  return out
+}
+
+// Attach the matching TVmaze airstamp to details.next_episode_to_air, so the
+// countdown branch resolves off the true release instant too. No-op when the
+// pointer is absent or has no TVmaze match.
+function attachNextEpisodeAirstamp(details, airstamps) {
+  const next = details?.next_episode_to_air
+  if (!next) return details
+  const airstamp = airstamps[episodeKey(next.season_number, next.episode_number)]
+  if (!airstamp) return details
+  return { ...details, next_episode_to_air: { ...next, airstamp } }
 }
