@@ -7,6 +7,8 @@ import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { upsertTrackedShow } from '../lib/finishedShows'
+import BrowseNews from '../components/BrowseNews'
+import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 
 const DEBOUNCE_MS = 400
 const DELAYED_ADD_THRESHOLD_DAYS = 60
@@ -18,6 +20,8 @@ export default function Browse() {
   const [error, setError] = useState(null)
   const [searched, setSearched] = useState(false)
   const [trackedIds, setTrackedIds] = useState(new Set())
+  const [trackedShows, setTrackedShows] = useState([])
+  const [trackedShowsReady, setTrackedShowsReady] = useState(false)
   const [addingIds, setAddingIds] = useState(new Set())
   const [loggingIds, setLoggingIds] = useState(new Set())
   const [loggedIds, setLoggedIds] = useState(new Set())
@@ -28,10 +32,15 @@ export default function Browse() {
     let ignore = false
     supabase
       .from('tracked_shows')
-      .select('tmdb_id, hidden_at')
+      .select('tmdb_id, name, hidden_at')
       .then(({ data, error: fetchError }) => {
-        if (ignore || fetchError || !data) return
-        setTrackedIds(new Set(data.filter((row) => row.hidden_at == null).map((row) => row.tmdb_id)))
+        if (ignore) return
+        if (!fetchError && data) {
+          const active = data.filter((row) => row.hidden_at == null)
+          setTrackedShows(active)
+          setTrackedIds(new Set(active.map((row) => row.tmdb_id)))
+        }
+        setTrackedShowsReady(true)
       })
     return () => {
       ignore = true
@@ -85,6 +94,7 @@ export default function Browse() {
 
     if (!insertError) {
       setTrackedIds((prev) => new Set(prev).add(show.id))
+      setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
     } else {
       return
     }
@@ -122,6 +132,7 @@ export default function Browse() {
     try {
       await upsertTrackedShow(supabase, show)
       setTrackedIds((prev) => new Set(prev).add(show.id))
+      setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
 
       const { rows } = await buildAiredEpisodeRows(show.id)
       await upsertWatchedRows(rows)
@@ -249,6 +260,8 @@ export default function Browse() {
           })}
         </div>
       )}
+
+      <BrowseNews trackedShows={trackedShows} trackedShowsReady={trackedShowsReady} />
     </div>
   )
 }
