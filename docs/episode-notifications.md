@@ -49,6 +49,16 @@ The publisher uses ntfy's UTF-8 JSON API: `POST https://ntfy.sh` with `Content-T
 
 `notification_deliveries` has unique episode/type identity. A worker atomically claims undelivered episodes before publishing. A successful ntfy response is followed by `delivered_at`; a failed response removes that worker's claim so a later run can retry. Thirty-minute stale claims recover interrupted runs, and workflow concurrency prevents normal overlap. There is an unavoidable external-system crash window if ntfy accepts a message but the process dies before recording success; no ntfy idempotency guarantee is assumed.
 
+## Scheduler backup
+
+GitHub Actions remains the primary scheduler. Vercel Cron provides one backup trigger at 10:05 PM IST using the UTC expression `35 16 * * *` and calls `/api/notification-cron`. Both schedulers invoke the same exported `runNotificationWorker()`, which continues to use the single `buildNotificationPlan()` authority. The UTC schedule only chooses when to invoke the worker; it does not calculate episode eligibility or the 10:00â€“11:59 PM IST reminder window.
+
+Configure these server-only variables in the Vercel production environment: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TMDB_API_KEY`, `NTFY_TOPIC`, `RERUN_NOTIFICATIONS_ENABLED`, and `CRON_SECRET`. Vercel sends `Authorization: Bearer <CRON_SECRET>` to the cron route. Never use `VITE_` prefixes for these values. The route fails closed when the secret is missing and returns only safe operational fields.
+
+GitHub Actions and Vercel may invoke the worker close together. The existing atomic Supabase episode/type claims and durable deliveries decide which invocation can publish, so the backup adds no lock, state table, or deduplication path. Inspect backup execution in the Vercel project's Runtime Logs for `/api/notification-cron`; detailed eligibility decisions remain server-side and responses never contain show, episode, topic, or credential data.
+
+To roll back the backup, remove or disable the Vercel cron entry while leaving the worker, planner, GitHub Actions workflow, and notification delivery state unchanged.
+
 ## Logs, rollback, and migration from tv-notifier
 
 Logs are in the **Episode notifications** Actions run. They include TMDB ID, episode identity, inclusion/exclusion reason, platform classification, date source, and availability formatted in IST. They never include credentials, the topic URL, or the API-key-bearing TMDB URL.
@@ -74,3 +84,4 @@ Nothing in this migration copies `shows.txt`, `resolved.json`, `seen.json`, `NET
 Each newly available episode can produce two independent notifications. The availability notification uses `episode_available` and retains the existing 24-hour lookback. The second watch reminder uses `episode_watch_reminder` and is evaluated from 10:00 PM through 11:59 PM IST. Its release interval is based on IST calendar cutoffs: strictly after the previous day's 10:00 PM and at or before the current day's 10:00 PM. It only includes episodes still unwatched at planning and claim time, so watching an episode after its availability push prevents the reminder. Each type can be delivered once independently; availability delivery does not block the reminder.
 
 Because the workflow runs every 15 minutes, an ordinary schedule delay may deliver the reminder shortly after 10:00 PM. Outside the bounded 10:00–11:59 PM IST window, dry-run reports `outsideWatchReminderWindow` rather than presenting a reminder as immediately sendable. Dry-run distinguishes `wouldNotifyAvailability` and `wouldNotifyWatchReminder`, while `alreadyDeliveredWatchReminder` and `watchedBeforeWatchReminder` explain exclusions. Historical backlog remains excluded.
+
