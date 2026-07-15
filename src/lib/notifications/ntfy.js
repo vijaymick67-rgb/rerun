@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 5.2 seconds
-Output:
 export function buildNtfyRequest(notification, topic) {
   if (typeof topic !== 'string' || topic.trim() === '') throw new Error('NTFY_TOPIC is required')
   const payload = {
