@@ -11,9 +11,11 @@ export default function ShowDetailSkeleton() {
       </div>
 
       <div className="mt-4 flex flex-col gap-2">
-        <div className="h-11 rounded-lg border border-(--color-border) bg-(--color-surface)" />
-        <div className="h-11 rounded-lg border border-(--color-border) bg-(--color-surface)" />
-        <div className="h-11 rounded-lg border border-(--color-border) bg-(--color-surface)" />
+        {[1, 2, 3].map((row) => (
+          <div key={row} className="flex h-11 items-center justify-end rounded-lg border border-(--color-border) bg-(--color-surface) pr-1">
+            <div className="h-8 w-8 rounded-full bg-(--color-surface-raised)" />
+          </div>
+        ))}
       </div>
     </div>
   )

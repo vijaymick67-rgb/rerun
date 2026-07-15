@@ -5,7 +5,9 @@ function EpisodeRowSkeleton() {
         <div className="h-3 w-2/3 rounded bg-(--color-surface-raised)" />
         <div className="mt-2 h-3 w-1/3 rounded bg-(--color-surface-raised)" />
       </div>
-      <div className="h-8 w-24 shrink-0 rounded-md bg-(--color-surface-raised)" />
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center">
+        <div className="h-8 w-8 rounded-full bg-(--color-surface-raised)" />
+      </div>
     </div>
   )
 }
