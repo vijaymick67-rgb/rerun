@@ -50,10 +50,8 @@ export default function Settings() {
       : null
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-semibold text-(--color-text)">Settings</h1>
-
-      <section className="mt-6">
+    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+      <section>
         <h2 className="text-base font-semibold text-(--color-text)">
           Import watch history
         </h2>

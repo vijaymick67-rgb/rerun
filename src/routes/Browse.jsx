@@ -150,15 +150,13 @@ export default function Browse() {
   }
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-semibold text-(--color-text)">Browse</h1>
-
+    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
       <input
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Find a show…"
-        className="mt-3 w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
+        className="w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
       />
 
       {loading && (
