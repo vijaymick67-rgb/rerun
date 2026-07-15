@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 3 seconds
-Output:
 export async function executeNotificationPlan({
   plan,
   enabled = false,
