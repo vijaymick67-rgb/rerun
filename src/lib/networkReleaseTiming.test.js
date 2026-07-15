@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   resolveReleaseInfo,
   timestampFromISTDate,
@@ -8,8 +8,10 @@ const hbo = {
   platform: 'hbo', thresholdHourIST: 8, thresholdMinuteIST: 0, confidence: 'mapped',
 }
 const apple = {
-  platform: 'apple', thresholdHourIST: 14, thresholdMinuteIST: 0, confidence: 'mapped',
+  platform: 'apple', thresholdHourIST: 8, thresholdMinuteIST: 0, confidence: 'mapped',
 }
+
+afterEach(() => vi.useRealTimers())
 
 describe('platform-threshold release resolution', () => {
   it('uses TVmaze airstamp only for the IST date and HBO for the final time', () => {
@@ -36,9 +38,18 @@ describe('platform-threshold release resolution', () => {
       apple,
     )
     expect(result).toMatchObject({
-      istDate: '2026-07-20', thresholdTimeIST: '14:00', platform: 'apple',
-      timestamp: Date.parse('2026-07-20T08:30:00Z'),
+      istDate: '2026-07-20', thresholdTimeIST: '08:00', platform: 'apple',
+      timestamp: Date.parse('2026-07-20T02:30:00Z'),
     })
+  })
+
+  it('keeps a same-day Apple TV episode unavailable until 8 AM IST', () => {
+    const release = resolveReleaseInfo('2026-07-15', {}, apple)
+    vi.useFakeTimers()
+    vi.setSystemTime('2026-07-15T02:29:59.999Z')
+    expect(Date.now()).toBeLessThan(release.timestamp)
+    vi.setSystemTime('2026-07-15T02:30:00.000Z')
+    expect(Date.now()).toBe(release.timestamp)
   })
 
   it('uses valid TVmaze airdate before TMDB when airstamp is missing', () => {

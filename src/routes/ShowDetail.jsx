@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
+import { getShowDetails, getSeasonEpisodes, getExternalIds, POSTER_BASE } from '../lib/tmdb'
+import { getShowReleaseMap } from '../lib/tvmaze'
 import { episodeKey, hasAired } from '../lib/watchHelpers'
+import { classifyReleasePlatform } from '../lib/releasePlatforms'
+import { attachReleaseData } from '../lib/watchingShows'
 import {
   showDetailCacheKey,
   seasonDetailCacheKey,
@@ -58,7 +61,10 @@ function ShowDetailInner({ tmdbId }) {
           .eq('tmdb_show_id', numericTmdbId)
         if (watchedError) throw watchedError
 
-        const details = await getShowDetails(numericTmdbId)
+        const [details, releaseMap] = await Promise.all([
+          getShowDetails(numericTmdbId),
+          getShowReleaseMap(numericTmdbId, { getExternalIds }),
+        ])
         const seasonList = (details.seasons ?? [])
           .filter((season) => season.season_number > 0)
           .sort((a, b) => a.season_number - b.season_number)
@@ -66,10 +72,15 @@ function ShowDetailInner({ tmdbId }) {
         const episodesArrays = await Promise.all(
           seasonList.map((season) => getSeasonEpisodes(numericTmdbId, season.season_number)),
         )
-        const bySeason = {}
+        const plainEpisodesBySeason = {}
         seasonList.forEach((season, i) => {
-          bySeason[season.season_number] = episodesArrays[i].episodes
+          plainEpisodesBySeason[season.season_number] = episodesArrays[i].episodes
         })
+        const bySeason = attachReleaseData(
+          plainEpisodesBySeason,
+          releaseMap,
+          classifyReleasePlatform(details),
+        )
 
         if (ignore) return
 

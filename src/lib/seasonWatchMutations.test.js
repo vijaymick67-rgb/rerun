@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createWatchMutationQueue,
   toggleEpisodeOptimistically,
@@ -8,6 +8,12 @@ import {
 function episode(number, airDate = '2020-01-01') {
   return { episode_number: number, name: `Episode ${number}`, air_date: airDate, runtime: 42 }
 }
+
+const applePlatform = {
+  platform: 'apple', thresholdHourIST: 8, thresholdMinuteIST: 0, confidence: 'mapped',
+}
+
+afterEach(() => vi.useRealTimers())
 
 function deferred() {
   let resolve
@@ -159,5 +165,40 @@ describe('optimistic watch mutations', () => {
     })
     expect(supabase.calls[0].rows.map((row) => row.episode_number)).toEqual([1])
     expect(state.getWatched()).toEqual(new Set(['1:1']))
+  })
+
+  it('excludes a same-day Apple TV episode before 8 AM IST', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime('2026-07-15T02:29:00.000Z')
+    const state = harness()
+    const supabase = makeSupabase()
+    const sameDay = { ...episode(10, '2026-07-15'), releasePlatform: applePlatform }
+
+    await toggleSeasonOptimistically({
+      queue: createWatchMutationQueue(), supabase, episodes: [sameDay],
+      tmdbShowId: 7, seasonNumber: 1,
+      getWatched: state.getWatched, commitWatched: state.commitWatched,
+    })
+
+    expect(supabase.calls).toEqual([])
+    expect(state.getWatched()).toEqual(new Set())
+  })
+
+  it('includes a same-day Apple TV episode at 8 AM IST in the bulk upsert', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime('2026-07-15T02:30:00.000Z')
+    const state = harness()
+    const supabase = makeSupabase()
+    const sameDay = { ...episode(10, '2026-07-15'), releasePlatform: applePlatform }
+
+    await toggleSeasonOptimistically({
+      queue: createWatchMutationQueue(), supabase, episodes: [sameDay],
+      tmdbShowId: 7, seasonNumber: 1,
+      getWatched: state.getWatched, commitWatched: state.commitWatched,
+    })
+
+    expect(supabase.calls).toHaveLength(1)
+    expect(supabase.calls[0].rows.map((row) => row.episode_number)).toEqual([10])
+    expect(state.getWatched()).toEqual(new Set(['1:10']))
   })
 })

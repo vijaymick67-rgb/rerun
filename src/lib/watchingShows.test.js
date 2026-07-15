@@ -1,10 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  attachEpisodeReleaseData,
+  attachReleaseData,
   enrichTrackedShowsForWatching,
   selectTrackedShowsForWatching,
 } from './watchingShows'
-import { episodeKey } from './watchHelpers'
+import { episodeKey, hasAired } from './watchHelpers'
 import { isRepresentedInStats, isVisibleInWatching } from './finishedShows'
+
+describe('detail-screen release eligibility', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('gives Show Detail and Season Detail identical same-day Apple eligibility', () => {
+    vi.useFakeTimers()
+    const episode = { episode_number: 10, name: 'Finale', air_date: '2026-07-15' }
+    const releaseMap = {
+      '1:10': {
+        airstamp: '2026-07-15T00:00:00Z',
+        airdate: '2026-07-15',
+        airtime: '00:00',
+        tvmazeEpisodeId: 1010,
+      },
+    }
+    const apple = {
+      platform: 'apple', thresholdHourIST: 8, thresholdMinuteIST: 0, confidence: 'mapped',
+    }
+    const showDetailEpisode = attachReleaseData({ 1: [episode] }, releaseMap, apple)[1][0]
+    const seasonDetailEpisode = attachEpisodeReleaseData(episode, releaseMap, 1, apple)
+
+    vi.setSystemTime('2026-07-15T02:29:00.000Z')
+    expect(hasAired(showDetailEpisode)).toBe(false)
+    expect(hasAired(seasonDetailEpisode)).toBe(false)
+
+    vi.setSystemTime('2026-07-15T02:30:00.000Z')
+    expect(hasAired(showDetailEpisode)).toBe(true)
+    expect(hasAired(seasonDetailEpisode)).toBe(true)
+  })
+})
 
 describe('Watching archived-show loading', () => {
   beforeEach(() => {
