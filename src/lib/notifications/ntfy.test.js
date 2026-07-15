@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 4.3 seconds
-Output:
 import { describe, expect, it, vi } from 'vitest'
 import { executeNotificationPlan } from './execute.js'
 import { buildNtfyRequest, publishNtfy } from './ntfy.js'
