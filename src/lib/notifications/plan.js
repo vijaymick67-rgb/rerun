@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 3.9 seconds
-Output:
 import { isVisibleInWatching } from '../finishedShows.js'
 import { episodeKey, episodeReleaseInfo, hasAiredAt } from '../watchHelpers.js'
 
