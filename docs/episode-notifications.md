@@ -6,6 +6,10 @@ The GitHub Actions worker reads `tracked_shows` and `watched_episodes` from Reru
 
 TMDB is fetched server-side and normalized by the same pure normalizers used by the browser client. Notification planning is pure; Supabase claims, ntfy publishing, and successful-delivery recording are separate side effects. Only TVmaze/manual release dates are notification-eligible. A raw TMDB date may remain a safe UI fallback, but is not trustworthy enough to trigger a push.
 
+Notifications are a recent-release signal, not a historical backlog feed. The planner uses the timestamp already returned by `episodeReleaseInfo()` and includes it only when `timestamp > now - 24 hours`; an episode exactly 24 hours old is excluded. It does not recalculate dates, time zones, or platform thresholds. Old unwatched catalog episodes therefore remain visible in Rerun without generating pushes.
+
+The notification-only current-airing guard accepts TMDB's normalized `Returning Series` and `In Production` statuses. `Ended`, `Canceled`, missing, and unfamiliar statuses are excluded conservatively with `showNotCurrentlyAiring`. This does not change Watching visibility or any UI behavior.
+
 Do not create a second release-time table or copy thresholds into worker code. Changes to availability belong in Rerun's existing release helpers and their parity tests.
 
 ## Required Actions configuration
@@ -26,11 +30,12 @@ The service-role key is used only in GitHub Actions. The notification table has 
 ## Dry-run and enable procedure
 
 1. Apply `supabase/migrations/20260715080000_add_notification_deliveries.sql`.
-2. Add the four secrets, leaving `RERUN_NOTIFICATIONS_ENABLED=false`.
+2. Add the four secrets, keeping `RERUN_NOTIFICATIONS_ENABLED=false` before and after merge.
 3. In Actions, open **Episode notifications**, choose **Run workflow**, and leave `mode` as `dry-run`.
-4. Inspect every `included`/excluded episode, its platform, date source, and formatted IST availability. Dry-run sends nothing and writes no delivery rows.
-5. For one controlled live test, set `RERUN_NOTIFICATIONS_ENABLED=true`, manually run with `mode=live`, verify ntfy and the delivery row, then rerun to verify no duplicate.
-6. Leave the variable true only after the controlled test is correct. The UTC cron runs every 15 minutes; availability is determined by release timestamps, never cron timezone.
+4. Confirm old catalog backlogs such as Frasier and The Sopranos produce zero notifications.
+5. Confirm only genuinely recent episodes, such as the current Lucky releases, are included and inspect their platform, date source, and formatted IST availability. Dry-run sends nothing and writes no delivery rows.
+6. Only after the dry-run is correct, set `RERUN_NOTIFICATIONS_ENABLED=true` and manually run one controlled `live` test. Verify ntfy and the delivery row, then rerun to prove no duplicate.
+7. Leave the variable true only after the controlled test is correct. The UTC cron runs every 15 minutes; availability is determined by release timestamps, never cron timezone.
 
 Local deterministic simulation (no Supabase, TMDB, TVmaze, or ntfy network calls):
 
