@@ -11,7 +11,7 @@ select cron.schedule(
   'rerun-notification-worker-10pm-ist',
   '30 16 * * *',
   $job$
-  select net.http_post(
+  select net.http_get(
     url := (
       select decrypted_secret
       from vault.decrypted_secrets
@@ -24,8 +24,7 @@ select cron.schedule(
         from vault.decrypted_secrets
         where name = 'rerun_notification_cron_secret'
       )
-    ),
-    body := '{}'::jsonb
+    )
   );
   $job$
 );
