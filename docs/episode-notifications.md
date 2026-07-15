@@ -45,7 +45,7 @@ npm run notifications:simulate
 
 ## Message and deduplication
 
-The request is `POST https://ntfy.sh/<topic>` with a UTF-8 text body and `Title`. When a poster exists it also sends `Attach: https://image.tmdb.org/t/p/w342/<path>` and `Filename: rerun-<tmdb-id>.jpg`. It never sends `Click` or `Actions`.
+The publisher uses ntfy's UTF-8 JSON API: `POST https://ntfy.sh` with `Content-Type: application/json; charset=utf-8`, carrying the topic, title, and message in JSON. Unicode show names, punctuation, and episode titles are preserved. When a poster exists, it remains a remote attachment using the mobile-sized TMDB URL and `rerun-<tmdb-id>.jpg` filename. Text-only notifications omit attachment fields. No `Click` or `Actions` headers or JSON fields are sent.
 
 `notification_deliveries` has unique episode/type identity. A worker atomically claims undelivered episodes before publishing. A successful ntfy response is followed by `delivered_at`; a failed response removes that worker's claim so a later run can retry. Thirty-minute stale claims recover interrupted runs, and workflow concurrency prevents normal overlap. There is an unavoidable external-system crash window if ntfy accepts a message but the process dies before recording success; no ntfy idempotency guarantee is assumed.
 
