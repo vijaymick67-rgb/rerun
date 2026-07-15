@@ -67,7 +67,7 @@ Rollback is immediate: set `RERUN_NOTIFICATIONS_ENABLED=false`. Scheduled runs t
 
 Post-merge checklist:
 
-- Apply the notification delivery migration.
+- Create the two Supabase Vault secrets, then apply the notification delivery and scheduler migrations.
 - Add the four Rerun repository secrets.
 - Run a manual dry-run and inspect expected episodes and IST timestamps.
 - Temporarily enable and run one controlled live test.
