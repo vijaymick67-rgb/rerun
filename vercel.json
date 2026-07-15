@@ -4,7 +4,7 @@
     { "source": "/:path((?!api/).*)", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/notification-cron", "schedule": "35 16 * * *" }
+    { "path": "/api/notification-cron", "schedule": "30 17 * * *" }
   ]
 }
 
