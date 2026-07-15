@@ -2,5 +2,9 @@
   "rewrites": [
     { "source": "/api/tmdb/:path*", "destination": "/api/tmdb?path=:path*" },
     { "source": "/:path((?!api/).*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/notification-cron", "schedule": "35 16 * * *" }
   ]
 }
+
