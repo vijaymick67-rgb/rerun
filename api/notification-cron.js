@@ -65,4 +65,3 @@ export function createNotificationCronHandler({
 }
 
 export default createNotificationCronHandler()
-
