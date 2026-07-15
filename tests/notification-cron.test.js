@@ -82,7 +82,7 @@ describe('notification cron endpoint', () => {
     const migration = await readFile(new URL('../supabase/migrations/20260715100000_schedule_notification_cron.sql', import.meta.url), 'utf8')
     expect(migration).toContain("'30 16 * * *'")
     expect(migration).toContain('cron.schedule')
-    expect(migration).toContain('net.http_post')
+    expect(migration).toContain('net.http_get')
     expect(migration).toContain('/api/notification-cron')
     expect(migration).toContain('rerun_notification_endpoint_url')
     expect(migration).toContain('rerun_notification_cron_secret')
