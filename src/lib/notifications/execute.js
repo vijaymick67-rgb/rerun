@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 3 seconds
+Output:
 export async function executeNotificationPlan({
   plan,
   enabled = false,
@@ -7,13 +10,20 @@ export async function executeNotificationPlan({
   log = () => {},
 }) {
   if (!enabled && !dryRun) return { disabled: true, sent: 0 }
+  const notifications = [...(plan.notifications ?? []), ...(plan.watchReminders ?? [])]
   if (dryRun) {
-    for (const notification of plan.notifications) log({ type: 'wouldNotify', notification })
+    for (const notification of notifications) {
+      log({
+        type: notification.notificationType === 'episode_watch_reminder'
+          ? 'wouldNotifyWatchReminder' : 'wouldNotifyAvailability',
+        notification,
+      })
+    }
     return { dryRun: true, sent: 0 }
   }
 
   let sent = 0
-  for (const notification of plan.notifications) {
+  for (const notification of notifications) {
     const claimed = await deliveryStore.claim(notification)
     if (claimed.length === 0) continue
     const claimedSet = new Set(claimed)
@@ -40,3 +50,4 @@ export async function executeNotificationPlan({
   }
   return { sent }
 }
+
