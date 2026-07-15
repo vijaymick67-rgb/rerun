@@ -78,15 +78,25 @@ describe('notification cron endpoint', () => {
     expect(vercel.crons).toBeUndefined()
   })
 
-  it('defines the Vault-backed 10pm IST Supabase Cron request', async () => {
+  it('defines three Vault-backed Supabase Cron requests with explicit timeout', async () => {
     const migration = await readFile(new URL('../supabase/migrations/20260715100000_schedule_notification_cron.sql', import.meta.url), 'utf8')
-    expect(migration).toContain("'30 16 * * *'")
+    const jobs = [
+      ['rerun-notification-worker-10pm-ist', '30 16 * * *'],
+      ['rerun-notification-worker-1005pm-ist', '35 16 * * *'],
+      ['rerun-notification-worker-1010pm-ist', '40 16 * * *'],
+    ]
+    for (const [name, schedule] of jobs) {
+      expect(migration).toContain(`'${name}'`)
+      expect(migration).toContain(`'${schedule}'`)
+    }
+    expect(new Set(jobs.map(([name]) => name)).size).toBe(3)
     expect(migration).toContain('cron.schedule')
     expect(migration).toContain('net.http_get')
     expect(migration).toContain('/api/notification-cron')
     expect(migration).toContain('rerun_notification_endpoint_url')
     expect(migration).toContain('rerun_notification_cron_secret')
     expect(migration).toContain("'Authorization', 'Bearer '")
+    expect(migration.match(/timeout_milliseconds := 120000/g)).toHaveLength(3)
     expect(migration).not.toMatch(/https?:\/\/[^\s']+/)
     expect(migration).not.toMatch(/CRON_SECRET\s*=/)
   })
