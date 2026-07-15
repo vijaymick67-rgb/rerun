@@ -1,7 +1,7 @@
 export const RELEASE_PLATFORMS = Object.freeze({
   hbo: { thresholdHourIST: 8, thresholdMinuteIST: 0 },
   mgm: { thresholdHourIST: 8, thresholdMinuteIST: 0 },
-  apple: { thresholdHourIST: 14, thresholdMinuteIST: 0 },
+  apple: { thresholdHourIST: 8, thresholdMinuteIST: 0 },
   prime: { thresholdHourIST: 14, thresholdMinuteIST: 0 },
   netflix: { thresholdHourIST: 14, thresholdMinuteIST: 0 },
   disney: { thresholdHourIST: 14, thresholdMinuteIST: 0 },

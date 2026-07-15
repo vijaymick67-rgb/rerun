@@ -3,7 +3,7 @@ import { classifyReleasePlatform } from './releasePlatforms'
 
 const cases = [
   ['HBO', 'hbo', 8], ['Max', 'hbo', 8], ['HBO Max', 'hbo', 8],
-  ['MGM+', 'mgm', 8], ['Apple TV+', 'apple', 14],
+  ['MGM+', 'mgm', 8], ['Apple TV+', 'apple', 8],
   ['Amazon Prime Video', 'prime', 14], ['Prime Video', 'prime', 14],
   ['Netflix', 'netflix', 14], ['Disney+', 'disney', 14],
   ['Disney Plus', 'disney', 14], ['Hulu', 'hulu', 14],
