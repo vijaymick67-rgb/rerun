@@ -20,7 +20,7 @@ export function statsActionItems(show) {
     items.push({ id: 'restore', label: 'Restore to Watching' })
   }
   items.push(
-    { id: 'remove', label: 'Remove from Stats', destructive: true },
+    { id: 'remove', label: 'Remove from Insights', destructive: true },
     { id: 'cancel', label: 'Cancel' },
   )
   return items

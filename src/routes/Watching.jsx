@@ -154,11 +154,9 @@ export default function Watching() {
   const visibleShows = shows.filter((show) => isVisibleInWatching(show, show.status))
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-semibold text-(--color-text)">Watching</h1>
-
+    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
       {loading && (
-        <div className="mt-4 flex flex-col gap-3">
+        <div className="flex flex-col gap-3">
           <WatchingRowSkeleton />
           <WatchingRowSkeleton />
           <WatchingRowSkeleton />
@@ -181,7 +179,7 @@ export default function Watching() {
 
       {!loading && !error && shows.length === 0 && (
         <p className="mt-8 text-center text-(--color-text-muted)">
-          No shows yet. Add some from Browse.
+          No shows yet. Add some from Discover.
         </p>
       )}
 
@@ -192,7 +190,7 @@ export default function Watching() {
       )}
 
       {!loading && visibleShows.length > 0 && (
-        <div className="mt-4 flex flex-col gap-3">
+        <div className="flex flex-col gap-3">
           {visibleShows.map((show) => (
             <WatchingRow
               key={show.id}

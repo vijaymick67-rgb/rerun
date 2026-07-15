@@ -599,11 +599,9 @@ export default function Stats() {
   const hasData = shows.length > 0
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-semibold text-(--color-text)">Stats</h1>
-
+    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
       {loading && (
-        <div className="mt-4 flex flex-col gap-3">
+        <div className="flex flex-col gap-3">
           <div className="h-24 animate-pulse rounded-xl bg-(--color-surface-raised)" />
           <div className="h-12 animate-pulse rounded-lg bg-(--color-surface)" />
           <div className="mt-1 h-16 animate-pulse rounded-lg bg-(--color-surface)" />
@@ -639,13 +637,13 @@ export default function Stats() {
 
       {!loading && !error && !hasData && (
         <p className="mt-8 text-center text-(--color-text-muted)">
-          No watched episodes yet. Mark some watched, or log a finished show from Browse.
+          No watched episodes yet. Mark some watched, or log a finished show from Discover.
         </p>
       )}
 
       {!loading && hasData && (
         <>
-          <div className="mt-4 rounded-xl border border-(--color-accent)/30 bg-(--color-accent-muted) px-4 py-5">
+          <div className="rounded-xl border border-(--color-accent)/30 bg-(--color-accent-muted) px-4 py-5">
             <p className="text-xs font-medium uppercase tracking-wide text-(--color-accent)">
               Total time watched
             </p>
@@ -693,9 +691,18 @@ export default function Stats() {
                         setOpenActionId(toggleStatsActionSheet(openActionId, show.tmdb_id))
                       }}
                       disabled={isBusy}
-                      className="motion-press absolute right-1 top-1 min-h-11 min-w-11 rounded-full bg-black/70 px-2 text-lg leading-none text-white disabled:opacity-60"
+                      className="motion-press absolute right-0.5 top-0.5 flex h-11 w-11 items-center justify-center rounded-full text-white disabled:opacity-60"
                     >
-                      ⋯
+                      <span
+                        aria-hidden="true"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-black/55"
+                      >
+                        <svg viewBox="0 0 14 4" className="h-2.5 w-3.5" fill="currentColor">
+                          <circle cx="2" cy="2" r="1.25" />
+                          <circle cx="7" cy="2" r="1.25" />
+                          <circle cx="12" cy="2" r="1.25" />
+                        </svg>
+                      </span>
                     </button>
                   </div>
 
@@ -723,10 +730,10 @@ export default function Stats() {
         title={confirmingShow ? `Remove ${confirmingShow.name} from Rerun?` : 'Remove show?'}
         message={
           confirmingShow
-            ? `It will disappear from Stats and Watching, but your watched episodes and watch dates will be preserved. Adding it again later will restore your progress.`
+            ? `It will disappear from Insights and Watching, but your watched episodes and watch dates will be preserved. Adding it again later will restore your progress.`
             : ''
         }
-        confirmLabel="Remove from Stats"
+        confirmLabel="Remove from Insights"
         cancelLabel="Cancel"
         danger
         onConfirm={() => confirmingShow && removeShow(confirmingShow)}

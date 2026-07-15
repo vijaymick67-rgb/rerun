@@ -57,7 +57,7 @@ export function BrowseNewsView({ state, trackedShows = [], loading = false, erro
   const general = selectGeneralNews(state, trackedShows).slice(0, 6)
   const hasUsableCache = mine.length > 0 || general.length > 0
   return (
-    <section aria-label="Browse news" className="mt-6 min-w-0">
+    <section aria-label="Discover news" className="mt-6 min-w-0">
       {loading && !hasUsableCache ? <NewsSkeleton /> : <>
         {error && !hasUsableCache && <div className="mt-3 rounded-lg bg-(--color-surface) p-3 text-sm text-(--color-text-muted)">
           News is temporarily unavailable. <button type="button" onClick={onRetry}
