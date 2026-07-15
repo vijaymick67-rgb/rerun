@@ -49,7 +49,7 @@ The publisher uses ntfy's UTF-8 JSON API: `POST https://ntfy.sh` with `Content-T
 
 `notification_deliveries` has unique episode/type identity. A worker atomically claims undelivered episodes before publishing. A successful ntfy response is followed by `delivered_at`; a failed response removes that worker's claim so a later run can retry. Thirty-minute stale claims recover interrupted runs, and workflow concurrency prevents normal overlap. There is an unavoidable external-system crash window if ntfy accepts a message but the process dies before recording success; no ntfy idempotency guarantee is assumed.
 
-## Scheduler backup
+## Scheduler configuration
 
 Supabase Cron is the primary 10:00 PM IST trigger. Migration `20260715100000_schedule_notification_cron.sql` schedules one daily `pg_cron` job at `30 16 * * *` (16:30 UTC; IST is fixed at UTC+05:30). The job calls the protected production `/api/notification-cron` endpoint with `Authorization: Bearer <CRON_SECRET>`. The endpoint only invokes the existing `runNotificationWorker()`; it is an execution target, not a scheduler. GitHub Actions remains the fallback scheduler and continues to run every 15 minutes.
 
