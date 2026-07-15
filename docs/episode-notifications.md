@@ -57,7 +57,7 @@ Before applying the migration, create these Supabase Vault entries without commi
 
 Inspect Supabase Cron execution in `cron.job_run_details` (including the HTTP response status recorded by `pg_net`) and inspect endpoint behavior in Vercel Runtime Logs for `/api/notification-cron`. The existing atomic Supabase episode/type claims and durable deliveries handle close scheduler invocations without a new lock or deduplication path.
 
-To roll back the scheduler, unschedule `rerun-notification-worker-10pm-ist` (or revert the migration) and leave the protected endpoint, worker, planner, GitHub Actions workflow, and notification delivery state unchanged. GitHub Actions remains available as fallback.
+To roll back the scheduler, unschedule all three jobs (`rerun-notification-worker-10pm-ist`, `rerun-notification-worker-1005pm-ist`, and `rerun-notification-worker-1010pm-ist`) or revert the migration. Leave the protected endpoint, worker, planner, GitHub Actions workflow, and notification delivery state unchanged. GitHub Actions remains available as fallback.
 
 ## Logs, rollback, and migration from tv-notifier
 
