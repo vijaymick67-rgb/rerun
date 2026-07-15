@@ -1,13 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
-import { episodeKey } from '../lib/watchHelpers'
-import { showDetailCacheKey, readDetailCache, writeDetailCache, clearDetailCache } from '../lib/detailCache'
-import { markTrackedShowFinished, restoreTrackedShow } from '../lib/finishedShows'
-import { clearWatchingCache } from '../lib/watchingCache'
+import { episodeKey, hasAired } from '../lib/watchHelpers'
+import {
+  showDetailCacheKey,
+  seasonDetailCacheKey,
+  readDetailCache,
+  writeDetailCache,
+  clearDetailCache,
+} from '../lib/detailCache'
 import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
-import ConfirmDialog from '../components/ConfirmDialog'
+import WatchedCircle from '../components/WatchedCircle'
+import { createWatchMutationQueue, toggleSeasonOptimistically } from '../lib/seasonWatchMutations'
 
 // tmdbId changes are handled by remounting (see the keyed wrapper below)
 // rather than resetting state in an effect, so the cache-on-mount
@@ -21,15 +26,16 @@ function ShowDetailInner({ tmdbId }) {
   const [seasons, setSeasons] = useState(() => cached?.seasons ?? [])
   const [episodesBySeason, setEpisodesBySeason] = useState(() => cached?.episodesBySeason ?? {})
   const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
+  const watchedRef = useRef(watched)
+  const mutationQueueRef = useRef(createWatchMutationQueue())
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
-  const [confirmFinish, setConfirmFinish] = useState(false)
-  const [savingFinished, setSavingFinished] = useState(false)
 
   useEffect(() => {
     let ignore = false
 
     async function load() {
+      const mutationVersion = mutationQueueRef.current.version
       setError(null)
       try {
         const { data: trackedShow, error: showError } = await supabase
@@ -74,12 +80,16 @@ function ShowDetailInner({ tmdbId }) {
         setShow(trackedShow)
         setSeasons(seasonList)
         setEpisodesBySeason(bySeason)
-        setWatched(new Set(watchedList))
+        const nextWatched = mutationQueueRef.current.version === mutationVersion
+          ? new Set(watchedList)
+          : watchedRef.current
+        watchedRef.current = nextWatched
+        setWatched(nextWatched)
         writeDetailCache(cacheKey, {
           show: trackedShow,
           seasons: seasonList,
           episodesBySeason: bySeason,
-          watchedList,
+          watchedList: [...nextWatched],
         })
       } catch {
         if (!ignore) setError('Failed to load this show. Try refreshing.')
@@ -107,27 +117,32 @@ function ShowDetailInner({ tmdbId }) {
     )
   }, 0)
 
-  async function setFinished(finished) {
-    if (!show || savingFinished) return
-    setSavingFinished(true)
-    try {
-      if (finished) {
-        const finishedAt = await markTrackedShowFinished(supabase, numericTmdbId)
-        const next = { ...show, finished_at: finishedAt }
-        setShow(next)
-        writeDetailCache(cacheKey, { show: next, seasons, episodesBySeason, watchedList: [...watched] })
-      } else {
-        await restoreTrackedShow(supabase, numericTmdbId)
-        const next = { ...show, finished_at: null, hidden_at: null }
-        setShow(next)
-        writeDetailCache(cacheKey, { show: next, seasons, episodesBySeason, watchedList: [...watched] })
-      }
-      clearWatchingCache()
-    } catch (err) {
-      setError(err.message || 'Could not update this show.')
-    } finally {
-      setSavingFinished(false)
-    }
+  function commitWatched(nextWatchedSet, seasonNumber) {
+    const next = new Set(nextWatchedSet)
+    watchedRef.current = next
+    setWatched(next)
+    const watchedList = [...next]
+    writeDetailCache(cacheKey, { show, seasons, episodesBySeason, watchedList })
+    const seasonCacheKey = seasonDetailCacheKey(numericTmdbId, seasonNumber)
+    const seasonCached = readDetailCache(seasonCacheKey)
+    writeDetailCache(seasonCacheKey, {
+      showName: seasonCached?.showName ?? show?.name ?? '',
+      episodes: seasonCached?.episodes ?? episodesBySeason[seasonNumber] ?? [],
+      watchedList: watchedList.filter((key) => key.startsWith(`${seasonNumber}:`)),
+    })
+  }
+
+  function toggleSeason(seasonNumber) {
+    setError(null)
+    toggleSeasonOptimistically({
+      queue: mutationQueueRef.current,
+      supabase,
+      episodes: episodesBySeason[seasonNumber] ?? [],
+      tmdbShowId: numericTmdbId,
+      seasonNumber,
+      getWatched: () => watchedRef.current,
+      commitWatched: (next) => commitWatched(next, seasonNumber),
+    }).catch((err) => setError(err?.message || 'Could not update this season. Try again.'))
   }
 
   return (
@@ -210,19 +225,6 @@ function ShowDetailInner({ tmdbId }) {
           </div>
 
           <div className="mt-4 flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => (show.finished_at ? setFinished(false) : setConfirmFinish(true))}
-              disabled={savingFinished}
-              className="motion-press w-full rounded-md border border-(--color-border) py-2 text-sm font-medium text-(--color-text) disabled:opacity-60"
-            >
-              {savingFinished
-                ? 'Saving…'
-                : show.finished_at
-                  ? 'Restore to Watching'
-                  : 'Mark finished'}
-            </button>
-
             {seasons.length === 0 && (
               <p className="text-sm text-(--color-text-muted)">
                 Couldn't load season data for this show.
@@ -234,37 +236,39 @@ function ShowDetailInner({ tmdbId }) {
               const watchedCount = episodes.filter((ep) =>
                 watched.has(episodeKey(season.season_number, ep.episode_number)),
               ).length
+              const eligible = episodes.filter(hasAired)
+              const isWatched = eligible.length > 0 && eligible.every((episode) =>
+                watched.has(episodeKey(season.season_number, episode.episode_number)),
+              )
 
               return (
-                <Link
+                <div
                   key={season.season_number}
-                  to={`/watching/${numericTmdbId}/season/${season.season_number}`}
-                  className="flex items-center justify-between rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-3"
+                  className="flex items-center rounded-lg border border-(--color-border) bg-(--color-surface) pl-3 pr-1"
                 >
-                  <span className="text-sm font-medium text-(--color-text)">
-                    Season {season.season_number}
-                  </span>
-                  <span className="flex items-center gap-2 text-xs text-(--color-text-muted)">
-                    {watchedCount}/{episodes.length}
-                    <span aria-hidden="true">›</span>
-                  </span>
-                </Link>
+                  <Link
+                    to={`/watching/${numericTmdbId}/season/${season.season_number}`}
+                    className="flex min-w-0 flex-1 items-center justify-between py-3 pr-2"
+                  >
+                    <span className="text-sm font-medium text-(--color-text)">
+                      Season {season.season_number}
+                    </span>
+                    <span className="flex items-center gap-2 text-xs text-(--color-text-muted)">
+                      {watchedCount}/{episodes.length}
+                      <span aria-hidden="true">›</span>
+                    </span>
+                  </Link>
+                  <WatchedCircle
+                    checked={isWatched}
+                    disabled={eligible.length === 0}
+                    label={`Mark season ${season.season_number} ${isWatched ? 'unwatched' : 'watched'}`}
+                    onClick={() => toggleSeason(season.season_number)}
+                  />
+                </div>
               )
             })}
           </div>
 
-          <ConfirmDialog
-            open={confirmFinish}
-            title={`Mark ${show.name} finished?`}
-            message="This removes the show from Watching but keeps all episode history and Stats data. You can restore it later from this screen."
-            confirmLabel="Mark finished"
-            cancelLabel="Cancel"
-            onConfirm={() => {
-              setConfirmFinish(false)
-              setFinished(true)
-            }}
-            onCancel={() => setConfirmFinish(false)}
-          />
         </>
       )}
     </div>

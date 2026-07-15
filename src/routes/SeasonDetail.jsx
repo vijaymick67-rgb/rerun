@@ -13,9 +13,10 @@ import {
   writeDetailCache,
 } from '../lib/detailCache'
 import SeasonDetailSkeleton from '../components/SeasonDetailSkeleton'
+import WatchedCircle from '../components/WatchedCircle'
 import {
-  markSeasonWatchedMutation,
-  toggleEpisodeMutation,
+  createWatchMutationQueue,
+  toggleEpisodeOptimistically,
 } from '../lib/seasonWatchMutations'
 
 // tmdbId/seasonNumber changes are handled by remounting (see the keyed
@@ -33,15 +34,13 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   const watchedRef = useRef(watched)
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
-  const [busyEpisodes, setBusyEpisodes] = useState(new Set())
-  const busyEpisodesRef = useRef(new Set())
-  const [isSeasonBusy, setIsSeasonBusy] = useState(false)
-  const isSeasonBusyRef = useRef(false)
+  const mutationQueueRef = useRef(createWatchMutationQueue())
 
   useEffect(() => {
     let ignore = false
 
     async function load() {
+      const mutationVersion = mutationQueueRef.current.version
       setError(null)
       try {
         // getShowAirstamps never throws (any failure → {}), so it's safe to
@@ -75,13 +74,15 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
         setShowName(nextShowName)
         setEpisodes(seasonEpisodes)
-        const nextWatched = new Set(watchedList)
+        const nextWatched = mutationQueueRef.current.version === mutationVersion
+          ? new Set(watchedList)
+          : watchedRef.current
         watchedRef.current = nextWatched
         setWatched(nextWatched)
         writeDetailCache(cacheKey, {
           showName: nextShowName,
           episodes: seasonEpisodes,
-          watchedList,
+          watchedList: [...nextWatched],
         })
       } catch {
         if (!ignore) setError('Failed to load this season. Try refreshing.')
@@ -129,56 +130,20 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     syncWatchedCaches(next)
   }
 
-  async function toggleEpisode(episode) {
-    const episodeNumber = episode.episode_number
-    if (busyEpisodesRef.current.has(episodeNumber)) return
-    busyEpisodesRef.current.add(episodeNumber)
-    setBusyEpisodes(new Set(busyEpisodesRef.current))
+  function toggleEpisode(episode) {
+    if (!hasAired(episode)) return
     setError(null)
-
-    try {
-      await toggleEpisodeMutation({
-        supabase,
-        tmdbShowId: numericTmdbId,
-        seasonNumber: numericSeasonNumber,
-        episode,
-        getWatched: () => watchedRef.current,
-        commitWatched,
-      })
-    } catch (err) {
-      setError(err?.message || 'Could not update this episode. Try again.')
-    } finally {
-      busyEpisodesRef.current.delete(episodeNumber)
-      setBusyEpisodes(new Set(busyEpisodesRef.current))
-    }
+    toggleEpisodeOptimistically({
+      queue: mutationQueueRef.current,
+      supabase,
+      tmdbShowId: numericTmdbId,
+      seasonNumber: numericSeasonNumber,
+      episode,
+      getWatched: () => watchedRef.current,
+      commitWatched,
+    })
+      .catch((err) => setError(err?.message || 'Could not update this episode. Try again.'))
   }
-
-  async function markSeasonWatched() {
-    if (isSeasonBusyRef.current) return
-    isSeasonBusyRef.current = true
-    setIsSeasonBusy(true)
-    setError(null)
-
-    try {
-      await markSeasonWatchedMutation({
-        supabase,
-        episodes,
-        tmdbShowId: numericTmdbId,
-        seasonNumber: numericSeasonNumber,
-        getWatched: () => watchedRef.current,
-        commitWatched,
-      })
-    } catch (err) {
-      setError(err?.message || 'Could not mark this season watched. Try again.')
-    } finally {
-      isSeasonBusyRef.current = false
-      setIsSeasonBusy(false)
-    }
-  }
-
-  const hasUnwatchedAiredEpisodes = (episodes ?? []).some(
-    (ep) => hasAired(ep) && !watched.has(episodeKey(numericSeasonNumber, ep.episode_number)),
-  )
 
   return (
     <div className="p-4">
@@ -221,21 +186,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
       {!loading && episodes && (
         <div className="mt-4 flex flex-col gap-2">
-          {hasUnwatchedAiredEpisodes && (
-            <button
-              type="button"
-              onClick={markSeasonWatched}
-              disabled={isSeasonBusy}
-              className="motion-press self-start rounded-md bg-(--color-accent-muted) px-3 py-1.5 text-xs font-medium text-(--color-accent) disabled:opacity-60"
-            >
-              {isSeasonBusy ? 'Marking…' : 'Mark season watched'}
-            </button>
-          )}
-
           {episodes.map((ep) => {
             const epKey = episodeKey(numericSeasonNumber, ep.episode_number)
             const isWatched = watched.has(epKey)
-            const isBusy = busyEpisodes.has(ep.episode_number)
             const episodeHasAired = hasAired(ep)
             const release = episodeReleaseInfo(ep)
             const releaseLabel = release ? formatDate(release.istDate) : null
@@ -243,9 +196,13 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             return (
               <div
                 key={ep.episode_number}
-                className="flex items-center gap-2 rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2"
+                className={`flex items-center gap-2 rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-1.5 ${episodeHasAired ? '' : 'opacity-50'}`}
               >
-                <div className="min-w-0 flex-1">
+                <div className={`min-w-0 flex-1 py-1 ${
+                  episodeHasAired
+                    ? 'transition-transform duration-75 active:translate-y-px motion-reduce:transform-none'
+                    : ''
+                }`}>
                   <p className="truncate text-sm text-(--color-text)">
                     {ep.episode_number}. {ep.name || 'Untitled'}
                   </p>
@@ -256,18 +213,12 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
                   </p>
                 </div>
 
-                <button
-                  type="button"
+                <WatchedCircle
+                  checked={isWatched}
+                  disabled={!episodeHasAired}
+                  label={`Mark episode ${ep.episode_number} ${isWatched ? 'unwatched' : 'watched'}`}
                   onClick={() => toggleEpisode(ep)}
-                  disabled={isBusy || !episodeHasAired}
-                  className={`motion-press shrink-0 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-60 ${
-                    isWatched
-                      ? 'bg-(--color-accent) text-(--color-bg)'
-                      : 'bg-(--color-surface-raised) text-(--color-text-muted)'
-                  }`}
-                >
-                  {isWatched ? 'Watched' : 'Mark watched'}
-                </button>
+                />
               </div>
             )
           })}

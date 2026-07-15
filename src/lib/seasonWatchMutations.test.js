@@ -1,171 +1,163 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  buildUnwatchedAiredRows,
-  markSeasonWatchedMutation,
-  toggleEpisodeMutation,
+  createWatchMutationQueue,
+  toggleEpisodeOptimistically,
+  toggleSeasonOptimistically,
 } from './seasonWatchMutations'
 
-const NOW = '2026-07-12T00:00:00.000Z'
-
-function episode(number, airDate) {
+function episode(number, airDate = '2020-01-01') {
   return { episode_number: number, name: `Episode ${number}`, air_date: airDate, runtime: 42 }
 }
 
-function makeSupabase({ upsertError = null, upsertDelay = 0 } = {}) {
+function deferred() {
+  let resolve
+  const promise = new Promise((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+function makeSupabase(results = []) {
   const calls = []
+  let index = 0
+  const result = () => results[index++] ?? Promise.resolve({ error: null })
   return {
     calls,
-    from() {
+    from(table) {
       return {
         upsert(rows, options) {
-          calls.push({ type: 'upsert', rows, options })
-          return new Promise((resolve) => {
-            setTimeout(() => resolve({ error: upsertError }), upsertDelay)
-          })
+          calls.push({ type: 'upsert', table, rows, options })
+          return result()
         },
         delete() {
-          return {
-            eq() {
-              return this
-            },
+          const call = { type: 'delete', table, filters: [] }
+          calls.push(call)
+          const pending = result()
+          const builder = {
+            eq(column, value) { call.filters.push([column, value]); return builder },
+            then(resolve, reject) { return pending.then(resolve, reject) },
           }
+          return builder
         },
       }
     },
   }
 }
 
-describe('season watch mutations', () => {
-  it('builds rows only for aired episodes that are currently unwatched', () => {
-    const rows = buildUnwatchedAiredRows({
-      episodes: [episode(1, '2020-01-01'), episode(2, '2020-01-02'), episode(3, '2999-01-01')],
-      watched: new Set(['1:1']),
-      tmdbShowId: 7,
-      seasonNumber: 1,
-      watchedAt: NOW,
-    })
+function harness(initial = []) {
+  let watched = new Set(initial)
+  const caches = { show: new Set(initial), season: new Set(initial) }
+  const commitWatched = vi.fn((next) => {
+    watched = new Set(next)
+    caches.show = new Set(next)
+    caches.season = new Set(next)
+  })
+  return { getWatched: () => watched, commitWatched, caches }
+}
 
-    expect(rows).toEqual([
-      {
-        tmdb_show_id: 7,
-        season_number: 1,
-        episode_number: 2,
-        episode_name: 'Episode 2',
-        runtime_minutes: 42,
-        watched_at: NOW,
-      },
-    ])
+function episodeToggle(supabase, state, ep = episode(1)) {
+  return toggleEpisodeOptimistically({
+    queue: state.queue ??= createWatchMutationQueue(), supabase, tmdbShowId: 7,
+    seasonNumber: 1, episode: ep, getWatched: state.getWatched,
+    commitWatched: state.commitWatched,
+  })
+}
+
+describe('optimistic watch mutations', () => {
+  it('checks an episode before Supabase resolves', async () => {
+    const write = deferred()
+    const state = harness()
+    const pending = episodeToggle(makeSupabase([write.promise]), state)
+    expect(state.getWatched()).toEqual(new Set(['1:1']))
+    write.resolve({ error: null })
+    await pending
   })
 
-  it('does not write or replace existing watched episodes when all aired episodes are watched', async () => {
-    const supabase = makeSupabase()
-    const commitWatched = vi.fn()
-
-    await markSeasonWatchedMutation({
-      supabase,
-      episodes: [episode(1, '2020-01-01'), episode(2, '2020-01-02')],
-      tmdbShowId: 7,
-      seasonNumber: 1,
-      getWatched: () => new Set(['1:1', '1:2']),
-      commitWatched,
-    })
-
-    expect(supabase.calls).toEqual([])
-    expect(commitWatched).not.toHaveBeenCalled()
+  it('unchecks an episode before Supabase resolves', async () => {
+    const write = deferred()
+    const state = harness(['1:1'])
+    const pending = episodeToggle(makeSupabase([write.promise]), state)
+    expect(state.getWatched()).toEqual(new Set())
+    write.resolve({ error: null })
+    await pending
   })
 
-  it('uses duplicate-safe insertion and excludes already watched rows from the payload', async () => {
-    const supabase = makeSupabase()
-    const commitWatched = vi.fn()
+  it('rolls state and both caches back when an episode write fails', async () => {
+    const state = harness()
+    const pending = episodeToggle(makeSupabase([Promise.resolve({ error: new Error('nope') })]), state)
+    expect(state.caches.show).toEqual(new Set(['1:1']))
+    await expect(pending).rejects.toThrow('nope')
+    expect(state.getWatched()).toEqual(new Set())
+    expect(state.caches).toEqual({ show: new Set(), season: new Set() })
+  })
 
-    await markSeasonWatchedMutation({
-      supabase,
-      episodes: [episode(1, '2020-01-01'), episode(2, '2020-01-02')],
-      tmdbShowId: 7,
-      seasonNumber: 1,
-      getWatched: () => new Set(['1:1']),
-      commitWatched,
+  it('serializes rapid episode taps and keeps the newest intent', async () => {
+    const first = deferred()
+    const state = harness()
+    const supabase = makeSupabase([first.promise, Promise.resolve({ error: null })])
+    const one = episodeToggle(supabase, state)
+    const two = episodeToggle(supabase, state)
+    expect(state.getWatched()).toEqual(new Set())
+    await Promise.resolve()
+    expect(supabase.calls).toHaveLength(1)
+    first.resolve({ error: null })
+    await Promise.all([one, two])
+    expect(supabase.calls.map((call) => call.type)).toEqual(['upsert', 'delete'])
+    expect(state.getWatched()).toEqual(new Set())
+  })
+
+  it('marks an aired season with one bulk upsert and updates progress immediately', async () => {
+    const write = deferred()
+    const state = harness()
+    const supabase = makeSupabase([write.promise])
+    const pending = toggleSeasonOptimistically({
+      queue: createWatchMutationQueue(), supabase,
+      episodes: [episode(1), episode(2)], tmdbShowId: 7, seasonNumber: 1,
+      getWatched: state.getWatched, commitWatched: state.commitWatched,
     })
+    expect(state.getWatched().size).toBe(2)
+    await Promise.resolve()
+    expect(supabase.calls).toHaveLength(1)
+    expect(supabase.calls[0].rows).toHaveLength(2)
+    write.resolve({ error: null })
+    await pending
+  })
 
+  it('unwatches a season with one season-scoped delete', async () => {
+    const state = harness(['1:1', '1:2', '2:1'])
+    const supabase = makeSupabase()
+    await toggleSeasonOptimistically({
+      queue: createWatchMutationQueue(), supabase,
+      episodes: [episode(1), episode(2)], tmdbShowId: 7, seasonNumber: 1,
+      getWatched: state.getWatched, commitWatched: state.commitWatched,
+    })
+    expect(supabase.calls).toHaveLength(1)
     expect(supabase.calls[0]).toMatchObject({
-      options: {
-        onConflict: 'tmdb_show_id,season_number,episode_number',
-        ignoreDuplicates: true,
-      },
+      type: 'delete', filters: [['tmdb_show_id', 7], ['season_number', 1]],
     })
-    expect(supabase.calls[0].rows.map((row) => row.episode_number)).toEqual([2])
-    expect(supabase.calls[0].rows).not.toContainEqual(
-      expect.objectContaining({ episode_number: 1, watched_at: 'ORIGINAL' }),
-    )
-    expect(commitWatched).toHaveBeenCalledWith(new Set(['1:1', '1:2']))
+    expect(state.getWatched()).toEqual(new Set(['2:1']))
   })
 
-  it('does not update local state when an individual toggle fails', async () => {
-    const supabase = makeSupabase({ upsertError: new Error('write failed') })
-    const commitWatched = vi.fn()
-
-    await expect(
-      toggleEpisodeMutation({
-        supabase,
-        tmdbShowId: 7,
-        seasonNumber: 1,
-        episode: episode(1, '2020-01-01'),
-        getWatched: () => new Set(),
-        commitWatched,
-      }),
-    ).rejects.toThrow('write failed')
-
-    expect(commitWatched).not.toHaveBeenCalled()
-  })
-
-  it('does not update local state when marking a season fails', async () => {
-    const supabase = makeSupabase({ upsertError: new Error('season write failed') })
-    const commitWatched = vi.fn()
-
-    await expect(
-      markSeasonWatchedMutation({
-        supabase,
-        episodes: [episode(1, '2020-01-01')],
-        tmdbShowId: 7,
-        seasonNumber: 1,
-        getWatched: () => new Set(),
-        commitWatched,
-      }),
-    ).rejects.toThrow('season write failed')
-
-    expect(commitWatched).not.toHaveBeenCalled()
-  })
-
-  it('merges concurrent successful toggles into the final local state and cache', async () => {
-    const supabase = makeSupabase({ upsertDelay: 10 })
-    let current = new Set()
-    let cached = new Set()
-    const commitWatched = vi.fn((next) => {
-      current = new Set(next)
-      cached = new Set(next)
+  it('rolls all season state and caches back on failure', async () => {
+    const state = harness(['2:1'])
+    const pending = toggleSeasonOptimistically({
+      queue: createWatchMutationQueue(),
+      supabase: makeSupabase([Promise.resolve({ error: new Error('failed') })]),
+      episodes: [episode(1), episode(2)], tmdbShowId: 7, seasonNumber: 1,
+      getWatched: state.getWatched, commitWatched: state.commitWatched,
     })
-    const getWatched = () => new Set(current)
+    expect(state.getWatched()).toEqual(new Set(['2:1', '1:1', '1:2']))
+    await expect(pending).rejects.toThrow('failed')
+    expect(state.caches).toEqual({ show: new Set(['2:1']), season: new Set(['2:1']) })
+  })
 
-    await Promise.all([
-      toggleEpisodeMutation({
-        supabase,
-        tmdbShowId: 7,
-        seasonNumber: 1,
-        episode: episode(1, '2020-01-01'),
-        getWatched,
-        commitWatched,
-      }),
-      toggleEpisodeMutation({
-        supabase,
-        tmdbShowId: 7,
-        seasonNumber: 1,
-        episode: episode(2, '2020-01-02'),
-        getWatched,
-        commitWatched,
-      }),
-    ])
-
-    expect(current).toEqual(new Set(['1:1', '1:2']))
-    expect(cached).toEqual(new Set(['1:1', '1:2']))
+  it('never inserts future episodes', async () => {
+    const state = harness()
+    const supabase = makeSupabase()
+    await toggleSeasonOptimistically({
+      queue: createWatchMutationQueue(), supabase,
+      episodes: [episode(1), episode(2, '2999-01-01')], tmdbShowId: 7, seasonNumber: 1,
+      getWatched: state.getWatched, commitWatched: state.commitWatched,
+    })
+    expect(supabase.calls[0].rows.map((row) => row.episode_number)).toEqual([1])
+    expect(state.getWatched()).toEqual(new Set(['1:1']))
   })
 })
