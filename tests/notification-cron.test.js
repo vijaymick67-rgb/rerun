@@ -69,13 +69,26 @@ describe('notification cron endpoint', () => {
     expect(JSON.stringify([res.body, errorLog.mock.calls])).not.toMatch(/service-secret|cron-secret/)
   })
 
-  it('preserves rewrites and configures exactly the intended UTC cron', async () => {
+  it('preserves rewrites and leaves scheduling to Supabase Cron', async () => {
     const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'))
     expect(vercel.rewrites).toEqual([
       { source: '/api/tmdb/:path*', destination: '/api/tmdb?path=:path*' },
       { source: '/:path((?!api/).*)', destination: '/index.html' },
     ])
-    expect(vercel.crons).toEqual([{ path: '/api/notification-cron', schedule: '30 17 * * *' }])
+    expect(vercel.crons).toBeUndefined()
+  })
+
+  it('defines the Vault-backed 10pm IST Supabase Cron request', async () => {
+    const migration = await readFile(new URL('../supabase/migrations/20260715100000_schedule_notification_cron.sql', import.meta.url), 'utf8')
+    expect(migration).toContain("'30 16 * * *'")
+    expect(migration).toContain('cron.schedule')
+    expect(migration).toContain('net.http_post')
+    expect(migration).toContain('/api/notification-cron')
+    expect(migration).toContain('rerun_notification_endpoint_url')
+    expect(migration).toContain('rerun_notification_cron_secret')
+    expect(migration).toContain("'Authorization', 'Bearer '")
+    expect(migration).not.toMatch(/https?:\/\/[^\s']+/)
+    expect(migration).not.toMatch(/CRON_SECRET\s*=/)
   })
 
   it('contains no duplicated planner, release, platform, or timezone constants', async () => {
