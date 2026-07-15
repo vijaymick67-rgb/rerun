@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 3.1 seconds
-Output:
 import { pathToFileURL } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import { isVisibleInWatching } from '../../src/lib/finishedShows.js'
