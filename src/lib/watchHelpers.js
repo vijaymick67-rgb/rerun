@@ -67,9 +67,13 @@ export function daysUntilRelease(airDate, sources = {}, platformInfo = {}) {
 //
 // A show only becomes available at its platform threshold; this protects every
 // Up Next path from a date-only midnight flip.
-export function hasAired(episode) {
+export function hasAiredAt(episode, now) {
   const release = episodeReleaseInfo(episode)
-  return release !== null && Date.now() >= release.timestamp
+  return release !== null && Number(now) >= release.timestamp
+}
+
+export function hasAired(episode) {
+  return hasAiredAt(episode, Date.now())
 }
 
 export function formatDate(dateString) {

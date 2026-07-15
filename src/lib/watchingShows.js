@@ -54,47 +54,65 @@ export async function enrichTrackedShowsForWatching(
   return Promise.all(
     candidates.map(async (show) => {
       const watched = watchedByShowId.get(show.tmdb_id) ?? new Set()
-      let episodesBySeason = {}
-      let loadError = false
-      let details = preloadedById.get(show.tmdb_id)?.details ?? null
-      let releaseMap = preloadedById.get(show.tmdb_id)?.releaseMap ?? null
-
-      try {
-        const releaseMapPromise = releaseMap !== null
-          ? Promise.resolve(releaseMap)
-          : loadReleaseMap ? loadReleaseMap(show.tmdb_id) : Promise.resolve({})
-        const [loadedDetails, loadedReleaseMap] = await Promise.all([
-          details ? Promise.resolve(details) : getShowDetails(show.tmdb_id),
-          releaseMapPromise,
-        ])
-        details = loadedDetails
-        releaseMap = loadedReleaseMap
-        const seasons = (details.seasons ?? [])
-          .filter((season) => season.season_number > 0)
-          .sort((a, b) => a.season_number - b.season_number)
-        const episodeArrays = await Promise.all(seasons.map((season) =>
-            getSeasonEpisodes(show.tmdb_id, season.season_number, { refreshDynamic: true }),
-          ))
-        seasons.forEach((season, index) => {
-          episodesBySeason[season.season_number] = episodeArrays[index].episodes
-        })
-
-        // Attach TVmaze date metadata and the derived platform once, then use
-        // the same release map for season rows and show-level episode pointers.
-        const platformInfo = classifyReleasePlatform(details)
-        episodesBySeason = attachReleaseData(episodesBySeason, releaseMap, platformInfo)
-        details = attachDetailsReleaseData(details, releaseMap, platformInfo)
-      } catch {
-        loadError = true
-      }
+      const loaded = await loadWatchingShowData(show, watched, preloadedById.get(show.tmdb_id), {
+        getShowDetails, getSeasonEpisodes, getShowReleaseMap: loadReleaseMap,
+      })
 
       return {
         ...show,
-        loadError,
-        status: computeWatchingStatus(episodesBySeason, watched, details),
+        loadError: loaded.loadError,
+        status: loaded.status,
       }
     }),
   )
+}
+
+export async function loadWatchingShowData(
+  show,
+  watched,
+  preloaded,
+  { getShowDetails, getSeasonEpisodes, getShowReleaseMap },
+) {
+  let episodesBySeason = {}
+  let details = preloaded?.details ?? null
+  let releaseMap = preloaded?.releaseMap ?? null
+  try {
+    const [loadedDetails, loadedReleaseMap] = await Promise.all([
+      details ? Promise.resolve(details) : getShowDetails(show.tmdb_id),
+      releaseMap !== null
+        ? Promise.resolve(releaseMap)
+        : getShowReleaseMap ? getShowReleaseMap(show.tmdb_id) : Promise.resolve({}),
+    ])
+    details = loadedDetails
+    releaseMap = loadedReleaseMap
+    const seasons = (details.seasons ?? [])
+      .filter((season) => season.season_number > 0)
+      .sort((a, b) => a.season_number - b.season_number)
+    const episodeArrays = await Promise.all(seasons.map((season) =>
+      getSeasonEpisodes(show.tmdb_id, season.season_number, { refreshDynamic: true }),
+    ))
+    seasons.forEach((season, index) => {
+      episodesBySeason[season.season_number] = episodeArrays[index].episodes
+    })
+    const platformInfo = classifyReleasePlatform(details)
+    episodesBySeason = attachReleaseData(episodesBySeason, releaseMap, platformInfo)
+    details = attachDetailsReleaseData(details, releaseMap, platformInfo)
+    return {
+      loadError: false,
+      details,
+      releaseMap,
+      episodesBySeason,
+      status: computeWatchingStatus(episodesBySeason, watched, details),
+    }
+  } catch {
+    return {
+      loadError: true,
+      details,
+      releaseMap: releaseMap ?? {},
+      episodesBySeason,
+      status: computeWatchingStatus(episodesBySeason, watched, details),
+    }
+  }
 }
 
 // Return a copy with each episode's structured TVmaze release record attached.

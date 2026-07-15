@@ -132,23 +132,8 @@ export async function searchShows(query) {
 //   :v3 added `episode_run_time` (per-show runtime fallback used by Stats
 //       when an individual episode's own runtime is null)
 //   :v4 added `last_episode_to_air` for post-air archived-show eligibility
-export async function getShowDetails(tmdbId, options = {}) {
-  const cacheKey = `/tv/${tmdbId}:v4`
-  const cached = readCache(cacheKey)
-  if (cached && !options.refreshDynamic) return cached
-  const cachedAt = readCacheTime(cacheKey)
-  if (cached && cachedAt && Date.now() - cachedAt < DYNAMIC_TMDB_MAX_AGE_MS) return cached
-
-  let data
-  try {
-    // Show status and next_episode_to_air change over time. Refresh this small
-    // response periodically so archived shows can discover a newly dated return.
-    data = await tmdbFetch(`/tv/${tmdbId}`, {}, { bypassCache: true })
-  } catch (error) {
-    if (cached) return cached
-    throw error
-  }
-  const trimmed = {
+export function normalizeShowDetails(data) {
+  return {
     id: data.id,
     name: data.name,
     overview: data.overview,
@@ -157,8 +142,6 @@ export async function getShowDetails(tmdbId, options = {}) {
     status: data.status,
     number_of_seasons: data.number_of_seasons,
     number_of_episodes: data.number_of_episodes,
-    // TMDB's show-level typical runtime(s), in minutes — used as a fallback
-    // for episodes whose own `runtime` is null (see Stats time computation).
     episode_run_time: data.episode_run_time ?? [],
     next_episode_to_air: data.next_episode_to_air
       ? {
@@ -185,6 +168,38 @@ export async function getShowDetails(tmdbId, options = {}) {
       poster_path: season.poster_path,
     })),
   }
+}
+
+export function normalizeSeasonEpisodes(data) {
+  return {
+    season_number: data.season_number,
+    name: data.name,
+    episodes: (data.episodes ?? []).map((ep) => ({
+      episode_number: ep.episode_number,
+      name: ep.name,
+      air_date: ep.air_date,
+      runtime: ep.runtime,
+    })),
+  }
+}
+
+export async function getShowDetails(tmdbId, options = {}) {
+  const cacheKey = `/tv/${tmdbId}:v4`
+  const cached = readCache(cacheKey)
+  if (cached && !options.refreshDynamic) return cached
+  const cachedAt = readCacheTime(cacheKey)
+  if (cached && cachedAt && Date.now() - cachedAt < DYNAMIC_TMDB_MAX_AGE_MS) return cached
+
+  let data
+  try {
+    // Show status and next_episode_to_air change over time. Refresh this small
+    // response periodically so archived shows can discover a newly dated return.
+    data = await tmdbFetch(`/tv/${tmdbId}`, {}, { bypassCache: true })
+  } catch (error) {
+    if (cached) return cached
+    throw error
+  }
+  const trimmed = normalizeShowDetails(data)
   return cacheTimedResult(cacheKey, trimmed)
 }
 
@@ -205,16 +220,7 @@ export async function getSeasonEpisodes(tmdbId, seasonNumber, options = {}) {
     if (cached) return cached
     throw error
   }
-  const trimmed = {
-    season_number: data.season_number,
-    name: data.name,
-    episodes: (data.episodes ?? []).map((ep) => ({
-      episode_number: ep.episode_number,
-      name: ep.name,
-      air_date: ep.air_date,
-      runtime: ep.runtime,
-    })),
-  }
+  const trimmed = normalizeSeasonEpisodes(data)
   return cacheTimedResult(cacheKey, trimmed)
 }
 
