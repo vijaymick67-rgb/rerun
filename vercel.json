@@ -7,4 +7,3 @@
     { "path": "/api/notification-cron", "schedule": "30 17 * * *" }
   ]
 }
-
