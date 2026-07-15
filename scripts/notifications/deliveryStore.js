@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 3.2 seconds
-Output:
 import { randomUUID } from 'node:crypto'
 
 export function createDeliveryStore(supabase, now = () => new Date()) {
