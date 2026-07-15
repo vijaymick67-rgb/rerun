@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 3.2 seconds
+Output:
 import { randomUUID } from 'node:crypto'
 
 export function createDeliveryStore(supabase, now = () => new Date()) {
@@ -9,7 +12,7 @@ export function createDeliveryStore(supabase, now = () => new Date()) {
       const episodes = notification.episodes.map((episode) => ({
         season_number: episode.seasonNumber,
         episode_number: episode.episodeNumber,
-        notification_type: 'episode_available',
+        notification_type: notification.notificationType ?? 'episode_available',
       }))
       const { data, error } = await supabase.rpc('claim_episode_notification_deliveries', {
         p_tmdb_show_id: notification.tmdbShowId,
@@ -49,3 +52,4 @@ export function createDeliveryStore(supabase, now = () => new Date()) {
     },
   }
 }
+
