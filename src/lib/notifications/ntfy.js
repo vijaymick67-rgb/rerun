@@ -1,16 +1,24 @@
+Exit code: 0
+Wall time: 5.2 seconds
+Output:
 export function buildNtfyRequest(notification, topic) {
-  if (!topic) throw new Error('NTFY_TOPIC is required')
-  const headers = {
-    Title: notification.title,
-    'Content-Type': 'text/plain; charset=utf-8',
+  if (typeof topic !== 'string' || topic.trim() === '') throw new Error('NTFY_TOPIC is required')
+  const payload = {
+    topic,
+    title: notification.title,
+    message: notification.body,
   }
   if (notification.attachment) {
-    headers.Attach = notification.attachment.url
-    headers.Filename = notification.attachment.filename
+    payload.attach = notification.attachment.url
+    payload.filename = notification.attachment.filename
   }
   return {
-    url: `https://ntfy.sh/${encodeURIComponent(topic)}`,
-    init: { method: 'POST', headers, body: notification.body },
+    url: 'https://ntfy.sh',
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(payload),
+    },
   }
 }
 
@@ -22,3 +30,4 @@ export async function publishNtfy(notification, { topic, fetchImpl = fetch }) {
   }
   return response
 }
+
