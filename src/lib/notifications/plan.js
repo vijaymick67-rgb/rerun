@@ -1,5 +1,5 @@
 Exit code: 0
-Wall time: 2.9 seconds
+Wall time: 3.9 seconds
 Output:
 import { isVisibleInWatching } from '../finishedShows.js'
 import { episodeKey, episodeReleaseInfo, hasAiredAt } from '../watchHelpers.js'
@@ -9,6 +9,7 @@ export const EPISODE_WATCH_REMINDER_TYPE = 'episode_watch_reminder'
 export const WATCH_REMINDER_START_HOUR_IST = 22
 export const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
+export const NOTIFICATION_LOOKBACK_MS = DAY_MS
 const TRUSTED_DATE_SOURCES = new Set(['manualOverride', 'tvmazeAirstamp', 'tvmazeAirdate'])
 const ELIGIBLE_SHOW_STATUSES = new Set(['Returning Series', 'In Production'])
 const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
