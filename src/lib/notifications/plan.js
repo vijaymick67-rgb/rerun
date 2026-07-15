@@ -2,7 +2,10 @@ import { isVisibleInWatching } from '../finishedShows.js'
 import { episodeKey, episodeReleaseInfo, hasAiredAt } from '../watchHelpers.js'
 
 export const EPISODE_NOTIFICATION_TYPE = 'episode_available'
+export const NOTIFICATION_LOOKBACK_MS = 24 * 60 * 60 * 1000
+export const NOTIFICATION_ELIGIBLE_SHOW_STATUSES = Object.freeze(['Returning Series', 'In Production'])
 const TRUSTED_DATE_SOURCES = new Set(['manualOverride', 'tvmazeAirstamp', 'tvmazeAirdate'])
+const ELIGIBLE_SHOW_STATUSES = new Set(NOTIFICATION_ELIGIBLE_SHOW_STATUSES)
 const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 
 export function deliveryIdentity(tmdbShowId, seasonNumber, episodeNumber) {
@@ -22,11 +25,19 @@ function episodeLine(episode) {
   return episode.name ? `${prefix} · ${episode.name}` : prefix
 }
 
+export function isShowCurrentlyAiringForNotifications(show) {
+  return ELIGIBLE_SHOW_STATUSES.has(show?.details?.status)
+}
+
 export function buildNotificationPlan({ shows = [], delivered = new Set(), now = Date.now() }) {
   const notifications = []
   const decisions = []
 
   for (const show of shows) {
+    if (!isShowCurrentlyAiringForNotifications(show)) {
+      decisions.push({ tmdbShowId: show.tmdb_id, showName: show.name, reason: 'showNotCurrentlyAiring' })
+      continue
+    }
     if (!isVisibleInWatching(show, show.status)) {
       decisions.push({ tmdbShowId: show.tmdb_id, showName: show.name, reason: 'notVisibleInWatching' })
       continue
@@ -65,6 +76,10 @@ export function buildNotificationPlan({ shows = [], delivered = new Set(), now =
         }
         if (!hasAiredAt(episode, now)) {
           decisions.push({ ...base, identity, reason: 'notAvailable' })
+          continue
+        }
+        if (release.timestamp <= now - NOTIFICATION_LOOKBACK_MS) {
+          decisions.push({ ...base, identity, reason: 'outsideNotificationWindow' })
           continue
         }
         const planned = {

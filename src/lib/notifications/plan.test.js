@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { classifyReleasePlatform } from '../releasePlatforms.js'
 import { hasAiredAt } from '../watchHelpers.js'
 import { attachEpisodeReleaseData } from '../watchingShows.js'
-import { buildNotificationPlan, deliveryIdentity, posterAttachment } from './plan.js'
+import {
+  buildNotificationPlan,
+  deliveryIdentity,
+  isShowCurrentlyAiringForNotifications,
+  NOTIFICATION_LOOKBACK_MS,
+  posterAttachment,
+} from './plan.js'
 
 const IST_OFFSET = (5 * 60 + 30) * 60 * 1000
 const atIST = (date, hour, minute = 0) => Date.parse(`${date}T00:00:00Z`) +
@@ -18,11 +24,21 @@ function enrichedEpisode({ season = 1, number = 1, date = '2026-07-15', network 
   )
 }
 
-function show({ id = 1, name = 'Lucky', network = 'Apple TV+', episodes, watched = new Set(), status = { type: 'nextUp' }, hidden_at = null } = {}) {
+function episodeReleasedAt(timestamp, { season = 1, number = 1, network = 'Apple TV+', title = 'Pilot' } = {}) {
+  const date = new Date(timestamp).toISOString().slice(0, 10)
+  return attachEpisodeReleaseData(
+    { season_number: season, episode_number: number, name: title, air_date: date, releaseOverride: new Date(timestamp).toISOString() },
+    {},
+    season,
+    classifyReleasePlatform({ networks: [network] }),
+  )
+}
+
+function show({ id = 1, name = 'Lucky', network = 'Apple TV+', episodes, watched = new Set(), status = { type: 'nextUp' }, hidden_at = null, showStatus = 'Returning Series' } = {}) {
   return {
     tmdb_id: id, name, hidden_at, status, watched,
     poster_path: '/poster.jpg',
-    details: { releasePlatform: classifyReleasePlatform({ networks: [network] }) },
+    details: { status: showStatus, releasePlatform: classifyReleasePlatform({ networks: [network] }) },
     episodesBySeason: { 1: episodes ?? [enrichedEpisode({ network })] },
   }
 }
@@ -53,6 +69,78 @@ describe('notification planning', () => {
     expect(plan.decisions.map((item) => item.reason)).toEqual(expect.arrayContaining([
       'watched', 'delivered', 'untrustedReleaseMetadata',
     ]))
+  })
+
+  it('includes only episodes released within the exact 24-hour notification window', () => {
+    const now = Date.parse('2026-07-15T12:00:00Z')
+    const recent = episodeReleasedAt(now - NOTIFICATION_LOOKBACK_MS + 60_000, { number: 1 })
+    const exactBoundary = episodeReleasedAt(now - NOTIFICATION_LOOKBACK_MS, { number: 2 })
+    const older = episodeReleasedAt(now - NOTIFICATION_LOOKBACK_MS - 60_000, { number: 3 })
+    const plan = buildNotificationPlan({ shows: [show({ episodes: [recent, exactBoundary, older] })], now })
+    expect(plan.notifications[0].episodes.map((episode) => episode.episodeNumber)).toEqual([1])
+    expect(plan.decisions.filter((decision) => decision.reason === 'outsideNotificationWindow')).toHaveLength(2)
+  })
+
+  it('prevents old Frasier and Sopranos backlogs while grouping recent Lucky episodes', () => {
+    const now = Date.parse('2026-07-15T12:00:00Z')
+    const old = Date.parse('2007-01-01T12:00:00Z')
+    const recent = now - 60 * 60 * 1000
+    const plan = buildNotificationPlan({
+      shows: [
+        show({ id: 101, name: 'Frasier', episodes: [episodeReleasedAt(old)] }),
+        show({ id: 102, name: 'The Sopranos', episodes: [episodeReleasedAt(old)] }),
+        show({ id: 103, name: 'Lucky', episodes: [
+          episodeReleasedAt(recent, { number: 2, title: 'Second' }),
+          episodeReleasedAt(recent, { number: 1, title: 'First' }),
+        ] }),
+      ],
+      now,
+    })
+    expect(plan.notifications).toHaveLength(1)
+    expect(plan.notifications[0]).toMatchObject({ tmdbShowId: 103, body: 'S1E1 · First\nS1E2 · Second' })
+  })
+
+  it.each([
+    ['Returning Series', true],
+    ['In Production', true],
+    ['Ended', false],
+    ['Canceled', false],
+    ['Planned', false],
+    ['Pilot', false],
+    [null, false],
+    ['Unexpected Status', false],
+  ])('treats %s as notification-current=%s', (showStatus, expected) => {
+    expect(isShowCurrentlyAiringForNotifications(show({ showStatus }))).toBe(expected)
+  })
+
+  it('conservatively rejects missing show status metadata', () => {
+    const candidate = show()
+    delete candidate.details.status
+    expect(isShowCurrentlyAiringForNotifications(candidate)).toBe(false)
+  })
+
+  it('excludes a recently released episode for an ended show with an explicit reason', () => {
+    const now = Date.parse('2026-07-15T12:00:00Z')
+    const plan = buildNotificationPlan({
+      shows: [show({ showStatus: 'Ended', episodes: [episodeReleasedAt(now - 60_000)] })],
+      now,
+    })
+    expect(plan.notifications).toEqual([])
+    expect(plan.decisions).toContainEqual(expect.objectContaining({ reason: 'showNotCurrentlyAiring' }))
+  })
+
+  it('still excludes recent watched and delivered episodes and future episodes', () => {
+    const now = Date.parse('2026-07-15T12:00:00Z')
+    const recentWatched = episodeReleasedAt(now - 60_000, { number: 1 })
+    const recentDelivered = episodeReleasedAt(now - 60_000, { number: 2 })
+    const future = episodeReleasedAt(now + 60_000, { number: 3 })
+    const plan = buildNotificationPlan({
+      shows: [show({ id: 88, episodes: [recentWatched, recentDelivered, future], watched: new Set(['1:1']) })],
+      delivered: new Set([deliveryIdentity(88, 1, 2)]),
+      now,
+    })
+    expect(plan.notifications).toEqual([])
+    expect(plan.decisions.map((decision) => decision.reason)).toEqual(expect.arrayContaining(['watched', 'delivered', 'notAvailable']))
   })
 
   it.each([
@@ -98,7 +186,7 @@ describe('notification planning', () => {
       filename: 'rerun-42.jpg',
     })
     expect(posterAttachment(null, 42)).toBeNull()
-    const candidate = { ...show(), poster_path: null, details: { releasePlatform: classifyReleasePlatform({ networks: ['Apple TV+'] }), poster_path: null } }
+    const candidate = { ...show(), poster_path: null, details: { status: 'Returning Series', releasePlatform: classifyReleasePlatform({ networks: ['Apple TV+'] }), poster_path: null } }
     expect(buildNotificationPlan({ shows: [candidate], now: atIST('2026-07-15', 8) }).notifications[0].attachment).toBeNull()
   })
 })
