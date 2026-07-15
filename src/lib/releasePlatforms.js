@@ -14,7 +14,7 @@ const PLATFORM_ALIASES = [
   { platform: 'hbo', priority: 100, aliases: ['hbo', 'max', 'hbo max'] },
   { platform: 'mgm', priority: 95, aliases: ['mgm+'] },
   { platform: 'hulu', priority: 90, aliases: ['hulu', 'fx', 'fx on hulu'] },
-  { platform: 'apple', priority: 80, aliases: ['apple tv+'] },
+  { platform: 'apple', priority: 80, aliases: ['apple tv+', 'apple tv'] },
   { platform: 'disney', priority: 70, aliases: ['disney+', 'disney plus'] },
   { platform: 'netflix', priority: 60, aliases: ['netflix'] },
   { platform: 'peacock', priority: 50, aliases: ['peacock'] },
