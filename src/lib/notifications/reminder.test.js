@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 2.9 seconds
-Output:
 import { describe, expect, it, vi } from 'vitest'
 import { executeNotificationPlan } from './execute.js'
 import {
