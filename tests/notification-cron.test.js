@@ -112,4 +112,3 @@ describe('notification cron endpoint', () => {
     expect(publish).toHaveBeenCalledTimes(1)
   })
 })
-
