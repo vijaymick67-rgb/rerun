@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 3.5 seconds
-Output:
 import { classifyReleasePlatform } from '../../src/lib/releasePlatforms.js'
 import { attachEpisodeReleaseData } from '../../src/lib/watchingShows.js'
 import { buildNotificationPlan, deliveryIdentity, EPISODE_WATCH_REMINDER_TYPE } from '../../src/lib/notifications/plan.js'
