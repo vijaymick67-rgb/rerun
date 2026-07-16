@@ -6,7 +6,7 @@ import { getShowReleaseMap } from '../lib/tvmaze'
 import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
-import { removeTrackedShowIfUnwatched, upsertTrackedShow } from '../lib/finishedShows'
+import { removeTrackedShow, upsertTrackedShow } from '../lib/finishedShows'
 import BrowseNews from '../components/BrowseNews'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 
@@ -23,6 +23,8 @@ export default function Browse() {
   const [trackedShows, setTrackedShows] = useState([])
   const [trackedShowsReady, setTrackedShowsReady] = useState(false)
   const [addingIds, setAddingIds] = useState(new Set())
+  const [removingIds, setRemovingIds] = useState(new Set())
+  const [trackErrors, setTrackErrors] = useState({})
   const [loggingIds, setLoggingIds] = useState(new Set())
   const [loggedIds, setLoggedIds] = useState(new Set())
   const [delayedAddMessage, setDelayedAddMessage] = useState(null)
@@ -103,7 +105,7 @@ export default function Browse() {
       setTrackedIds((prev) => new Set(prev).add(show.id))
       setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
     } else {
-      return
+      return false
     }
 
     try {
@@ -128,6 +130,44 @@ export default function Browse() {
     } catch {
       // best-effort — premiere timing is a nice-to-have, the show is already tracked
     }
+    return true
+  }
+
+  async function handleTrackToggle(show) {
+    const isTracked = trackedIds.has(show.id)
+    const pendingSet = isTracked ? setRemovingIds : setAddingIds
+    pendingSet((prev) => new Set(prev).add(show.id))
+    setTrackErrors((prev) => {
+      const next = { ...prev }
+      delete next[show.id]
+      return next
+    })
+
+    try {
+      if (isTracked) {
+        await removeTrackedShow(supabase, show.id)
+        knownTrackedIdsRef.current.delete(show.id)
+        setTrackedIds((prev) => {
+          const next = new Set(prev)
+          next.delete(show.id)
+          return next
+        })
+        setTrackedShows((prev) => prev.filter((item) => item.tmdb_id !== show.id))
+        setDelayedAddMessage((pending) => pending?.show.id === show.id ? null : pending)
+      } else {
+        return await handleAdd(show)
+      }
+      return true
+    } catch {
+      setTrackErrors((prev) => ({ ...prev, [show.id]: 'Could not update tracking. Try again.' }))
+      return false
+    } finally {
+      pendingSet((prev) => {
+        const next = new Set(prev)
+        next.delete(show.id)
+        return next
+      })
+    }
   }
 
   async function handleUndoDelayedAdd() {
@@ -135,20 +175,13 @@ export default function Browse() {
     if (!pending?.undoable || undoingId != null) return
     setUndoingId(pending.show.id)
     setUndoError(null)
-    try {
-      await removeTrackedShowIfUnwatched(supabase, pending.show.id)
-      knownTrackedIdsRef.current.delete(pending.show.id)
-      setTrackedIds((prev) => {
-        const next = new Set(prev)
-        next.delete(pending.show.id)
-        return next
-      })
-      setTrackedShows((prev) => prev.filter((item) => item.tmdb_id !== pending.show.id))
+    const succeeded = await handleTrackToggle(pending.show)
+    setUndoingId(null)
+    if (succeeded) {
+      setUndoError(null)
       setDelayedAddMessage(null)
-    } catch {
+    } else {
       setUndoError('Could not undo this show. Try again.')
-    } finally {
-      setUndoingId(null)
     }
   }
 
@@ -243,6 +276,7 @@ export default function Browse() {
           {results.map((show) => {
             const isTracked = trackedIds.has(show.id)
             const isAdding = addingIds.has(show.id)
+            const isRemoving = removingIds.has(show.id)
             const isLogging = loggingIds.has(show.id)
             const isLogged = loggedIds.has(show.id)
             const year = show.first_air_date
@@ -276,16 +310,21 @@ export default function Browse() {
 
                   <button
                     type="button"
-                    onClick={() => handleAdd(show)}
-                    disabled={isTracked || isAdding}
+                    onClick={() => handleTrackToggle(show)}
+                    disabled={isAdding || isRemoving}
                     className={`motion-press mt-2 w-full rounded-md py-1.5 text-sm font-medium ${
                       isTracked
                         ? 'bg-(--color-surface-raised) text-(--color-text-muted)'
                         : 'bg-(--color-accent) text-(--color-bg) disabled:opacity-60'
                     }`}
                   >
-                    {isTracked ? 'Added' : isAdding ? 'Adding…' : 'Add'}
+                    {isRemoving ? 'Removing…' : isAdding ? 'Adding…' : isTracked ? 'Added' : 'Add'}
                   </button>
+                  {trackErrors[show.id] && (
+                    <p role="alert" className="mt-1 text-xs text-red-400">
+                      {trackErrors[show.id]} <button type="button" onClick={() => handleTrackToggle(show)} className="underline">Retry</button>
+                    </p>
+                  )}
 
                   <button
                     type="button"
