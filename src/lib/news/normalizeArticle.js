@@ -1,3 +1,5 @@
+import { sanitizeNewsText } from './sanitizeNewsText.js'
+
 const TRACKING_PARAMETERS = new Set(['fbclid', 'gclid'])
 
 function isTrackingParameter(name) {
@@ -27,8 +29,18 @@ function cleanText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+// Title/description are third-party text that may still carry raw HTML entities
+// (GNews) or arrive here already decoded by rssProvider (a second, idempotent pass
+// over already-plain text is a no-op — sanitizeNewsText only rewrites text that still
+// contains entity/tag syntax, so running it again for RSS-sourced articles changes
+// nothing). This is what "decode once at the shared ingestion boundary" resolves to
+// in practice: the one place both providers' raw articles pass through.
+function cleanArticleText(value) {
+  return sanitizeNewsText(value)
+}
+
 function cleanDescription(value) {
-  const description = cleanText(value)
+  const description = cleanArticleText(value)
   return description ? description.slice(0, 320) : null
 }
 
@@ -61,7 +73,7 @@ export function stableArticleId(canonicalUrl, provider = 'gnews') {
 export function normalizeArticle(raw, { fetchedAt = new Date().toISOString(), provider = 'gnews' } = {}) {
   if (!raw || typeof raw !== 'object') return null
 
-  const title = cleanText(raw.title)
+  const title = cleanArticleText(raw.title)
   const canonicalUrl = canonicalizeUrl(raw.url)
   const sourceName = cleanText(raw.source?.name)
   const publishedDate = raw.publishedAt ? new Date(raw.publishedAt) : null

@@ -147,6 +147,166 @@ describe('curated RSS/Atom provider', () => {
     }])
   })
 
+  it('decodes decimal, hex, named, and mixed HTML entities in an RSS title', async () => {
+    const feed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Showrunner&#8217;s New Series &#038; More &#x2014; &quot;From&quot; &amp; &#x201C;You&#x201D;</title>
+      <link>https://example.com/entities</link>
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.title).toBe('Showrunner’s New Series & More — "From" & “You”')
+  })
+
+  it('decodes entities mixed with HTML tags inside a CDATA description', async () => {
+    const feed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Story with a rich description</title>
+      <link>https://example.com/cdata-entities</link>
+      <description><![CDATA[<p>Tom&apos;s new role &amp; <b>more</b> &#8212; the network confirmed it.</p>]]></description>
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.description).toBe("Tom's new role & more — the network confirmed it.")
+  })
+
+  it('cleans up whitespace left behind after decoding &nbsp; in a description', async () => {
+    const feed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Whitespace story</title>
+      <link>https://example.com/whitespace</link>
+      <description>One&nbsp;Two&nbsp;&nbsp;Three</description>
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.description).toBe('One Two Three')
+  })
+
+  it('never lets an entity-encoded script tag survive as markup in an RSS title or description', async () => {
+    const feed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>&lt;script&gt;alert(1)&lt;/script&gt;Breaking News</title>
+      <link>https://example.com/encoded-script</link>
+      <description>&lt;script&gt;alert(1)&lt;/script&gt;The network confirmed it.</description>
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.title).toBe('Breaking News')
+    expect(article.description).toBe('The network confirmed it.')
+    expect(article.title).not.toContain('<')
+    expect(article.description).not.toContain('<')
+  })
+
+  it('never decodes a double-encoded script tag into active markup', async () => {
+    const feed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;Still Escaped</title>
+      <link>https://example.com/double-encoded</link>
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.title).toBe('&lt;script&gt;alert(1)&lt;/script&gt;Still Escaped')
+    expect(article.title).not.toContain('<script>')
+  })
+
+  it('does not crash on a malformed or unknown entity in a feed', async () => {
+    const feed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Weird &foobar; headline &#zzz; text</title>
+      <link>https://example.com/malformed-entity</link>
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const articles = await provider.fetchArticles().catch((error) => error)
+
+    expect(Array.isArray(articles)).toBe(true)
+    expect(articles[0].title).toBe('Weird &foobar; headline &#zzz; text')
+  })
+
+  it('decodes an encoded Atom title and summary', async () => {
+    const feed = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Atom Desk</title>
+  <entry>
+    <title>Showrunner&#8217;s Exit &amp; Return</title>
+    <link rel="alternate" href="https://example.com/atom-entities" />
+    <summary>Tom&apos;s new role &#x2014; &quot;From&quot; renewed.</summary>
+    <published>2026-07-13T08:00:00Z</published>
+  </entry>
+</feed>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'Deadline', url: 'https://deadline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.title).toBe('Showrunner’s Exit & Return')
+    expect(article.description).toBe('Tom\'s new role — "From" renewed.')
+  })
+
+  it('decodes an encoded Atom title and content when summary is absent', async () => {
+    const feed = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Atom Content Story</title>
+    <link rel="alternate" href="https://example.com/atom-content" />
+    <content>News &amp; Updates &#8212; &lt;b&gt;bold&lt;/b&gt; removed</content>
+    <published>2026-07-13T08:00:00Z</published>
+  </entry>
+</feed>`
+    const fetchImpl = vi.fn(async () => textResponse(feed))
+    const provider = createRssProvider({ name: 'Deadline', url: 'https://deadline.com/feed/', fetchImpl })
+
+    const [article] = await provider.fetchArticles()
+
+    expect(article.description).toBe('News & Updates — bold removed')
+  })
+
   it('respects the configured per-source article cap', async () => {
     const fetchImpl = vi.fn(async () => textResponse(RSS_FEED))
     const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl, maxArticles: 1 })
