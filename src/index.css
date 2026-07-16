@@ -54,6 +54,10 @@ body {
   padding-top: max(1rem, var(--safe-area-inset-top));
 }
 
+.nested-page {
+  padding-top: calc(var(--safe-area-inset-top) + 1rem);
+}
+
 .app-tab-bar {
   min-height: 4rem;
   padding-bottom: var(--safe-area-inset-bottom);
