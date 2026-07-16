@@ -109,6 +109,16 @@ export async function upsertTrackedShow(supabase, show, addedAt = new Date().toI
   if (error) throw error
 }
 
+// Browse/Watching removal semantics: delete only the tracked-show row.
+// watched_episodes is intentionally never read or modified here.
+export async function removeTrackedShow(supabase, tmdbId) {
+  const { error } = await supabase
+    .from('tracked_shows')
+    .delete()
+    .eq('tmdb_id', tmdbId)
+  if (error) throw error
+}
+
 // Undo only a newly-created Browse row, and only while it has no watched
 // history. This intentionally never touches watched_episodes.
 export async function removeTrackedShowIfUnwatched(supabase, tmdbId) {
