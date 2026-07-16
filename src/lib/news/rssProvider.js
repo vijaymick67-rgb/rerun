@@ -1,6 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
 import { createNewsProvider, isNewsProviderError, NewsProviderError } from './provider.js'
-import { sanitizeNewsText } from './sanitizeNewsText.js'
 
 const DEFAULT_TIMEOUT_MS = 6000
 const DEFAULT_MAX_ARTICLES = 8
@@ -22,12 +21,14 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 // and — critically — never inside CDATA sections (correct per the XML spec, since CDATA
 // suppresses entity parsing, but most RSS descriptions arrive as CDATA-wrapped HTML
 // specifically expecting entities like "&#8217;" or "&amp;" to be decoded for display).
-// Decoding numeric refs and named HTML entities here as well as in sanitizeNewsText
-// below would mean the same text gets two independent decode passes (once inside the
-// parser, once in our own step) with different rules for text nodes vs CDATA — an
-// inconsistency that is also how a double-escaped string could end up decoded twice.
-// Leaving raw entity text untouched at this layer means sanitizeNewsText's single pass
-// is the only decode step, applied identically regardless of node type.
+// This provider deliberately does no decoding or markup stripping of its own — it only
+// extracts raw text (title/description/etc.) from the parsed XML shape. normalizeArticle
+// is the single authoritative place both RSS/Atom and GNews text get sanitized exactly
+// once; if the parser partially decoded plain-text nodes here while leaving CDATA raw,
+// the text handed to that one downstream pass would already be inconsistently decoded
+// depending on node type, and — worse — a value decoded once here and passed through
+// normalizeArticle's decode step again would receive two decode passes total, which is
+// exactly how a double-escaped string ends up resolving into real markup.
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
@@ -67,9 +68,9 @@ function rssImage(item) {
 }
 
 function rssItemToRaw(item, sourceName) {
-  const title = sanitizeNewsText(textOf(item?.title))
+  const title = textOf(item?.title)
   const link = typeof item?.link === 'string' ? item.link : textOf(item?.link) ?? item?.link?.['@_href']
-  const description = sanitizeNewsText(textOf(item?.description) ?? textOf(item?.['content:encoded']))
+  const description = textOf(item?.description) ?? textOf(item?.['content:encoded'])
   const publishedAt = textOf(item?.pubDate) ?? textOf(item?.['dc:date'])
   if (!title || !link || !publishedAt) return null
   return { title, description, url: link, image: rssImage(item), source: { name: sourceName }, publishedAt }
@@ -82,9 +83,9 @@ function atomLink(entry) {
 }
 
 function atomEntryToRaw(entry, sourceName) {
-  const title = sanitizeNewsText(textOf(entry?.title))
+  const title = textOf(entry?.title)
   const link = atomLink(entry)
-  const description = sanitizeNewsText(textOf(entry?.summary) ?? textOf(entry?.content))
+  const description = textOf(entry?.summary) ?? textOf(entry?.content)
   const publishedAt = textOf(entry?.published) ?? textOf(entry?.updated)
   if (!title || !link || !publishedAt) return null
   return { title, description, url: link, image: null, source: { name: sourceName }, publishedAt }

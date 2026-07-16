@@ -47,16 +47,26 @@ const NAMED_ENTITIES = {
 // away before the NAMED_ENTITIES lookup the way the hex-marker "x"/"X" can.
 const ENTITY_PATTERN = /&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g
 
+const SURROGATE_RANGE_START = 0xd800
+const SURROGATE_RANGE_END = 0xdfff
+
 function decodeEntityMatch(whole, body) {
   if (body[0] === '#') {
     const isHex = body[1] === 'x' || body[1] === 'X'
     const codePoint = isHex ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10)
     if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return whole
+    // A code point in the UTF-16 surrogate range (D800-DFFF) has no valid standalone
+    // character — it only means something as one half of a surrogate pair. Crucially,
+    // String.fromCodePoint does NOT throw for these; it silently returns a lone
+    // surrogate code unit, which would corrupt the string as invalid UTF-16 rather
+    // than fail loudly. Reject the range explicitly instead of relying on a throw.
+    if (codePoint >= SURROGATE_RANGE_START && codePoint <= SURROGATE_RANGE_END) return whole
     try {
       return String.fromCodePoint(codePoint)
     } catch {
-      // Lone surrogate half or similar — leave the original reference untouched
-      // rather than crashing the provider on a malformed upstream feed.
+      // Defensive fallback for any other unrepresentable code point — leave the
+      // original reference untouched rather than crashing the provider on a
+      // malformed upstream feed.
       return whole
     }
   }

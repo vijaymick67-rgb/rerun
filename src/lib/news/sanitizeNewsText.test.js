@@ -50,6 +50,21 @@ describe('decodeHtmlEntities', () => {
     expect(decodeHtmlEntities('&#x110000; out of range')).toBe('&#x110000; out of range')
   })
 
+  it.each([
+    ['&#xD800;', 'hex, start of range'],
+    ['&#xDFFF;', 'hex, end of range'],
+    ['&#55296;', 'decimal, start of range (0xD800)'],
+    ['&#57343;', 'decimal, end of range (0xDFFF)'],
+  ])('rejects a lone UTF-16 surrogate code point (%s, %s) instead of producing an invalid string', (entity) => {
+    // String.fromCodePoint does NOT throw for a surrogate-range code point — it
+    // silently returns a lone surrogate code unit, which is invalid UTF-16 on its
+    // own. Relying on a try/catch here would never fire; the range must be checked
+    // explicitly before ever calling String.fromCodePoint.
+    const input = `Lone surrogate ${entity} here`
+    expect(() => decodeHtmlEntities(input)).not.toThrow()
+    expect(decodeHtmlEntities(input)).toBe(input)
+  })
+
   it('preserves the case distinction between named entities like Aacute and aacute', () => {
     expect(decodeHtmlEntities('&Aacute;&aacute;')).toBe('Áá')
   })
