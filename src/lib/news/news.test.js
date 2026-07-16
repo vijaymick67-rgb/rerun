@@ -117,6 +117,60 @@ describe('news normalization and filtering', () => {
     expect(normalizeArticle({ ...normalized, publishedAt: 'not-a-date' })).toBeNull()
   })
 
+  it('decodes HTML entities in a raw title/description reaching normalizeArticle (the GNews path)', () => {
+    const normalized = normalizeArticle(
+      {
+        title: 'Showrunner&#8217;s Exit &amp; More',
+        description: 'Tom&apos;s new role &#8212; &quot;From&quot; renewed for season 5.',
+        url: 'https://example.com/gnews-entities',
+        source: { name: 'Variety' },
+        publishedAt: '2026-07-13T10:00:00Z',
+      },
+      { fetchedAt: '2026-07-13T11:00:00Z' },
+    )
+
+    expect(normalized.title).toBe('Showrunner’s Exit & More')
+    expect(normalized.description).toBe('Tom\'s new role — "From" renewed for season 5.')
+  })
+
+  it('never lets a decoded entity reveal an active script tag in a normalized article', () => {
+    const normalized = normalizeArticle(
+      {
+        title: '&lt;script&gt;alert(1)&lt;/script&gt;Breaking',
+        description: '&lt;script&gt;alert(1)&lt;/script&gt;The network confirmed it.',
+        url: 'https://example.com/gnews-script',
+        source: { name: 'Variety' },
+        publishedAt: '2026-07-13T10:00:00Z',
+      },
+      { fetchedAt: '2026-07-13T11:00:00Z' },
+    )
+
+    expect(normalized.title).toBe('Breaking')
+    expect(normalized.description).toBe('The network confirmed it.')
+  })
+
+  it('dedupes an entity-encoded title against its already-decoded equivalent from another provider', () => {
+    const result = dedupeArticles([
+      normalizeArticle({
+        title: 'Showrunner&#8217;s Exit &amp; More',
+        description: 'From GNews.',
+        url: 'https://gnews.example/story',
+        source: { name: 'Variety' },
+        publishedAt: '2026-07-13T10:00:00Z',
+      }, { provider: 'gnews' }),
+      normalizeArticle({
+        title: 'Showrunner’s Exit & More',
+        description: 'From a curated feed.',
+        url: 'https://tvline.com/story',
+        source: { name: 'TVLine' },
+        publishedAt: '2026-07-13T10:05:00Z',
+      }, { provider: 'tvline' }),
+    ])
+
+    expect(result).toHaveLength(1)
+    expect(result[0].provider).toBe('tvline')
+  })
+
   it('deduplicates canonical URLs and clearly equivalent titles', () => {
     const result = dedupeArticles([
       article({ url: 'https://example.com/story?fbclid=x', canonicalUrl: 'https://example.com/story' }),

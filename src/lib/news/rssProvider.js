@@ -15,6 +15,20 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 // fast-xml-parser never resolves external entities/DTDs, so there is no XXE surface
 // here — it only ever reads the tags/text present in the response body itself.
+//
+// processEntities is explicitly disabled: fast-xml-parser's own entity decoding only
+// covers the 5 XML-predefined entities (amp/lt/gt/quot/apos), only on plain text nodes,
+// and — critically — never inside CDATA sections (correct per the XML spec, since CDATA
+// suppresses entity parsing, but most RSS descriptions arrive as CDATA-wrapped HTML
+// specifically expecting entities like "&#8217;" or "&amp;" to be decoded for display).
+// This provider deliberately does no decoding or markup stripping of its own — it only
+// extracts raw text (title/description/etc.) from the parsed XML shape. normalizeArticle
+// is the single authoritative place both RSS/Atom and GNews text get sanitized exactly
+// once; if the parser partially decoded plain-text nodes here while leaving CDATA raw,
+// the text handed to that one downstream pass would already be inconsistently decoded
+// depending on node type, and — worse — a value decoded once here and passed through
+// normalizeArticle's decode step again would receive two decode passes total, which is
+// exactly how a double-escaped string ends up resolving into real markup.
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
@@ -23,6 +37,7 @@ const parser = new XMLParser({
   trimValues: true,
   parseTagValue: false,
   allowBooleanAttributes: true,
+  processEntities: false,
 })
 
 function toArray(value) {
@@ -41,17 +56,6 @@ function textOf(node) {
   return null
 }
 
-// Feed descriptions are HTML from a third party; we only ever want plain text out
-// of them, so tags (and their script/style contents) are stripped rather than kept
-// for any kind of rendering.
-function stripHtml(value) {
-  if (typeof value !== 'string') return null
-  const withoutBlocks = value.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-  const withoutTags = withoutBlocks.replace(/<[^>]+>/g, ' ')
-  const collapsed = withoutTags.replace(/\s+/g, ' ').trim()
-  return collapsed || null
-}
-
 function rssImage(item) {
   const enclosure = toArray(item?.enclosure).find((entry) => {
     const type = entry?.['@_type']
@@ -66,7 +70,7 @@ function rssImage(item) {
 function rssItemToRaw(item, sourceName) {
   const title = textOf(item?.title)
   const link = typeof item?.link === 'string' ? item.link : textOf(item?.link) ?? item?.link?.['@_href']
-  const description = stripHtml(textOf(item?.description) ?? textOf(item?.['content:encoded']))
+  const description = textOf(item?.description) ?? textOf(item?.['content:encoded'])
   const publishedAt = textOf(item?.pubDate) ?? textOf(item?.['dc:date'])
   if (!title || !link || !publishedAt) return null
   return { title, description, url: link, image: rssImage(item), source: { name: sourceName }, publishedAt }
@@ -81,7 +85,7 @@ function atomLink(entry) {
 function atomEntryToRaw(entry, sourceName) {
   const title = textOf(entry?.title)
   const link = atomLink(entry)
-  const description = stripHtml(textOf(entry?.summary) ?? textOf(entry?.content))
+  const description = textOf(entry?.summary) ?? textOf(entry?.content)
   const publishedAt = textOf(entry?.published) ?? textOf(entry?.updated)
   if (!title || !link || !publishedAt) return null
   return { title, description, url: link, image: null, source: { name: sourceName }, publishedAt }

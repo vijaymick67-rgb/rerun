@@ -3,6 +3,7 @@ import { createRssProvider, RSS_MAX_RESPONSE_BYTES } from './rssProvider.js'
 import { CURATED_FEED_SOURCES } from './feedSources.js'
 import { createNewsProvider, isNewsProviderError } from './provider.js'
 import { aggregateProviders } from './aggregateNews.js'
+import { normalizeArticle } from './normalizeArticle.js'
 
 const RSS_FEED = `<?xml version="1.0"?>
 <rss version="2.0">
@@ -111,7 +112,7 @@ describe('curated RSS/Atom provider', () => {
     }
   })
 
-  it('parses RSS items, strips unsafe markup, and normalizes fields', async () => {
+  it('parses RSS items and normalizes basic fields', async () => {
     const fetchImpl = vi.fn(async () => textResponse(RSS_FEED))
     const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
 
@@ -124,9 +125,11 @@ describe('curated RSS/Atom provider', () => {
       image: 'https://images.example.com/one.jpg',
       source: { name: 'TVLine' },
     })
-    expect(articles[0].description).not.toContain('<')
-    expect(articles[0].description).not.toContain('script')
-    expect(articles[0].description).not.toContain('alert(1)')
+    // rssProvider extracts raw text only — it does not decode entities or strip
+    // markup itself. That happens exactly once, downstream, in normalizeArticle
+    // (see the "RSS/Atom -> normalizeArticle" describe block below), which is the
+    // single authoritative sanitization boundary for both RSS/Atom and GNews.
+    expect(articles[0].description).toContain('<script>')
     expect(articles[0].description).toContain('network')
     expect(new Date(articles[0].publishedAt).getTime()).not.toBeNaN()
   })
@@ -333,5 +336,142 @@ describe('curated RSS/Atom provider', () => {
   it('requires a name and url', () => {
     expect(() => createRssProvider({ url: 'https://example.com/feed' })).toThrow()
     expect(() => createRssProvider({ name: 'X' })).toThrow()
+  })
+})
+
+// normalizeArticle is the single authoritative place RSS/Atom (and GNews) text gets
+// decoded and stripped — rssProvider itself only extracts raw text. These tests run
+// the complete path (raw XML -> rssProvider -> normalizeArticle) rather than testing
+// the decode helper in isolation, since that's the only way to catch a regression
+// where the same text gets sanitized more than once across the two modules.
+function feedXml({ title, description }) {
+  return `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>${title}</title>
+      <link>https://example.com/story</link>
+      ${description !== undefined ? `<description>${description}</description>` : ''}
+      <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+}
+
+async function normalizedFromFeed(xml, { name = 'TVLine', url = 'https://tvline.com/feed/' } = {}) {
+  const fetchImpl = vi.fn(async () => textResponse(xml))
+  const provider = createRssProvider({ name, url, fetchImpl })
+  const [raw] = await provider.fetchArticles()
+  return normalizeArticle(raw, { fetchedAt: '2026-07-13T11:00:00Z', provider: 'curated' })
+}
+
+describe('RSS/Atom -> normalizeArticle (single sanitization boundary)', () => {
+  it('decodes decimal, hex, named, and mixed HTML entities in a title exactly once', async () => {
+    const xml = feedXml({
+      title: 'Showrunner&#8217;s New Series &#038; More &#x2014; &quot;From&quot; &amp; &#x201C;You&#x201D;',
+    })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.title).toBe('Showrunner’s New Series & More — "From" & “You”')
+  })
+
+  it('decodes entities mixed with HTML tags inside a CDATA description exactly once', async () => {
+    const xml = feedXml({
+      title: 'Story with a rich description',
+      description: '<![CDATA[<p>Tom&apos;s new role &amp; <b>more</b> &#8212; the network confirmed it.</p>]]>',
+    })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.description).toBe("Tom's new role & more — the network confirmed it.")
+  })
+
+  it('cleans up whitespace left behind after decoding &nbsp; in a description', async () => {
+    const xml = feedXml({ title: 'Whitespace story', description: 'One&nbsp;Two&nbsp;&nbsp;Three' })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.description).toBe('One Two Three')
+  })
+
+  it('never lets an entity-encoded script tag survive as markup in a title or description', async () => {
+    const xml = feedXml({
+      title: '&lt;script&gt;alert(1)&lt;/script&gt;Breaking News',
+      description: '&lt;script&gt;alert(1)&lt;/script&gt;The network confirmed it.',
+    })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.title).toBe('Breaking News')
+    expect(article.description).toBe('The network confirmed it.')
+    expect(article.title).not.toContain('<')
+    expect(article.description).not.toContain('<')
+  })
+
+  // The exact regression the two-pass bug produced: rssProvider previously decoded
+  // once, and normalizeArticle decoded the (already partially-decoded) result again,
+  // so "&amp;lt;b&amp;gt;...&amp;lt;/b&amp;gt;" resolved in two steps into a real
+  // <b> tag that then got stripped down to just "Headline" — silently destroying
+  // content that was deliberately double-escaped. With rssProvider handing raw text
+  // straight through and normalizeArticle decoding exactly once, this must stop one
+  // level short: the output still looks like an (undecoded) escaped tag, never a
+  // real one.
+  it('decodes a double-escaped tag only once across the full RSS -> normalizeArticle pipeline', async () => {
+    const xml = feedXml({ title: '&amp;lt;b&amp;gt;Headline&amp;lt;/b&amp;gt;' })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.title).toBe('&lt;b&gt;Headline&lt;/b&gt;')
+    expect(article.title).not.toContain('<b>')
+    expect(article.title).not.toContain('<')
+  })
+
+  it('decodes "&amp;amp;" to a single literal "&" — not further, across the full pipeline', async () => {
+    const xml = feedXml({ title: 'News &amp;amp; Updates' })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.title).toBe('News &amp; Updates')
+  })
+
+  it('does not crash on a malformed or unknown entity anywhere in the pipeline', async () => {
+    const xml = feedXml({ title: 'Weird &foobar; headline &#zzz; text' })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.title).toBe('Weird &foobar; headline &#zzz; text')
+  })
+
+  it('rejects a numeric reference in the UTF-16 surrogate range instead of corrupting the string', async () => {
+    const xml = feedXml({ title: 'Lone surrogate &#xD800; in a headline' })
+    const article = await normalizedFromFeed(xml)
+
+    expect(article.title).toBe('Lone surrogate &#xD800; in a headline')
+  })
+
+  it('decodes an encoded Atom title and summary exactly once', async () => {
+    const atomFeed = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Atom Desk</title>
+  <entry>
+    <title>Showrunner&#8217;s Exit &amp; Return</title>
+    <link rel="alternate" href="https://example.com/atom-entities" />
+    <summary>Tom&apos;s new role &#x2014; &quot;From&quot; renewed.</summary>
+    <published>2026-07-13T08:00:00Z</published>
+  </entry>
+</feed>`
+    const article = await normalizedFromFeed(atomFeed, { name: 'Deadline', url: 'https://deadline.com/feed/' })
+
+    expect(article.title).toBe('Showrunner’s Exit & Return')
+    expect(article.description).toBe('Tom\'s new role — "From" renewed.')
+  })
+
+  it('decodes an encoded Atom title and content when summary is absent, exactly once', async () => {
+    const atomFeed = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Atom Content Story</title>
+    <link rel="alternate" href="https://example.com/atom-content" />
+    <content>News &amp;amp; Updates &#8212; &lt;b&gt;bold&lt;/b&gt; removed</content>
+    <published>2026-07-13T08:00:00Z</published>
+  </entry>
+</feed>`
+    const article = await normalizedFromFeed(atomFeed, { name: 'Deadline', url: 'https://deadline.com/feed/' })
+
+    expect(article.description).toBe('News &amp; Updates — bold removed')
   })
 })

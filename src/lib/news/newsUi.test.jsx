@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { BrowseNewsView, NewsStoryCard } from '../../components/BrowseNews.jsx'
 import { createNewsClient, NEWS_REFRESH_MS } from './client.js'
 import { matchArticleToTrackedShow } from './matchTrackedShows.js'
+import { normalizeArticle } from './normalizeArticle.js'
 import {
   dismissMyShowsArticle, emptyNewsState, mergeNews, NEWS_CACHE_KEY, NEWS_CACHE_VERSION,
   readNewsCache, selectGeneralNews, visibleMyShowsArticles, writeNewsCache,
@@ -167,6 +168,39 @@ describe('ultra-ambiguous common-language titles (From, You)', () => {
     const state = mergeNews(emptyNewsState(), [falsePositive], trackedFrom)
     expect(visibleMyShowsArticles(state)).toEqual([])
     expect(selectGeneralNews(state, trackedFrom).map((item) => item.id)).toContain('a1')
+  })
+
+  // matchTrackedShows' quoted-title evidence checks the raw headline for literal quote
+  // characters ("From"). A feed that HTML-entity-encodes its quotes (&quot;From&quot;)
+  // would never satisfy that check unless the entities are decoded before the headline
+  // reaches the matcher — this proves the decoding fix (not a change to the matching
+  // rule itself) is what lets that evidence surface.
+  it('decoding &quot; entities before matching lets the quoted-title rule recognize "From"', () => {
+    const rawTitle = '&quot;From&quot; Renewed for Season 5'
+    const normalized = normalizeArticle({
+      title: rawTitle,
+      description: 'The network confirmed the news.',
+      url: 'https://example.com/from-quoted',
+      source: { name: 'Variety' },
+      publishedAt: '2026-07-13T10:00:00Z',
+    }, { fetchedAt: '2026-07-13T11:00:00Z' })
+
+    expect(normalized.title).toBe('"From" Renewed for Season 5')
+    expect(matchArticleToTrackedShow(normalized, wideShows)).toMatchObject({ matched: true, showId: 12 })
+  })
+
+  it('decoding &#x27;s entities before matching lets the possessive-title rule recognize "You"', () => {
+    const rawTitle = 'Netflix&#x27;s You sets final-season premiere'
+    const normalized = normalizeArticle({
+      title: rawTitle,
+      description: 'The streamer confirmed the news.',
+      url: 'https://example.com/you-possessive',
+      source: { name: 'Variety' },
+      publishedAt: '2026-07-13T10:00:00Z',
+    }, { fetchedAt: '2026-07-13T11:00:00Z' })
+
+    expect(normalized.title).toBe("Netflix's You sets final-season premiere")
+    expect(matchArticleToTrackedShow(normalized, wideShows)).toMatchObject({ matched: true, showId: 11 })
   })
 })
 

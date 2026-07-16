@@ -1,3 +1,5 @@
+import { sanitizeNewsText } from './sanitizeNewsText.js'
+
 const TRACKING_PARAMETERS = new Set(['fbclid', 'gclid'])
 
 function isTrackingParameter(name) {
@@ -27,8 +29,21 @@ function cleanText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+// This is the single authoritative place title/description text gets decoded and
+// stripped, for every provider (RSS/Atom and GNews raw articles both pass through
+// normalizeArticle before anything else touches their text). Deliberately not done
+// a second time anywhere else: sanitizeNewsText is not safe to run twice in the same
+// pipeline — decoding is not idempotent on text that arrived here already decoded once
+// and still contains "&...;"-shaped output from that decode (e.g. an originally
+// double-escaped "&amp;lt;b&amp;gt;" decodes once to "&lt;b&gt;", which still looks
+// like an entity; decoding it a second time would turn it into a real "<b>" tag). RSS
+// providers must hand this function fully raw, un-decoded text for that reason.
+function cleanArticleText(value) {
+  return sanitizeNewsText(value)
+}
+
 function cleanDescription(value) {
-  const description = cleanText(value)
+  const description = cleanArticleText(value)
   return description ? description.slice(0, 320) : null
 }
 
@@ -61,7 +76,7 @@ export function stableArticleId(canonicalUrl, provider = 'gnews') {
 export function normalizeArticle(raw, { fetchedAt = new Date().toISOString(), provider = 'gnews' } = {}) {
   if (!raw || typeof raw !== 'object') return null
 
-  const title = cleanText(raw.title)
+  const title = cleanArticleText(raw.title)
   const canonicalUrl = canonicalizeUrl(raw.url)
   const sourceName = cleanText(raw.source?.name)
   const publishedDate = raw.publishedAt ? new Date(raw.publishedAt) : null
