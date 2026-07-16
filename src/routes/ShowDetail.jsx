@@ -14,7 +14,6 @@ import {
   clearDetailCache,
 } from '../lib/detailCache'
 import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
-import NestedTopScrim from '../components/NestedTopScrim.jsx'
 import WatchedCircle from '../components/WatchedCircle'
 import { createWatchMutationQueue, toggleSeasonOptimistically } from '../lib/seasonWatchMutations'
 
@@ -159,8 +158,7 @@ function ShowDetailInner({ tmdbId }) {
 
   return (
     <div className="nested-page px-4 pb-4">
-      <NestedTopScrim />
-      <div className="nested-page-header flex min-h-11 items-center gap-2">
+      <div className="flex min-h-11 items-center gap-2">
         <Link
           to="/watching"
           aria-label="Back to Watching"

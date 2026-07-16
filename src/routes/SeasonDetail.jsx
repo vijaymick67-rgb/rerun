@@ -13,7 +13,6 @@ import {
   writeDetailCache,
 } from '../lib/detailCache'
 import SeasonDetailSkeleton from '../components/SeasonDetailSkeleton'
-import NestedTopScrim from '../components/NestedTopScrim.jsx'
 import WatchedCircle from '../components/WatchedCircle'
 import {
   createWatchMutationQueue,
@@ -148,8 +147,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
   return (
     <div className="nested-page px-4 pb-4">
-      <NestedTopScrim />
-      <div className="nested-page-header flex min-h-11 items-center gap-2">
+      <div className="flex min-h-11 items-center gap-2">
         <Link
           to={`/watching/${numericTmdbId}`}
           aria-label="Back to show"

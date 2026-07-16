@@ -25,21 +25,8 @@ describe('nested route safe-area layout', () => {
     const element = kind === 'show' ? <ShowDetail /> : <SeasonDetail />
     const html = renderRoute(path, element)
     expect(html).toContain('nested-page px-4 pb-4')
-    expect(html).toContain('nested-top-scrim')
-    expect(html).toContain('nested-page-header flex min-h-11 items-center gap-2')
     expect(html).toContain('min-h-11 min-w-11')
-    expect(html).not.toContain('fixed')
-  })
-
-  it('keeps the shared scrim above content but below nested controls', () => {
-    expect(css.match(/\.nested-top-scrim\s*\{/g)).toHaveLength(3)
-    expect(css).toContain('position: fixed')
-    expect(css).toContain('pointer-events: none')
-    expect(css).toContain('backdrop-filter: blur(12px)')
-    expect(css).toContain('-webkit-backdrop-filter: blur(12px)')
-    expect(css).toContain('prefers-reduced-transparency: reduce')
-    expect(css).toContain('z-index: 20')
-    expect(css).toContain('z-index: 21')
+    expect(html).not.toContain('global-top-scrim')
   })
 
   it('defines one additive top inset without changing the main app-page pattern', () => {
