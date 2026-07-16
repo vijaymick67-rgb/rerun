@@ -25,10 +25,13 @@ export function classifyDataError(error, source = 'unknown') {
   return 'DATA-UNKNOWN'
 }
 
-export function safeDataDiagnostic(error, { stage = 'unknown', source = 'unknown' } = {}) {
+export function safeDataDiagnostic(error, {
+  stage = 'unknown', source = 'unknown', tmdbShowId,
+} = {}) {
   return {
     code: classifyDataError(error, source),
     stage,
+    tmdbShowId,
     name: typeof error?.name === 'string' ? error.name : 'Error',
     status: typeof error?.status === 'number' ? error.status : undefined,
   }
