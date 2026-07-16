@@ -492,6 +492,67 @@ describe('news cache and stale-while-refresh client', () => {
     await expect(refresh).rejects.toThrow()
     expect(readNewsCache(local).articles.a20).toBeTruthy()
   })
+
+  // Regression for a bug where a single client instance would never automatically
+  // refresh again after its very first fetch attempt in its lifetime, no matter how
+  // stale the cache became - because that first attempt set a one-time latch with no
+  // way to clear it short of constructing a brand new client (i.e. a full page reload).
+  // The client is a module-level singleton reused for the entire SPA session, so in
+  // practice this meant news silently stopped refreshing after the first mount.
+  it('retries automatically once the refresh window elapses after an earlier failed attempt', async () => {
+    const local = storage()
+    writeNewsCache(mergeNews(emptyNewsState(), [article(20)], shows, 1), local)
+    const client = createNewsClient()
+
+    const firstAttemptAt = NEWS_REFRESH_MS + 2
+    const first = client.load({ storage: local, trackedShows: shows, fetchImpl: async () => ({ ok: false }), now: firstAttemptAt })
+    await expect(first.refresh).rejects.toThrow()
+
+    // Same client instance, long after the failed attempt - not just long after the
+    // (never-happened) last success. A prior version of this code would return
+    // refresh: null here forever, because it only ever remembered "we already tried
+    // once", not "how long ago".
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ articles: [article(21)] }) }))
+    const second = client.load({ storage: local, trackedShows: shows, fetchImpl, now: firstAttemptAt + NEWS_REFRESH_MS + 1 })
+    expect(second.refresh).not.toBeNull()
+    await second.refresh
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries automatically once the refresh window elapses after an earlier success, without a forced retry', async () => {
+    const local = storage()
+    const client = createNewsClient()
+
+    const firstFetch = vi.fn(async () => ({ ok: true, json: async () => ({ articles: [article(20)] }) }))
+    const first = client.load({ storage: local, trackedShows: shows, fetchImpl: firstFetch, now: 0 })
+    await first.refresh
+
+    // Well past NEWS_REFRESH_MS since that success - e.g. the user left the Browse tab
+    // open, or navigated away and back, long after the cache went stale. This must
+    // trigger a real automatic refresh, not require the user to click Retry.
+    const secondFetch = vi.fn(async () => ({ ok: true, json: async () => ({ articles: [article(21)] }) }))
+    const second = client.load({
+      storage: local, trackedShows: shows, fetchImpl: secondFetch, now: NEWS_REFRESH_MS * 10,
+    })
+    expect(second.refresh).not.toBeNull()
+    await second.refresh
+    expect(secondFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('still does not hammer a failing endpoint on every call within the same cooldown window', async () => {
+    const local = storage()
+    writeNewsCache(mergeNews(emptyNewsState(), [article(20)], shows, 1), local)
+    const client = createNewsClient()
+
+    const firstAttemptAt = NEWS_REFRESH_MS + 2
+    const first = client.load({ storage: local, trackedShows: shows, fetchImpl: async () => ({ ok: false }), now: firstAttemptAt })
+    await expect(first.refresh).rejects.toThrow()
+
+    const fetchImpl = vi.fn()
+    const second = client.load({ storage: local, trackedShows: shows, fetchImpl, now: firstAttemptAt + 500 })
+    expect(second.refresh).toBeNull()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
   it('resets malformed and version-mismatched storage safely', () => {
     expect(readNewsCache(storage('{bad'))).toEqual(emptyNewsState())
     expect(readNewsCache(storage(JSON.stringify({ version: 99, articles: {} })))).toEqual(emptyNewsState())
