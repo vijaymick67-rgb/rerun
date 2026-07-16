@@ -3,7 +3,7 @@
 // watched_episodes select.
 export const WATCHED_EPISODES_PAGE_SIZE = 1000
 
-export async function fetchWatchedEpisodes(supabase, columns, tmdbShowIds = null) {
+export async function fetchWatchedEpisodes(supabase, columns, tmdbShowIds = null, { signal } = {}) {
   const rows = []
   let from = 0
 
@@ -11,11 +11,13 @@ export async function fetchWatchedEpisodes(supabase, columns, tmdbShowIds = null
     let query = supabase.from('watched_episodes').select(columns)
     if (tmdbShowIds) query = query.in('tmdb_show_id', tmdbShowIds)
 
-    const { data, error } = await query
+    query = query
       .order('tmdb_show_id', { ascending: true })
       .order('season_number', { ascending: true })
       .order('episode_number', { ascending: true })
       .range(from, from + WATCHED_EPISODES_PAGE_SIZE - 1)
+    if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+    const { data, error } = await query
     if (error) throw error
 
     const page = data ?? []

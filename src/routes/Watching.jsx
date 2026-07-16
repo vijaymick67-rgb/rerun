@@ -10,6 +10,7 @@ import {
   selectTrackedShowsForWatching,
 } from '../lib/watchingShows'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
+import { reportDataError, withTimeout } from '../lib/dataLoading'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
 import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
@@ -24,6 +25,7 @@ export default function Watching() {
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
   const [openSwipeId, setOpenSwipeId] = useState(null)
@@ -34,10 +36,11 @@ export default function Watching() {
     async function load() {
       setError(null)
       try {
-        const { data: trackedShows, error: showsError } = await supabase
-          .from('tracked_shows')
-          .select('*')
-          .order('added_at', { ascending: false })
+        const { data: trackedShows, error: showsError } = await withTimeout((signal) => {
+          let query = supabase.from('tracked_shows').select('*').order('added_at', { ascending: false })
+          if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+          return query
+        }, { stage: 'watching-tracked-shows', source: 'supabase' })
         if (showsError) throw showsError
 
         if (!trackedShows || trackedShows.length === 0) {
@@ -48,10 +51,13 @@ export default function Watching() {
           return
         }
 
-        const { candidates, preloadedById } = await selectTrackedShowsForWatching(
-          trackedShows,
-          getShowDetails,
-          (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
+        const { candidates, preloadedById } = await withTimeout(
+          () => selectTrackedShowsForWatching(
+            trackedShows,
+            getShowDetails,
+            (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
+          ),
+          { stage: 'watching-selection', source: 'tmdb' },
         )
 
         if (candidates.length === 0) {
@@ -63,10 +69,14 @@ export default function Watching() {
         }
 
         const tmdbIds = candidates.map((show) => show.tmdb_id)
-        const watchedRows = await fetchWatchedEpisodes(
-          supabase,
-          'tmdb_show_id, season_number, episode_number',
-          tmdbIds,
+        const watchedRows = await withTimeout(
+          (signal) => fetchWatchedEpisodes(
+            supabase,
+            'tmdb_show_id, season_number, episode_number',
+            tmdbIds,
+            { signal },
+          ),
+          { stage: 'watching-watched-episodes', source: 'supabase' },
         )
 
         const watchedByShowId = new Map()
@@ -79,15 +89,18 @@ export default function Watching() {
             .add(episodeKey(row.season_number, row.episode_number))
         }
 
-        const enriched = await enrichTrackedShowsForWatching(
-          candidates,
-          watchedByShowId,
-          preloadedById,
-          {
-            getShowDetails,
-            getSeasonEpisodes,
-            getShowReleaseMap: (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
-          },
+        const enriched = await withTimeout(
+          () => enrichTrackedShowsForWatching(
+            candidates,
+            watchedByShowId,
+            preloadedById,
+            {
+              getShowDetails,
+              getSeasonEpisodes,
+              getShowReleaseMap: (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
+            },
+          ),
+          { stage: 'watching-enrichment', source: 'tmdb' },
         )
 
         if (ignore) return
@@ -108,8 +121,15 @@ export default function Watching() {
 
         setShows(enriched)
         saveWatchingCache(enriched)
-      } catch {
-        if (!ignore) setError('Failed to load your shows. Try refreshing.')
+      } catch (loadFailure) {
+        const diagnostic = reportDataError(loadFailure, {
+          stage: loadFailure?.stage ?? 'watching-load',
+          source: loadFailure?.source ?? 'unknown',
+        })
+        if (!ignore) setError({
+          message: cachedShows ? 'Couldn’t refresh your shows.' : 'Failed to load your shows.',
+          code: diagnostic.code,
+        })
       } finally {
         if (!ignore) setLoading(false)
       }
@@ -119,7 +139,7 @@ export default function Watching() {
     return () => {
       ignore = true
     }
-  }, [])
+  }, [cachedShows, loadAttempt])
 
   function handleRemove(show) {
     setOpenSwipeId(null)
@@ -165,14 +185,16 @@ export default function Watching() {
 
       {error && (
         <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-          <span>{error}</span>
+          <span>{error.message} <span className="whitespace-nowrap">({error.code})</span></span>
           <button
             type="button"
-            onClick={() => setError(null)}
-            aria-label="Dismiss"
-            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
+            onClick={() => {
+              setLoading(cachedShows === null)
+              setLoadAttempt((attempt) => attempt + 1)
+            }}
+            className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-red-300"
           >
-            ✕
+            Retry
           </button>
         </div>
       )}

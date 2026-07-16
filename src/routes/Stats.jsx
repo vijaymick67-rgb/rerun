@@ -11,6 +11,7 @@ import {
 } from '../lib/finishedShows'
 import { patchShowDetailState } from '../lib/detailCache'
 import { clearWatchingCache, removeWatchingShow } from '../lib/watchingCache'
+import { reportDataError, withTimeout } from '../lib/dataLoading'
 import ConfirmDialog from '../components/ConfirmDialog'
 import {
   filterVisibleStatsRows,
@@ -339,6 +340,7 @@ export default function Stats() {
   const [insights, setInsights] = useState(() => cached?.insights ?? [])
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [actionError, setActionError] = useState(null)
   const [actionSuccess, setActionSuccess] = useState(null)
   const [openActionId, setOpenActionId] = useState(null)
@@ -359,9 +361,14 @@ export default function Stats() {
         // Every distinct show with at least one watched episode ever. A show
         // with zero ticked episodes simply never appears here, which is the
         // whole "only watched shows" filter — no extra logic needed.
-        const watchedRows = await fetchWatchedEpisodes(
-          supabase,
-          'tmdb_show_id, season_number, episode_number, watched_at',
+        const watchedRows = await withTimeout(
+          (signal) => fetchWatchedEpisodes(
+            supabase,
+            'tmdb_show_id, season_number, episode_number, watched_at',
+            null,
+            { signal },
+          ),
+          { stage: 'stats-watched-episodes', source: 'supabase' },
         )
 
         const rows = watchedRows ?? []
@@ -387,11 +394,15 @@ export default function Stats() {
         const showIds = [...watchedByShowId.keys()]
 
         // Names/posters — every watched show is guaranteed a tracked_shows row.
-        const { data: trackedShows, error: trackedError } = await supabase
-          .from('tracked_shows')
-          .select('tmdb_id, name, poster_path, finished_at, hidden_at')
-          .in('tmdb_id', showIds)
-          .is('hidden_at', null)
+        const { data: trackedShows, error: trackedError } = await withTimeout((signal) => {
+          let query = supabase
+            .from('tracked_shows')
+            .select('tmdb_id, name, poster_path, finished_at, hidden_at')
+            .in('tmdb_id', showIds)
+            .is('hidden_at', null)
+          if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+          return query
+        }, { stage: 'stats-tracked-shows', source: 'supabase' })
         if (trackedError) throw trackedError
 
         const trackedById = new Map()
@@ -415,13 +426,19 @@ export default function Stats() {
             const tracked = trackedById.get(showId)
 
             try {
-              const details = await getShowDetails(showId)
+              const details = await withTimeout(
+                () => getShowDetails(showId),
+                { stage: 'stats-show-details', source: 'tmdb' },
+              )
               const seasons = (details.seasons ?? [])
                 .filter((season) => season.season_number > 0)
                 .sort((a, b) => a.season_number - b.season_number)
 
               const episodesArrays = await Promise.all(
-                seasons.map((season) => getSeasonEpisodes(showId, season.season_number)),
+                seasons.map((season) => withTimeout(
+                  () => getSeasonEpisodes(showId, season.season_number),
+                  { stage: 'stats-season-episodes', source: 'tmdb' },
+                )),
               )
 
               // Map every real episode (seasons > 0) → its runtime, matching
@@ -507,8 +524,15 @@ export default function Stats() {
           totalMinutes: totalRuntimeMinutes,
           insights: nextInsights,
         })
-      } catch {
-        if (!ignore) setError('Failed to load your stats. Try refreshing.')
+      } catch (loadFailure) {
+        const diagnostic = reportDataError(loadFailure, {
+          stage: loadFailure?.stage ?? 'stats-load',
+          source: loadFailure?.source ?? 'unknown',
+        })
+        if (!ignore) setError({
+          message: cached ? 'Couldn’t refresh your stats.' : 'Failed to load your stats.',
+          code: diagnostic.code,
+        })
       } finally {
         if (!ignore) setLoading(false)
       }
@@ -518,7 +542,7 @@ export default function Stats() {
     return () => {
       ignore = true
     }
-  }, [])
+  }, [cached, loadAttempt])
 
   function commitStatsState(nextShows, nextWatchedRows) {
     const next = buildVisibleStatsState(nextShows, nextWatchedRows)
@@ -610,14 +634,16 @@ export default function Stats() {
 
       {error && (
         <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-          <span>{error}</span>
+          <span>{error.message} <span className="whitespace-nowrap">({error.code})</span></span>
           <button
             type="button"
-            onClick={() => setError(null)}
-            aria-label="Dismiss"
-            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
+            onClick={() => {
+              setLoading(cached === null)
+              setLoadAttempt((attempt) => attempt + 1)
+            }}
+            className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-red-300"
           >
-            ✕
+            Retry
           </button>
         </div>
       )}

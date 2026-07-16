@@ -1,6 +1,7 @@
 import { computeWatchingStatus, episodeKey } from './watchHelpers.js'
 import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
 import { classifyReleasePlatform } from './releasePlatforms.js'
+import { withTimeout } from './dataLoading.js'
 
 // Stage 1: all unfinished shows remain candidates. Finished shows receive only
 // a lightweight show-details request; ineligible archives stop here.
@@ -16,10 +17,13 @@ export async function selectTrackedShowsForWatching(
   const checkedFinished = await Promise.all(
     finished.map(async (show) => {
       try {
-        const [details, releaseMap] = await Promise.all([
-          getShowDetails(show.tmdb_id, { refreshDynamic: true }),
-          getShowReleaseMap ? getShowReleaseMap(show.tmdb_id) : {},
-        ])
+        const [details, releaseMap] = await withTimeout(
+          () => Promise.all([
+            getShowDetails(show.tmdb_id, { refreshDynamic: true }),
+            getShowReleaseMap ? getShowReleaseMap(show.tmdb_id) : {},
+          ]),
+          { stage: 'watching-finished-show-selection', source: 'tmdb' },
+        )
         const enrichedDetails = attachDetailsReleaseData(details, releaseMap)
         return shouldFinishedShowReturn(show, enrichedDetails)
           ? { show, details: enrichedDetails, releaseMap }
@@ -56,9 +60,19 @@ export async function enrichTrackedShowsForWatching(
   return Promise.all(
     candidates.map(async (show) => {
       const watched = watchedByShowId.get(show.tmdb_id) ?? new Set()
-      const loaded = await loadWatchingShowData(show, watched, preloadedById.get(show.tmdb_id), {
-        getShowDetails, getSeasonEpisodes, getShowReleaseMap: loadReleaseMap,
-      })
+      const loaded = await withTimeout(
+        () => loadWatchingShowData(show, watched, preloadedById.get(show.tmdb_id), {
+          getShowDetails, getSeasonEpisodes, getShowReleaseMap: loadReleaseMap,
+        }),
+        { stage: 'watching-show-enrichment', source: 'tmdb' },
+      ).catch(() => ({
+        loadError: true,
+        status: computeWatchingStatus(
+          {},
+          watched,
+          preloadedById.get(show.tmdb_id)?.details ?? {},
+        ),
+      }))
 
       return {
         ...show,
