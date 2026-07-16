@@ -232,6 +232,59 @@ describe('in-session tracked-show updates', () => {
       second,
     ])
   })
+
+  // Removing (or hiding, which the parent route already excludes from trackedShows the
+  // same way) a tracked show must demote its already-matched articles back to general —
+  // otherwise "Latest from your shows" would keep showing a story about a show the user
+  // no longer tracks until it aged out up to 30 days later.
+  it('demotes a matched article back to general once its tracked show is removed', () => {
+    const matched = mergeNews(emptyNewsState(), [
+      article(71, 'House of the Dragon renewed for another season'),
+    ], shows)
+    expect(visibleMyShowsArticles(matched)).toMatchObject([{ id: 'a71', matchedShowId: 1 }])
+    expect(selectGeneralNews(matched, shows).map((item) => item.id)).not.toContain('a71')
+
+    const remainingShows = shows.filter((show) => show.tmdb_id !== 1)
+    const reclassified = mergeNews(matched, Object.values(matched.articles), remainingShows)
+
+    expect(visibleMyShowsArticles(reclassified)).toEqual([])
+    expect(reclassified.articles.a71.matchedShowId).toBeUndefined()
+    expect(selectGeneralNews(reclassified, remainingShows).map((item) => item.id)).toContain('a71')
+  })
+
+  // A rename (same tmdb_id, corrected display name) doesn't change which article
+  // matches — the title-substring text is unaffected by a capitalization fix — only the
+  // display name that should be shown for it.
+  it('refreshes a stale matchedShowName when the tracked show is renamed', () => {
+    const matched = mergeNews(emptyNewsState(), [
+      article(72, 'House of the Dragon renewed for another season'),
+    ], shows)
+    expect(visibleMyShowsArticles(matched)).toMatchObject([{ id: 'a72', matchedShowName: 'House of the Dragon' }])
+
+    const renamed = shows.map((show) =>
+      show.tmdb_id === 1 ? { ...show, name: 'House of The Dragon' } : show)
+    const reclassified = mergeNews(matched, Object.values(matched.articles), renamed)
+
+    expect(visibleMyShowsArticles(reclassified)).toMatchObject([
+      { id: 'a72', matchedShowId: 1, matchedShowName: 'House of The Dragon' },
+    ])
+  })
+
+  // Mirrors BrowseNews's real startup sequence: the cache read on mount can contain
+  // articles from a prior session, while trackedShows is still `[]` until the Supabase
+  // fetch resolves. Once it does, the same reclassification merge used for add/remove
+  // must also cover "went from no tracked shows to some" correctly.
+  it('reclassifies cached articles once tracked shows become available after loading empty', () => {
+    const cached = mergeNews(emptyNewsState(), [
+      article(73, 'House of the Dragon renewed for another season'),
+    ], [])
+    expect(visibleMyShowsArticles(cached)).toEqual([])
+    expect(selectGeneralNews(cached, []).map((item) => item.id)).toContain('a73')
+
+    const reclassified = mergeNews(cached, Object.values(cached.articles), shows)
+    expect(visibleMyShowsArticles(reclassified)).toMatchObject([{ id: 'a73', matchedShowId: 1 }])
+    expect(selectGeneralNews(reclassified, shows).map((item) => item.id)).not.toContain('a73')
+  })
 })
 
 describe('My Shows inbox', () => {

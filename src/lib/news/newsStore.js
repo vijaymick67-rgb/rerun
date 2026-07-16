@@ -93,13 +93,29 @@ export function mergeNews(state, incoming, trackedShows, now = Date.now()) {
     incomingIds.push(article.id)
     incomingUrls.add(article.canonicalUrl)
   }
+  // A tracked show can be untracked, hidden, or renamed since an article was last
+  // classified. Re-validating already-personal (visible/queued) articles against the
+  // CURRENT trackedShows on every merge — not just newly-incoming ones — is what keeps
+  // stored matchedShowId/matchedShowName authoritative, so selectors can trust it instead
+  // of re-running the matcher themselves. This only touches the small personal pool
+  // (at most MY_SHOWS_POOL_LIMIT articles), not the full cached article set.
+  function reclassifyPersonal(id) {
+    const match = matchArticleToTrackedShow(articles[id], trackedShows)
+    if (match.matched) {
+      articles[id] = { ...articles[id], matchedShowId: match.showId, matchedShowName: match.showName }
+      return true
+    }
+    const { matchedShowId: _matchedShowId, matchedShowName: _matchedShowName, ...rest } = articles[id]
+    articles[id] = rest
+    return false
+  }
   // Existing visible/queued personal matches age out too — a story pinned when fresh
   // must not stay visible or queued forever just because it was already promoted.
   const visibleIds = current.visibleIds.filter((id) =>
-    articles[id] && !dismissed.has(id) && isWithinMaxAge(articles[id], now))
+    articles[id] && !dismissed.has(id) && isWithinMaxAge(articles[id], now) && reclassifyPersonal(id))
   const existing = new Set(visibleIds)
   const queuedIds = current.queuedIds.filter((id) =>
-    articles[id] && !dismissed.has(id) && !existing.has(id) && isWithinMaxAge(articles[id], now))
+    articles[id] && !dismissed.has(id) && !existing.has(id) && isWithinMaxAge(articles[id], now) && reclassifyPersonal(id))
   queuedIds.forEach((id) => existing.add(id))
   const newlyMatched = []
   for (const id of incomingIds) {
@@ -151,11 +167,18 @@ export function visibleMyShowsArticles(state, now = Date.now()) {
     .filter((article) => article && isWithinMaxAge(article, now))
 }
 
+// trackedShows is intentionally unused here: mergeNews's reclassifyPersonal keeps every
+// visible/queued article's matchedShowId authoritative for the current tracked-show set
+// on every merge (including the trackedShows-change re-merge triggered from BrowseNews),
+// so a general-pool article's stored matchedShowId can be trusted directly instead of
+// re-running the matcher for every article on every render. The parameter stays so
+// callers don't need to change, and so a future caller that hasn't just re-merged still
+// has an explicit reminder that freshness here depends on that invariant.
 export function selectGeneralNews(state, trackedShows, now = Date.now()) {
   const current = sanitizeNewsState(state)
   const myShowsIds = new Set([...current.visibleIds, ...current.queuedIds, ...current.dismissedIds])
   return Object.values(current.articles)
-    .filter((article) => !myShowsIds.has(article.id) && !matchArticleToTrackedShow(article, trackedShows).matched)
+    .filter((article) => !myShowsIds.has(article.id) && !article.matchedShowId)
     .filter(isTvNewsArticle)
     .filter((article) => isWithinMaxAge(article, now))
     .sort((a, b) => curatedBonus(b) - curatedBonus(a)

@@ -92,7 +92,13 @@ export default function BrowseNews({ trackedShows = [], trackedShowsReady = true
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(false)
-  const trackedKey = useMemo(() => trackedShows.map((show) => show.tmdb_id).join(','), [trackedShows])
+  // Includes name, not just tmdb_id, so a rename (same show, same session, no id change)
+  // still triggers the reclassification merge below — otherwise a renamed show's already-
+  // matched articles would keep displaying the old matchedShowName indefinitely.
+  const trackedKey = useMemo(
+    () => trackedShows.map((show) => `${show.tmdb_id}:${show.name}`).join('|'),
+    [trackedShows],
+  )
 
   function refresh(force = false) {
     const { cached, refresh: pending } = newsClient.load({ trackedShows, force })
