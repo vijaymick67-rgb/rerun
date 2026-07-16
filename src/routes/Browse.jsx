@@ -126,7 +126,7 @@ export default function Browse() {
         })
       }
     } catch {
-      // best-effort â€” premiere timing is a nice-to-have, the show is already tracked
+      // best-effort — premiere timing is a nice-to-have, the show is already tracked
     }
   }
 
@@ -152,11 +152,11 @@ export default function Browse() {
     }
   }
 
-  // "Log as watched" â€” retroactively log a show finished before using the app,
+  // "Log as watched" — retroactively log a show finished before using the app,
   // without ticking every episode by hand. Ensures the show is tracked (same
   // UNIQUE_VIOLATION handling as handleAdd), then bulk-marks every already-aired
   // episode watched via the shared bulk-mark routine. Unaired future episodes
-  // are skipped â€” they don't exist yet to mark, even though the user is claiming
+  // are skipped — they don't exist yet to mark, even though the user is claiming
   // to have "seen the whole show".
   async function handleLogWatched(show) {
     setLoggingIds((prev) => new Set(prev).add(show.id))
@@ -181,7 +181,7 @@ export default function Browse() {
       })
       setLoggedIds((prev) => new Set(prev).add(show.id))
     } catch {
-      // best-effort â€” leave the button in its default state so the user can retry
+      // best-effort — leave the button in its default state so the user can retry
     } finally {
       setLoggingIds((prev) => {
         const next = new Set(prev)
@@ -197,12 +197,12 @@ export default function Browse() {
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Find a showâ€¦"
+        placeholder="Find a show…"
         className="w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
       />
 
       {loading && (
-        <p className="mt-4 text-sm text-(--color-text-muted)">Searchingâ€¦</p>
+        <p className="mt-4 text-sm text-(--color-text-muted)">Searching…</p>
       )}
 
       {error && <p className="motion-banner mt-4 text-sm text-red-400">{error}</p>}
@@ -212,7 +212,7 @@ export default function Browse() {
           <span>{delayedAddMessage.text}</span>
           {delayedAddMessage.undoable && (
             <button type="button" onClick={handleUndoDelayedAdd} disabled={undoingId != null} className="motion-press shrink-0 font-medium underline">
-              {undoingId != null ? 'Undoingâ€¦' : 'Undo'}
+              {undoingId != null ? 'Undoing…' : 'Undo'}
             </button>
           )}
           <button
@@ -221,7 +221,7 @@ export default function Browse() {
             aria-label={delayedAddMessage.undoable ? 'Undo' : 'Dismiss'}
             className="motion-press shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
           >
-            âœ•
+            ✕
           </button>
         </div>
       )}
@@ -284,7 +284,7 @@ export default function Browse() {
                         : 'bg-(--color-accent) text-(--color-bg) disabled:opacity-60'
                     }`}
                   >
-                    {isTracked ? 'Added' : isAdding ? 'Addingâ€¦' : 'Add'}
+                    {isTracked ? 'Added' : isAdding ? 'Adding…' : 'Add'}
                   </button>
 
                   <button
@@ -297,7 +297,7 @@ export default function Browse() {
                         : 'border border-(--color-border) text-(--color-text-muted) disabled:opacity-60'
                     }`}
                   >
-                    {isLogged ? 'Logged âœ“' : isLogging ? 'Loggingâ€¦' : 'Log as watched'}
+                    {isLogged ? 'Logged ✓' : isLogging ? 'Logging…' : 'Log as watched'}
                   </button>
                   {notAiredIds.has(show.id) && (
                     <p role="status" className="mt-1 text-xs text-(--color-text-muted)">Not aired yet</p>
