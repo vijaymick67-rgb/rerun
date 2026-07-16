@@ -217,8 +217,8 @@ export default function Browse() {
           )}
           <button
             type="button"
-            onClick={() => delayedAddMessage.undoable ? handleUndoDelayedAdd() : setDelayedAddMessage(null)}
-            aria-label={delayedAddMessage.undoable ? 'Undo' : 'Dismiss'}
+            onClick={() => setDelayedAddMessage(null)}
+            aria-label="Dismiss"
             className="motion-press shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
           >
             ✕
