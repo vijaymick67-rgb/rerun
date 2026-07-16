@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom'
 import TabBar from './components/TabBar'
 import NotFound from './components/NotFound'
 import ReloadPrompt from './components/ReloadPrompt'
+import GlobalTopScrim from './components/GlobalTopScrim'
 import Browse from './routes/Browse'
 import Watching from './routes/Watching'
 import ShowDetail from './routes/ShowDetail'
@@ -18,6 +19,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      <GlobalTopScrim />
       <Routes>
         <Route path="/" element={<Watching />} />
         <Route path="/browse" element={<Browse />} />
