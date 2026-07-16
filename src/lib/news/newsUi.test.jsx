@@ -107,6 +107,69 @@ describe('single-word title disambiguation (Phase 5)', () => {
   })
 })
 
+describe('ultra-ambiguous common-language titles (From, You)', () => {
+  it.each([
+    ['Actor from Netflix series joins season 2 cast'],
+    ['Everything leaving Hulu from July through August'],
+    ['New trailer from HBO drama debuts tonight'],
+    ['Star from hit series signs on for Netflix reboot'],
+  ])('rejects ordinary grammatical "from" even with strong TV context elsewhere: %s', (title) => {
+    expect(matchArticleToTrackedShow(
+      { ...article(1, title), description: 'Season 2 casting news and streaming premiere dates.' }, wideShows,
+    ).matched).toBe(false)
+  })
+
+  it.each([
+    ['From renewed for season 5', 12],
+    ['MGM+ sets From season 4 premiere date', 12],
+    ["'From' casts two new series regulars", 12],
+    ['The series From returns with a new trailer', 12],
+  ])('accepts "From" used as a title with direct structural evidence: %s', (title, showId) => {
+    expect(matchArticleToTrackedShow(article(1, title), wideShows)).toMatchObject({ matched: true, showId })
+  })
+
+  it.each([
+    ["What you need to know about Netflix's new series"],
+    ['Shows you should stream this weekend'],
+  ])('rejects ordinary pronoun "you" even with generic TV-context signals present: %s', (title) => {
+    expect(matchArticleToTrackedShow(
+      { ...article(1, title), description: 'A roundup of streaming series and season premieres.' }, wideShows,
+    ).matched).toBe(false)
+  })
+
+  // A bare production verb next to "you" is not enough — these place "renewed"/"cast"/
+  // "add"/"return" directly next to "you" while addressing the reader about their own
+  // subscription/device/watchlist, not describing a show called You.
+  it.each([
+    ['Have You Renewed Your Netflix Subscription?'],
+    ["You Renewed Netflix — Here's What to Watch"],
+    ['You Cast From Your Phone to the TV Wrong'],
+    ['You Add These Shows to Your Watchlist'],
+    ['You Return to Netflix After Cancelling'],
+  ])('rejects reader-addressing "you" next to a production verb: %s', (title) => {
+    expect(matchArticleToTrackedShow(article(1, title), wideShows).matched).toBe(false)
+  })
+
+  it.each([
+    ['You renewed for a final season', 11],
+    ['Netflix\'s You sets final-season premiere', 11],
+    ["'You' adds new cast members", 11],
+  ])('accepts "You" used as a title with direct structural evidence: %s', (title, showId) => {
+    expect(matchArticleToTrackedShow(article(1, title), wideShows)).toMatchObject({ matched: true, showId })
+  })
+
+  it('never lets a rejected ambiguous "from" false-positive enter Latest from your shows', () => {
+    const trackedFrom = [{ tmdb_id: 12, name: 'From' }]
+    const falsePositive = {
+      ...article(1, 'Actor from Netflix series joins season 2 cast'),
+      description: 'Season 2 casting news and streaming premiere dates.',
+    }
+    const state = mergeNews(emptyNewsState(), [falsePositive], trackedFrom)
+    expect(visibleMyShowsArticles(state)).toEqual([])
+    expect(selectGeneralNews(state, trackedFrom).map((item) => item.id)).toContain('a1')
+  })
+})
+
 describe('in-session tracked-show updates', () => {
   it('makes a newly added show eligible for My Shows news without a reload', () => {
     const cached = mergeNews(emptyNewsState(), [
