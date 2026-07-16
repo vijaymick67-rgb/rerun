@@ -53,6 +53,7 @@ describe('root navigation polish', () => {
     expect(stats).toContain('h-11 w-11')
     expect(stats).toContain('viewBox="0 0 14 4"')
     expect(stats).toContain('h-1 w-3.5')
+    expect(stats).toContain('drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65))')
     expect(stats).not.toContain('bg-black/55')
     expect(stats).not.toContain('h-9 w-9')
   })
