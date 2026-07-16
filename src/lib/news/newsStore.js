@@ -93,9 +93,13 @@ export function mergeNews(state, incoming, trackedShows, now = Date.now()) {
     incomingIds.push(article.id)
     incomingUrls.add(article.canonicalUrl)
   }
-  const visibleIds = current.visibleIds.filter((id) => articles[id] && !dismissed.has(id))
+  // Existing visible/queued personal matches age out too — a story pinned when fresh
+  // must not stay visible or queued forever just because it was already promoted.
+  const visibleIds = current.visibleIds.filter((id) =>
+    articles[id] && !dismissed.has(id) && isWithinMaxAge(articles[id], now))
   const existing = new Set(visibleIds)
-  const queuedIds = current.queuedIds.filter((id) => articles[id] && !dismissed.has(id) && !existing.has(id))
+  const queuedIds = current.queuedIds.filter((id) =>
+    articles[id] && !dismissed.has(id) && !existing.has(id) && isWithinMaxAge(articles[id], now))
   queuedIds.forEach((id) => existing.add(id))
   const newlyMatched = []
   for (const id of incomingIds) {
@@ -123,7 +127,7 @@ export function mergeNews(state, incoming, trackedShows, now = Date.now()) {
   const cappedQueue = queuedIds.slice(0, Math.max(0, MY_SHOWS_POOL_LIMIT - visibleIds.length))
   const pool = new Set([...visibleIds, ...cappedQueue])
   const generalIds = Object.values(articles)
-    .filter((article) => !pool.has(article.id) && !dismissed.has(article.id))
+    .filter((article) => !pool.has(article.id) && !dismissed.has(article.id) && isWithinMaxAge(article, now))
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
     .slice(0, 30).map((article) => article.id)
   const retained = new Set([...pool, ...generalIds])
@@ -141,9 +145,10 @@ export function dismissMyShowsArticle(state, id) {
     dismissedIds: unique([...current.dismissedIds, id]) })
 }
 
-export function visibleMyShowsArticles(state) {
+export function visibleMyShowsArticles(state, now = Date.now()) {
   const current = sanitizeNewsState(state)
-  return current.visibleIds.map((id) => current.articles[id]).filter(Boolean)
+  return current.visibleIds.map((id) => current.articles[id])
+    .filter((article) => article && isWithinMaxAge(article, now))
 }
 
 export function selectGeneralNews(state, trackedShows, now = Date.now()) {

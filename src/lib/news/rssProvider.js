@@ -3,9 +3,14 @@ import { createNewsProvider, NewsProviderError } from './provider.js'
 
 const DEFAULT_TIMEOUT_MS = 6000
 const DEFAULT_MAX_ARTICLES = 8
-// Curated feeds are third-party text we don't control — cap the response we'll
-// even attempt to parse so a misbehaving or compromised host can't force us to
-// buffer/parse an unbounded payload.
+// Curated feeds are third-party text we don't control — cap the bytes we'll accept
+// before parsing. A trustworthy Content-Length is rejected up front with no body read
+// at all. Where the runtime exposes a readable stream (real fetch, Vercel/Node), the
+// response is read incrementally and cancelled the moment it crosses this cap, so a
+// misbehaving or compromised host can't force a full unbounded buffer/parse. Runtimes
+// or test doubles without a readable stream fall back to a post-hoc size check on the
+// buffered text — that path only catches an oversized payload after the fact, it does
+// not prevent the buffering itself.
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 // fast-xml-parser never resolves external entities/DTDs, so there is no XXE surface
@@ -82,6 +87,52 @@ function atomEntryToRaw(entry, sourceName) {
   return { title, description, url: link, image: null, source: { name: sourceName }, publishedAt }
 }
 
+function contentLengthOf(response) {
+  const raw = typeof response.headers?.get === 'function' ? response.headers.get('content-length') : null
+  if (raw === null || raw === undefined) return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
+// Reads the response body up to `maxBytes`, counting actual bytes (not JS string
+// characters, which undercount multi-byte UTF-8 text). Cancels the stream the instant
+// the cap is crossed rather than finishing the download first.
+async function readBoundedText(response, maxBytes) {
+  const contentLength = contentLengthOf(response)
+  if (contentLength !== null && contentLength > maxBytes) {
+    throw new NewsProviderError('RESPONSE_TOO_LARGE', 'The feed response was too large')
+  }
+
+  if (response.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let received = 0
+    let text = ''
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received += value?.byteLength ?? 0
+        if (received > maxBytes) {
+          await reader.cancel().catch(() => {})
+          throw new NewsProviderError('RESPONSE_TOO_LARGE', 'The feed response was too large')
+        }
+        text += decoder.decode(value, { stream: true })
+      }
+      text += decoder.decode()
+    } finally {
+      reader.releaseLock?.()
+    }
+    return text
+  }
+
+  const text = await response.text()
+  if (new TextEncoder().encode(text).length > maxBytes) {
+    throw new NewsProviderError('RESPONSE_TOO_LARGE', 'The feed response was too large')
+  }
+  return text
+}
+
 function parseFeed(xml, sourceName, maxArticles) {
   let parsed
   try {
@@ -148,10 +199,7 @@ export function createRssProvider({
         })
       }
 
-      const xml = await response.text()
-      if (xml.length > MAX_RESPONSE_BYTES) {
-        throw new NewsProviderError('RESPONSE_TOO_LARGE', 'The feed response was too large')
-      }
+      const xml = await readBoundedText(response, MAX_RESPONSE_BYTES)
 
       return parseFeed(xml, name, maxArticles)
     },

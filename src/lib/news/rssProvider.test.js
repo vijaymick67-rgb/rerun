@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createRssProvider } from './rssProvider.js'
+import { createRssProvider, RSS_MAX_RESPONSE_BYTES } from './rssProvider.js'
 import { CURATED_FEED_SOURCES } from './feedSources.js'
 import { isNewsProviderError } from './provider.js'
 
@@ -35,6 +35,47 @@ const ATOM_FEED = `<?xml version="1.0" encoding="utf-8"?>
 
 function textResponse(body, { ok = true, status = 200 } = {}) {
   return { ok, status, async text() { return body } }
+}
+
+function contentLengthResponse(contentLength, { ok = true, status = 200 } = {}) {
+  return {
+    ok,
+    status,
+    headers: { get: (name) => (name.toLowerCase() === 'content-length' ? String(contentLength) : null) },
+    async text() { throw new Error('text() must not be called when Content-Length already rejects the response') },
+  }
+}
+
+function streamResponse(body, { chunkBytes, ok = true, status = 200 } = {}) {
+  const bytes = new TextEncoder().encode(body)
+  const chunkSize = chunkBytes ?? (bytes.length || 1)
+  const chunks = []
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(bytes.slice(offset, offset + chunkSize))
+  }
+  let index = 0
+  const cancel = vi.fn(async () => {})
+  return {
+    ok,
+    status,
+    headers: { get: () => null },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (index >= chunks.length) return { done: true, value: undefined }
+            const value = chunks[index]
+            index += 1
+            return { done: false, value }
+          },
+          releaseLock() {},
+          cancel,
+        }
+      },
+    },
+    async text() { throw new Error('text() must not be called when a readable stream is available') },
+    _cancel: cancel,
+  }
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -153,6 +194,63 @@ describe('curated RSS/Atom provider', () => {
 
   it('rejects an oversized response instead of parsing it', async () => {
     const huge = `<rss><channel>${'<item><title>x</title></item>'.repeat(1)}${'a'.repeat(2 * 1024 * 1024 + 1)}</channel></rss>`
+    const fetchImpl = vi.fn(async () => textResponse(huge))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    await expect(provider.fetchArticles()).rejects.toSatisfy(
+      (error) => isNewsProviderError(error) && error.code === 'RESPONSE_TOO_LARGE',
+    )
+  })
+
+  it('rejects an oversized response by Content-Length before reading the body at all', async () => {
+    const fetchImpl = vi.fn(async () => contentLengthResponse(RSS_MAX_RESPONSE_BYTES + 1))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    await expect(provider.fetchArticles()).rejects.toSatisfy(
+      (error) => isNewsProviderError(error) && error.code === 'RESPONSE_TOO_LARGE',
+    )
+  })
+
+  it('cancels a streamed response the instant it crosses the byte cap', async () => {
+    const huge = 'a'.repeat(RSS_MAX_RESPONSE_BYTES + 1024)
+    const response = streamResponse(huge, { chunkBytes: 64 * 1024 })
+    const fetchImpl = vi.fn(async () => response)
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    await expect(provider.fetchArticles()).rejects.toSatisfy(
+      (error) => isNewsProviderError(error) && error.code === 'RESPONSE_TOO_LARGE',
+    )
+    expect(response._cancel).toHaveBeenCalled()
+  })
+
+  it('still parses a normal feed delivered as a readable stream', async () => {
+    const response = streamResponse(RSS_FEED, { chunkBytes: 32 })
+    const fetchImpl = vi.fn(async () => response)
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    const articles = await provider.fetchArticles()
+
+    expect(articles).toHaveLength(2)
+    expect(articles[0].title).toBe('Show Renewed for Season 2')
+  })
+
+  it('counts multibyte UTF-8 characters as bytes, not JS string length', async () => {
+    // '€' is 1 JS string character but 3 UTF-8 bytes — a length-based (not byte-based)
+    // check would undercount this by roughly 3x and wrongly accept an oversized payload.
+    const charCount = Math.ceil((RSS_MAX_RESPONSE_BYTES + 300) / 3)
+    const oversized = '€'.repeat(charCount)
+    expect(oversized.length).toBeLessThan(RSS_MAX_RESPONSE_BYTES)
+
+    const fetchImpl = vi.fn(async () => textResponse(oversized))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    await expect(provider.fetchArticles()).rejects.toSatisfy(
+      (error) => isNewsProviderError(error) && error.code === 'RESPONSE_TOO_LARGE',
+    )
+  })
+
+  it('bounds the buffered response.text() fallback as safely as the runtime permits', async () => {
+    const huge = `<rss><channel>${'a'.repeat(RSS_MAX_RESPONSE_BYTES + 1)}</channel></rss>`
     const fetchImpl = vi.fn(async () => textResponse(huge))
     const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
 

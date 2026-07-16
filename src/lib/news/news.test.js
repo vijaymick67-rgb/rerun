@@ -311,6 +311,62 @@ describe('GET /api/news', () => {
     expect(Number.isNaN(new Date(res.body.meta.fetchedAt).getTime())).toBe(false)
   })
 
+  it('does not discard GNews fallback candidates just because curated raw count exceeds the visible limit', async () => {
+    function manyItemsXml(count, titlePrefix, linkPrefix) {
+      const items = Array.from({ length: count }, (_, index) => `
+        <item>
+          <title>${titlePrefix} ${index}</title>
+          <link>${linkPrefix}-${index}</link>
+          <description>Curated coverage ${index}</description>
+          <pubDate>Mon, 13 Jul 2026 11:00:00 GMT</pubDate>
+        </item>`).join('')
+      return `<?xml version="1.0"?><rss version="2.0"><channel>${items}</channel></rss>`
+    }
+    const calledUrls = []
+    const fetchImpl = vi.fn(async (url) => {
+      const key = String(url)
+      calledUrls.push(key)
+      if (key.includes('feed-a')) return makeXmlResponse(manyItemsXml(8, 'FeedA story', 'https://a.example/story'))
+      if (key.includes('feed-b')) return makeXmlResponse(manyItemsXml(8, 'FeedB story', 'https://b.example/story'))
+      return makeResponse({
+        body: {
+          articles: Array.from({ length: 3 }, (_, index) => ({
+            title: `GNews fallback story ${index}`,
+            description: 'A distinct fallback story.',
+            url: `https://gnews.example/story-${index}`,
+            source: { name: 'Variety' },
+            publishedAt: '2026-07-13T10:00:00Z',
+          })),
+        },
+      })
+    })
+    const res = makeHttpResponse()
+
+    await createNewsHandler({
+      env: { GNEWS_API_KEY: 'secret' }, fetchImpl,
+      feedSources: [
+        { name: 'FeedA', url: 'https://a.example/feed-a', maxArticles: 8 },
+        { name: 'FeedB', url: 'https://b.example/feed-b', maxArticles: 8 },
+      ],
+    })({ method: 'GET', query: {} }, res)
+
+    expect(res.statusCode).toBe(200)
+    // Bounded provider requests: two curated sources plus one GNews call — nothing more.
+    expect(calledUrls).toHaveLength(3)
+    const curatedCount = res.body.articles.filter((article) => article.provider !== 'gnews').length
+    // Curated raw output alone (16 articles) exceeds the old MAX_LIMIT of 10 — GNews
+    // fallback candidates must still survive into the response rather than being
+    // discarded before client-side relevance filtering runs.
+    expect(curatedCount).toBeGreaterThan(10)
+    const gnewsArticles = res.body.articles.filter((article) => article.provider === 'gnews')
+    expect(gnewsArticles).toHaveLength(3)
+    // Curated stories still rank ahead of GNews stories in the final ordering.
+    const providerOrder = res.body.articles.map((article) => article.provider)
+    expect(providerOrder.slice(-3)).toEqual(['gnews', 'gnews', 'gnews'])
+    // The whole candidate pool stays strictly bounded (fixed provider caps: 16 + 3 = 19).
+    expect(res.body.articles).toHaveLength(19)
+  })
+
   it('keeps the feed alive when one curated source fails and GNews succeeds', async () => {
     const fetchImpl = vi.fn(async (url) => {
       const key = String(url)

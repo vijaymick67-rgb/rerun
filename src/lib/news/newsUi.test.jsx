@@ -5,7 +5,7 @@ import { BrowseNewsView, NewsStoryCard } from '../../components/BrowseNews.jsx'
 import { createNewsClient, NEWS_REFRESH_MS } from './client.js'
 import { matchArticleToTrackedShow } from './matchTrackedShows.js'
 import {
-  dismissMyShowsArticle, emptyNewsState, mergeNews, NEWS_CACHE_KEY,
+  dismissMyShowsArticle, emptyNewsState, mergeNews, NEWS_CACHE_KEY, NEWS_CACHE_VERSION,
   readNewsCache, selectGeneralNews, visibleMyShowsArticles, writeNewsCache,
 } from './newsStore.js'
 import { formatRelativeTime } from './relativeTime.js'
@@ -220,6 +220,118 @@ describe('freshness and ranking (Phase 8)', () => {
     const gnews = { ...daysAgoArticle(7, 'Streaming series renewed for a different season', 1), provider: 'gnews' }
     const state = mergeNews(emptyNewsState(), [curated, gnews], shows, now)
     expect(selectGeneralNews(state, shows, now)[0].id).toBe(curated.id)
+  })
+})
+
+describe('cache expiry for already-cached personal stories (Blocker 2)', () => {
+  const now = Date.parse('2026-07-14T12:00:00Z')
+  const laterNow = now + 26 * 24 * 60 * 60 * 1000
+  function agedArticle(id, title, days) {
+    return { id: `e${id}`, title, description: 'TV series news', url: `https://example.com/e${id}`,
+      canonicalUrl: `https://example.com/e${id}`, imageUrl: null, sourceName: `Source ${id}`,
+      publishedAt: new Date(now - days * 24 * 60 * 60 * 1000).toISOString() }
+  }
+  function personalArticle(id, title, days) { return agedArticle(id, `House of the Dragon ${title}`, days) }
+
+  it('removes an existing visible article once it passes 31 days old', () => {
+    const fresh = mergeNews(emptyNewsState(), [personalArticle(1, 'update', 5)], shows, now)
+    expect(fresh.visibleIds).toContain('e1')
+
+    const pruned = mergeNews(fresh, [], shows, laterNow)
+    expect(pruned.visibleIds).not.toContain('e1')
+    expect(pruned.queuedIds).not.toContain('e1')
+  })
+
+  it('removes an existing queued article once it passes 31 days old', () => {
+    const first = mergeNews(emptyNewsState(), Array.from({ length: 11 }, (_, i) => personalArticle(i, 'update', 5)), shows, now)
+    expect(first.queuedIds).toContain('e10')
+
+    const pruned = mergeNews(first, [], shows, laterNow)
+    expect(pruned.queuedIds).not.toContain('e10')
+    expect(pruned.visibleIds).not.toContain('e10')
+  })
+
+  it('promotes a valid queued article to fill an expired visible slot', () => {
+    const state = {
+      version: NEWS_CACHE_VERSION,
+      articles: {
+        e1: personalArticle(1, 'old visible', 29), // 31 days old at laterNow — will expire
+        e2: personalArticle(2, 'queued replacement', 1), // 27 days old at laterNow — still valid
+      },
+      visibleIds: ['e1'],
+      queuedIds: ['e2'],
+      dismissedIds: [],
+      lastSuccess: now,
+    }
+
+    const pruned = mergeNews(state, [], shows, laterNow)
+    expect(pruned.visibleIds).not.toContain('e1')
+    expect(pruned.visibleIds).toContain('e2')
+    expect(pruned.queuedIds).not.toContain('e2')
+  })
+
+  it('keeps a strong personal match at 29 days old', () => {
+    const state = mergeNews(emptyNewsState(), [personalArticle(3, 'nearly expired', 29)], shows, now)
+    expect(state.visibleIds).toContain('e3')
+  })
+
+  it('keeps a dismissal even after the underlying article ages past the maximum', () => {
+    const merged = mergeNews(emptyNewsState(), [personalArticle(4, 'to dismiss', 5)], shows, now)
+    const dismissed = dismissMyShowsArticle(merged, 'e4')
+
+    const pruned = mergeNews(dismissed, [], shows, laterNow)
+    expect(pruned.dismissedIds).toContain('e4')
+  })
+
+  it('does not let an aged-out personal story reappear in general news after refresh', () => {
+    const fresh = mergeNews(emptyNewsState(), [personalArticle(5, 'aging out', 5)], shows, now)
+
+    const pruned = mergeNews(fresh, [], shows, laterNow)
+    expect(visibleMyShowsArticles(pruned, laterNow)).toEqual([])
+    expect(selectGeneralNews(pruned, shows, laterNow)).toEqual([])
+  })
+
+  it('filters an aged article out at read time even without a fresh merge', () => {
+    const fresh = mergeNews(emptyNewsState(), [personalArticle(6, 'read time check', 5)], shows, now)
+    expect(visibleMyShowsArticles(fresh, now)).toHaveLength(1)
+    expect(visibleMyShowsArticles(fresh, laterNow)).toEqual([])
+  })
+})
+
+describe('general news gap-filling from GNews when curated stories are unusable', () => {
+  it('still surfaces GNews fallback stories when curated candidates fail TV-relevance filtering', () => {
+    const now = Date.parse('2026-07-14T12:00:00Z')
+    const unusableCurated = Array.from({ length: 12 }, (_, i) => ({
+      id: `curated-unusable-${i}`,
+      title: `Local celebrity spotted at a restaurant ${i}`,
+      description: 'A lifestyle piece with no TV production context.',
+      url: `https://tvline.example/story-${i}`,
+      canonicalUrl: `https://tvline.example/story-${i}`,
+      imageUrl: null,
+      sourceName: 'TVLine',
+      publishedAt: new Date(now - i * 60 * 60 * 1000).toISOString(),
+      provider: 'tvline',
+    }))
+    const usableGnews = Array.from({ length: 4 }, (_, i) => ({
+      id: `gnews-usable-${i}`,
+      title: `Streaming series renewed for another season ${i}`,
+      description: 'The network confirmed the next season.',
+      url: `https://gnews.example/story-${i}`,
+      canonicalUrl: `https://gnews.example/story-${i}`,
+      imageUrl: null,
+      sourceName: 'Variety',
+      publishedAt: new Date(now - i * 60 * 60 * 1000).toISOString(),
+      provider: 'gnews',
+    }))
+
+    // The 12 curated raw candidates exceed the old visible limit of 10, but none of
+    // them carry real TV-production context, so all should fail relevance filtering.
+    expect(unusableCurated.length).toBeGreaterThan(10)
+    const state = mergeNews(emptyNewsState(), [...unusableCurated, ...usableGnews], shows, now)
+    const general = selectGeneralNews(state, shows, now)
+
+    expect(general).toHaveLength(4)
+    expect(general.every((article) => article.provider === 'gnews')).toBe(true)
   })
 })
 

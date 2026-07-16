@@ -7,6 +7,14 @@ import { normalizeArticle } from '../src/lib/news/normalizeArticle.js'
 
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 10
+// The response is a bounded *candidate pool* for client-side matching and filtering,
+// not the final visible list — tracked-show matching, TV-relevance filtering, and age
+// pruning all happen client-side, after this response lands. If the pool were sliced
+// down to the client's requested visible `limit`, curated coverage alone could fill it
+// and GNews fallback candidates would never survive to be considered. This is bounded
+// by the fixed per-provider caps (curated sources + GNEWS_MAX_ARTICLES), so in normal
+// operation it is a safety ceiling rather than a functional truncation.
+const CANDIDATE_POOL_LIMIT = 30
 const CACHE_CONTROL = 'public, s-maxage=1800, stale-while-revalidate=10800'
 const RSS_TIMEOUT_MS = 6000
 const RSS_MAX_ARTICLES_PER_SOURCE = 8
@@ -88,7 +96,11 @@ export function createNewsHandler({
     }
 
     const fetchedAt = new Date().toISOString()
-    const { results, providersUsed, failureCount } = await aggregateProviders(providers, { limit })
+    // Providers are asked to fill the full candidate pool, not just the client's
+    // requested visible `limit` — GNews already hard-caps itself at GNEWS_MAX_ARTICLES
+    // regardless, and curated sources ignore this value entirely (their per-source cap
+    // is fixed at creation time).
+    const { results, providersUsed, failureCount } = await aggregateProviders(providers, { limit: CANDIDATE_POOL_LIMIT })
     results.filter((result) => !result.ok).forEach(logProviderFailure)
 
     if (!providersUsed.length) {
@@ -109,11 +121,13 @@ export function createNewsHandler({
     // Generic relevance is evaluated in the client after tracked-show matching,
     // so personal stories are not discarded before the user's shows are known.
     const deduped = dedupeArticles(normalized)
-    // Curated sources fill the response first; GNews only fills whatever slots
-    // curated coverage left open.
+    // Curated sources are ordered first as a quality/ranking signal, but the slice
+    // below is bounded by the candidate pool size, not the client's visible `limit` —
+    // GNews fallback candidates must survive into the response even when curated
+    // coverage alone would exceed the visible count.
     const curated = deduped.filter((article) => article.provider !== 'gnews')
     const fallback = deduped.filter((article) => article.provider === 'gnews')
-    const articles = [...curated, ...fallback].slice(0, limit)
+    const articles = [...curated, ...fallback].slice(0, CANDIDATE_POOL_LIMIT)
 
     json(
       res,
