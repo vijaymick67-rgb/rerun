@@ -146,12 +146,12 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   }
 
   return (
-    <div className="p-4">
-      <div className="flex items-center gap-2">
+    <div className="nested-page px-4 pb-4">
+      <div className="flex min-h-11 items-center gap-2">
         <Link
           to={`/watching/${numericTmdbId}`}
           aria-label="Back to show"
-          className="motion-press shrink-0 rounded-md p-1 text-lg text-(--color-text-muted)"
+          className="motion-press flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-lg text-(--color-text-muted)"
         >
           ‹
         </Link>
