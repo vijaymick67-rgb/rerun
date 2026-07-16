@@ -3,6 +3,70 @@
 // TV-production context. Multi-word titles are distinctive enough to match directly.
 const CONTEXT_SIGNAL = /\b(?:season|seasons|series|episode|episodes|premiere|premieres|premiered|renew|renews|renewed|renewal|cancel|cancels|cancelled|canceled|cancellation|trailer|showrunner|finale|spinoff|streaming|stream|cast|casts|casting|network|debut|debuts|greenlit|greenlight|revival|reboot|hbo|max|netflix|apple tv|prime video|disney|hulu|peacock|paramount|fx|amc|showtime|starz|bbc|itv|mgm)\b/
 
+// Some single-word titles aren't just ambiguous — they're ordinary grammatical words
+// ("from", "you") that show up constantly in headlines with no relation to the show at
+// all ("Actor from Netflix series joins season 2 cast"). For these, a generic TV-context
+// word appearing *anywhere* in the headline/body is not enough evidence, because that
+// context can belong to a completely different subject. These titles require structural
+// proof the word is being used *as a title* — see hasTitleStructuralEvidence below.
+const ULTRA_AMBIGUOUS_TITLES = new Set(['from', 'you'])
+
+// Words that, appearing immediately next to an ultra-ambiguous title (touching it, not
+// merely present somewhere in the same sentence), mark the title as a production noun
+// rather than a preposition/pronoun: "From renewed", "From season 4", "series From",
+// "You sets", "'You' adds". Deliberately excludes generic nouns like platform names or
+// "trailer" that commonly precede "from" in ordinary sentences ("a trailer from Netflix").
+const TITLE_ADJACENCY_SIGNAL = new Set([
+  'season', 'seasons', 'series', 'renew', 'renews', 'renewed', 'renewal',
+  'cancel', 'cancels', 'cancelled', 'canceled', 'cancellation', 'finale',
+  'premiere', 'premieres', 'premiered', 'cast', 'casts', 'casting',
+  'spinoff', 'showrunner', 'greenlit', 'reboot', 'revival', 'returns', 'sets', 'adds',
+])
+
+const QUOTE_CHAR_PATTERN = '[\'"‘’“”]'
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// A title wrapped in quotes ("'From' adds new series regular") is, by construction, a
+// named thing rather than a word used in its ordinary grammatical sense — this checks
+// the raw (pre-normalization) headline, since normalizeNewsText strips quote characters.
+function hasQuotedTitle(rawHeadline, title) {
+  if (typeof rawHeadline !== 'string' || !rawHeadline) return false
+  const escaped = title.split(' ').map(escapeRegExp).join('\\s+')
+  return new RegExp(`${QUOTE_CHAR_PATTERN}\\s*${escaped}\\s*${QUOTE_CHAR_PATTERN}`, 'i').test(rawHeadline)
+}
+
+function indicesOfPhrase(words, phraseWords) {
+  const indices = []
+  for (let i = 0; i <= words.length - phraseWords.length; i += 1) {
+    if (phraseWords.every((word, offset) => words[i + offset] === word)) indices.push(i)
+  }
+  return indices
+}
+
+// True when a TITLE_ADJACENCY_SIGNAL word directly touches the title's occurrence in the
+// headline — "From season 4" or "the series From" — rather than merely co-occurring
+// somewhere in the same headline, which is what let "Actor from Netflix series joins
+// season 2 cast" slip through before.
+function hasAdjacentTitleSignal(headline, title) {
+  const words = headline.split(' ').filter(Boolean)
+  const phraseWords = title.split(' ')
+  return indicesOfPhrase(words, phraseWords).some((index) => {
+    const before = index > 0 ? words[index - 1] : null
+    const after = index + phraseWords.length < words.length ? words[index + phraseWords.length] : null
+    return (before && TITLE_ADJACENCY_SIGNAL.has(before)) || (after && TITLE_ADJACENCY_SIGNAL.has(after))
+  })
+}
+
+// Ultra-ambiguous titles need proof the word is functioning as a title in the headline
+// itself — a generic context word anywhere in the headline/body (the ordinary weak-title
+// rule) isn't enough, because "from"/"you" appear constantly with no relation to the show.
+function hasTitleStructuralEvidence(rawHeadline, normalizedHeadline, title) {
+  return hasAdjacentTitleSignal(normalizedHeadline, title) || hasQuotedTitle(rawHeadline, title)
+}
+
 export function normalizeNewsText(value) {
   return typeof value === 'string'
     ? value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -39,7 +103,10 @@ export function matchArticleToTrackedShow(article, trackedShows = []) {
       const headlineMatch = titleInHeadline(headline, variant)
       const contextMatch = phraseIn(body, variant)
       const isWeakTitle = words.length === 1
-      if (isWeakTitle) {
+      const isUltraAmbiguous = isWeakTitle && ULTRA_AMBIGUOUS_TITLES.has(variant)
+      if (isUltraAmbiguous) {
+        if (!headlineMatch || !hasTitleStructuralEvidence(article.title, headline, variant)) continue
+      } else if (isWeakTitle) {
         if (!headlineMatch || !CONTEXT_SIGNAL.test(`${headline} ${body}`)) continue
       } else if (!headlineMatch && !contextMatch) {
         continue
