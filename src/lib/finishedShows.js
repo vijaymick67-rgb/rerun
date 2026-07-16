@@ -24,7 +24,11 @@ export function isHiddenShow(show) {
 // a returning show may still be finished for this owner.
 export function isVisibleInWatching(show, status) {
   if (isHiddenShow(show)) return false
-  if (!isPersonallyFinished(show)) return !isHiddenFromWatching(status)
+  // Keep a tracked show visible while transient metadata is retried.
+  if (show?.loadError) return true
+  if (!isPersonallyFinished(show)) {
+    return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
+  }
   return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
 }
 
