@@ -247,8 +247,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 px-4"
-      style={{ paddingBottom: 'calc(4rem + env(safe-area-inset-bottom) + 1rem)' }}
+      className="safe-area-overlay fixed inset-0 z-40 flex items-end justify-center bg-black/60 px-4"
       onClick={onClose}
     >
       <div
@@ -599,7 +598,7 @@ export default function Stats() {
   const hasData = shows.length > 0
 
   return (
-    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+    <div className="app-page px-4 pb-4">
       {loading && (
         <div className="flex flex-col gap-3">
           <div className="h-24 animate-pulse rounded-xl bg-(--color-surface-raised)" />

@@ -16,6 +16,10 @@
 }
 
 :root {
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --motion-fast: 140ms;
   --motion-normal: 220ms;
   --motion-slow: 300ms;
@@ -29,12 +33,55 @@ body,
   height: 100%;
 }
 
+html {
+  background: var(--color-bg);
+}
+
 body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+.app-shell {
+  min-height: 100%;
+  padding-bottom: calc(4rem + var(--safe-area-inset-bottom));
+}
+
+.app-page {
+  padding-top: max(1rem, var(--safe-area-inset-top));
+}
+
+.app-tab-bar {
+  min-height: 4rem;
+  padding-bottom: var(--safe-area-inset-bottom);
+}
+
+.safe-area-overlay {
+  padding-top: max(1rem, var(--safe-area-inset-top));
+  padding-right: max(1rem, var(--safe-area-inset-right));
+  padding-bottom: max(1rem, var(--safe-area-inset-bottom));
+  padding-left: max(1rem, var(--safe-area-inset-left));
+}
+
+.update-prompt {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(4rem + var(--safe-area-inset-bottom) + 1rem);
+  left: 1rem;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 32rem;
+  margin-inline: auto;
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  border-radius: 0.75rem;
+  background: var(--color-surface);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.28);
 }
 
 .motion-press {

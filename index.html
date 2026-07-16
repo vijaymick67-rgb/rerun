@@ -2,11 +2,32 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>rerun</title>
+    <link rel="icon" type="image/svg+xml" href="/rerun-icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <meta name="description" content="A personal TV tracker for keeping up with the shows you watch." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="RERUN" />
+    <title>RERUN</title>
+    <style>
+      :root, body { background: #0f1115; }
+      body { margin: 0; color: #e5e7eb; }
+      .app-loading-shell { min-height: 100vh; display: grid; place-items: center; background: #0f1115; color: #e5e7eb; font: 600 0.875rem system-ui, sans-serif; letter-spacing: 0.18em; }
+      .app-loading-shell__mark { display: grid; gap: 0.75rem; justify-items: center; }
+      .app-loading-shell__dot { width: 0.45rem; height: 0.45rem; border-radius: 999px; background: #5b8def; }
+      @media (prefers-reduced-motion: no-preference) { .app-loading-shell__dot { animation: rerun-loading-pulse 1.2s ease-in-out infinite; } }
+      @keyframes rerun-loading-pulse { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+    </style>
   </head>
   <body>
+    <div id="app-loading" class="app-loading-shell" role="status" aria-live="polite" aria-label="Loading RERUN">
+      <div class="app-loading-shell__mark">
+        <span>RERUN</span>
+        <span class="app-loading-shell__dot" aria-hidden="true"></span>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
