@@ -50,4 +50,18 @@ describe('global iOS status-bar scrim', () => {
     expect(tabBarSource).toContain('app-tab-bar fixed inset-x-0 bottom-0')
     expect(css).toContain('padding-bottom: var(--safe-area-inset-bottom)')
   })
+
+  it('keeps route transitions between the stable shell layers', () => {
+    const html = renderApp('/watching/123')
+    expect(html).toContain('class="global-top-scrim"')
+    expect(html).toContain('route-content route-content--nested')
+    expect(html).toContain('app-tab-bar fixed inset-x-0 bottom-0')
+    expect(html.indexOf('global-top-scrim')).toBeLessThan(html.indexOf('route-content'))
+    expect(html.indexOf('route-content')).toBeLessThan(html.indexOf('app-tab-bar'))
+    expect(css).toContain('animation: route-content-fade 160ms')
+    expect(css).toContain('animation: route-content-nested-in 160ms')
+    expect(css).toContain('route-content--tab')
+    expect(css).toContain('route-content--nested')
+    expect(css).toContain('animation: none')
+  })
 })
