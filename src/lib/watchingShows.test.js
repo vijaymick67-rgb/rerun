@@ -253,6 +253,38 @@ describe('Watching TVmaze airstamp enrichment', () => {
   })
 })
 
+describe('Watching enrichment failure isolation', () => {
+  it('settles all shows when one metadata request hangs and preserves the failed show', async () => {
+    vi.useFakeTimers()
+    const candidates = [
+      { tmdb_id: 1, name: 'Hanging show' },
+      { tmdb_id: 2, name: 'Healthy show' },
+    ]
+    const getShowDetails = vi.fn((tmdbId) => tmdbId === 1
+      ? new Promise(() => {})
+      : Promise.resolve({ seasons: [], status: 'Returning Series' }))
+
+    const resultPromise = enrichTrackedShowsForWatching(
+      candidates,
+      new Map(),
+      new Map(),
+      {
+        getShowDetails,
+        getSeasonEpisodes: vi.fn(),
+        getShowReleaseMap: vi.fn(async () => ({})),
+      },
+    )
+    await vi.advanceTimersByTimeAsync(12_000)
+    const result = await resultPromise
+
+    expect(result.map((show) => show.tmdb_id)).toEqual([1, 2])
+    expect(result[0].loadError).toBe(true)
+    expect(result[0].status).toBeTruthy()
+    expect(result[1].loadError).toBe(false)
+    vi.useRealTimers()
+  })
+})
+
 describe('archived TVmaze release enrichment order', () => {
   afterEach(() => vi.useRealTimers())
 
