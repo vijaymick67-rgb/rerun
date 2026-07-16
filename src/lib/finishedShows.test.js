@@ -41,8 +41,15 @@ describe('personal finished state', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('keeps an active caught-up show visible', () => {
-    expect(isVisibleInWatching({ finished_at: null }, caughtUp)).toBe(true)
+  it('hides caught-up shows while keeping next-up and countdown boundaries visible', () => {
+    expect(isVisibleInWatching({ finished_at: null }, caughtUp)).toBe(false)
+    expect(isVisibleInWatching({ finished_at: null }, { type: 'nextUp' })).toBe(true)
+    expect(isVisibleInWatching({ finished_at: null }, { type: 'countdown', daysUntil: 60 })).toBe(true)
+    expect(isVisibleInWatching({ finished_at: null }, { type: 'countdown', daysUntil: 61 })).toBe(false)
+  })
+
+  it('does not hide a show when metadata loading fails', () => {
+    expect(isVisibleInWatching({ finished_at: null, loadError: true }, caughtUp)).toBe(true)
   })
 
   it('hides a personally finished active/returning show without changing its Stats eligibility', () => {
@@ -101,7 +108,7 @@ describe('personal finished state', () => {
     supabase.finished.set(7, '2026-07-12T00:00:00Z')
     await restoreTrackedShow(supabase, 7)
     expect(supabase.finished.get(7)).toBeNull()
-    expect(isVisibleInWatching({ finished_at: supabase.finished.get(7) }, caughtUp)).toBe(true)
+    expect(isVisibleInWatching({ finished_at: supabase.finished.get(7) }, { type: 'nextUp' })).toBe(true)
   })
 
   it('repair excludes every exception and never changes watched rows', async () => {

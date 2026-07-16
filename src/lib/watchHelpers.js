@@ -269,7 +269,7 @@ export const WATCHING_COUNTDOWN_WINDOW_DAYS = 60
 
 export function isHiddenFromWatching(status) {
   if (!status) return false
-  if (status.type === 'completed') return true
+  if (status.type === 'completed' || status.type === 'caughtUp') return true
   if (status.type === 'countdown' && status.daysUntil > WATCHING_COUNTDOWN_WINDOW_DAYS) return true
   return false
 }

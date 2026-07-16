@@ -4,12 +4,19 @@ import {
   episodeReleaseDateInIST,
   formatReleaseDisplay,
   hasAired,
+  isHiddenFromWatching,
   predictWeeklyNextRelease,
   watchingStatusLabel,
 } from './watchHelpers'
 
 afterEach(() => {
   vi.useRealTimers()
+})
+
+it('hides caught-up status but keeps the exact 60-day countdown boundary visible', () => {
+  expect(isHiddenFromWatching({ type: 'caughtUp' })).toBe(true)
+  expect(isHiddenFromWatching({ type: 'countdown', daysUntil: 60 })).toBe(false)
+  expect(isHiddenFromWatching({ type: 'countdown', daysUntil: 61 })).toBe(true)
 })
 
 const platform = (name, hour) => ({

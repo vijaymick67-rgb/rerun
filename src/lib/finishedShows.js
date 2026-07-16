@@ -24,6 +24,8 @@ export function isHiddenShow(show) {
 // a returning show may still be finished for this owner.
 export function isVisibleInWatching(show, status) {
   if (isHiddenShow(show)) return false
+  // Keep a tracked show visible while transient metadata is retried.
+  if (show?.loadError) return true
   if (!isPersonallyFinished(show)) return !isHiddenFromWatching(status)
   return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
 }
@@ -107,6 +109,28 @@ export async function upsertTrackedShow(supabase, show, addedAt = new Date().toI
   if (error) throw error
 }
 
+// Undo only a newly-created Browse row, and only while it has no watched
+// history. This intentionally never touches watched_episodes.
+export async function removeTrackedShowIfUnwatched(supabase, tmdbId) {
+  const { data: watchedRows, error: watchedError } = await supabase
+    .from('watched_episodes')
+    .select('tmdb_show_id')
+    .eq('tmdb_show_id', tmdbId)
+    .limit(1)
+  if (watchedError) throw watchedError
+  if ((watchedRows ?? []).length > 0) {
+    const error = new Error('Show has watched history')
+    error.code = 'WATCHED_HISTORY_EXISTS'
+    throw error
+  }
+
+  const { error } = await supabase
+    .from('tracked_shows')
+    .delete()
+    .eq('tmdb_id', tmdbId)
+  if (error) throw error
+}
+
 // Repairs only the persisted archive state. It never reads or writes
 // watched_episodes, so historic watched_at values remain exactly as stored.
 export async function finishTrackedShows(shows, options = {}) {
@@ -126,3 +150,4 @@ export async function finishTrackedShows(shows, options = {}) {
   }
   return results
 }
+
