@@ -25,7 +25,9 @@ export async function selectTrackedShowsForWatching(
           ? { show, details: enrichedDetails, releaseMap }
           : null
       } catch {
-        return null
+        // Keep the tracked show as a candidate; Stage 2 preserves visibility
+        // while transient metadata failures are retried.
+        return { show, loadError: true }
       }
     }),
   )
@@ -34,7 +36,7 @@ export async function selectTrackedShowsForWatching(
   return {
     candidates: [...unfinished, ...returning.map((entry) => entry.show)],
     preloadedById: new Map(
-      returning.map((entry) => [entry.show.tmdb_id, {
+      returning.filter((entry) => entry.details).map((entry) => [entry.show.tmdb_id, {
         details: entry.details,
         releaseMap: entry.releaseMap,
       }]),
