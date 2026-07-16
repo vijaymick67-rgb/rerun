@@ -57,6 +57,9 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
 - Always branch new work off `main` directly — never stack a branch on an unmerged PR's branch.
 - Before merging, always request full raw file content — not diffs or summaries. GitHub's diff
   view can visually mislead (looks like duplication when it isn't).
+- Keep source and documentation files UTF-8 encoded. Avoid PowerShell `Out-File` and `>`
+  redirection unless UTF-8 output is explicitly assured; run `npm run check:encoding` before
+  pushing, inspect the PR diff for mojibake, and never paste terminal output into source files.
 - All layout/UI changes sanity-checked at 375px width (iPhone 12 primary device).
 - Model default: **Sonnet** for both chat and Claude Code. Only escalate to **Opus** for initial/
   tricky schema design, or if Sonnet is stuck on the same bug after a few tries.

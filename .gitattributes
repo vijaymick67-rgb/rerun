@@ -1,0 +1,32 @@
+# Keep repository text files portable across Git clients and operating systems.
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.svg text eol=lf
+*.txt text eol=lf
+
+# Known binary assets must not be treated as text.
+*.avif binary
+*.bmp binary
+*.gif binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.mp3 binary
+*.mp4 binary
+*.otf binary
+*.pdf binary
+*.png binary
+*.ttf binary
+*.wasm binary
+*.webm binary
+*.webp binary
+*.woff binary
+*.woff2 binary
