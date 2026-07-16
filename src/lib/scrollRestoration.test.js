@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
   createBoundedScrollRestorer,
+  flushPendingScrollPosition,
   getScrollNavigationAction,
   getScrollRouteKey,
   isNestedParentPath,
   MAX_RESTORE_ATTEMPTS,
+  RESTORE_RETRY_DELAY_MS,
 } from './scrollRestoration'
 
 const source = readFileSync(new URL('./scrollRestoration.js', import.meta.url), 'utf8')
@@ -80,9 +82,39 @@ describe('scroll restoration route policy', () => {
 })
 
 describe('bounded dynamic-content restoration', () => {
-  it('retries only until the target is reachable or the fixed bound is met', () => {
+  it('preserves the captured Watching position across a clamped route commit', () => {
+    const positions = new Map([['/watching', 1800]])
+    const pendingPositions = new Map([['/watching', 1800]])
+    let maxScroll = 200
+    const restored = []
+    let scheduled
+
+    flushPendingScrollPosition(positions, pendingPositions, '/watching')
+    expect(positions.get('/watching')).toBe(1800)
+
+    createBoundedScrollRestorer({
+      target: positions.get('/watching'),
+      getMaxScroll: () => maxScroll,
+      scrollTo: (position) => restored.push(position),
+      schedule: (callback) => {
+        scheduled = callback
+        return 1
+      },
+      cancelSchedule: () => {},
+    })
+
+    expect(restored).toEqual([200])
+    maxScroll = 1800
+    scheduled()
+    expect(restored).toEqual([200, 1800])
+  })
+
+  it('waits beyond 150ms and stops immediately once the target is reachable', () => {
     let maxScroll = 0
     let scheduled
+    let scheduleCount = 0
+    let finishCount = 0
+    let elapsed = 0
     const positions = []
     const cancelSchedule = () => {}
 
@@ -91,23 +123,37 @@ describe('bounded dynamic-content restoration', () => {
       getMaxScroll: () => maxScroll,
       scrollTo: (position) => positions.push(position),
       schedule: (callback) => {
-        scheduled = callback
-        return 1
+        scheduleCount += 1
+        scheduled = () => {
+          elapsed += RESTORE_RETRY_DELAY_MS
+          callback()
+        }
+        return scheduleCount
       },
       cancelSchedule,
+      onFinish: () => { finishCount += 1 },
     })
 
     expect(positions).toEqual([0])
+    expect(scheduleCount).toBe(1)
+    scheduled()
+    scheduled()
+    expect(elapsed).toBe(150)
+    expect(positions).toEqual([0, 0, 0])
     maxScroll = 600
     scheduled()
-    expect(positions).toEqual([0, 500])
+    expect(elapsed).toBeGreaterThan(150)
+    expect(positions).toEqual([0, 0, 0, 500])
+    expect(finishCount).toBe(1)
+    scheduled()
+    expect(positions).toEqual([0, 0, 0, 500])
   })
 
   it('stops after the fixed attempt bound and supports cancellation', () => {
     let scheduled
     let scheduleCount = 0
+    const cancelledTimers = []
     const positions = []
-    const cancelSchedule = () => {}
     const cancel = createBoundedScrollRestorer({
       target: 500,
       getMaxScroll: () => 0,
@@ -117,15 +163,40 @@ describe('bounded dynamic-content restoration', () => {
         scheduleCount += 1
         return scheduleCount
       },
-      cancelSchedule,
+      cancelSchedule: (timerId) => cancelledTimers.push(timerId),
+      onFinish: () => { throw new Error('cancelled restoration must not finish') },
+    })
+
+    scheduled()
+    expect(positions).toHaveLength(2)
+    expect(scheduleCount).toBe(2)
+
+    cancel()
+    expect(cancelledTimers).toEqual([2])
+    scheduled()
+    expect(positions).toHaveLength(2)
+  })
+
+  it('finishes at the hard bound and cancels scheduled work', () => {
+    let scheduled
+    const cancelledTimers = []
+    let finishCount = 0
+    const positions = []
+    createBoundedScrollRestorer({
+      target: 500,
+      getMaxScroll: () => 0,
+      scrollTo: (position) => positions.push(position),
+      schedule: (callback) => {
+        scheduled = callback
+        return positions.length
+      },
+      cancelSchedule: (timerId) => cancelledTimers.push(timerId),
+      onFinish: () => { finishCount += 1 },
     })
 
     for (let attempt = 0; attempt < MAX_RESTORE_ATTEMPTS - 1; attempt += 1) scheduled()
     expect(positions).toHaveLength(MAX_RESTORE_ATTEMPTS)
-    expect(scheduleCount).toBe(MAX_RESTORE_ATTEMPTS - 1)
-
-    cancel()
-    scheduled()
-    expect(positions).toHaveLength(MAX_RESTORE_ATTEMPTS)
+    expect(finishCount).toBe(1)
+    expect(cancelledTimers).toEqual([])
   })
 })

@@ -1,6 +1,7 @@
 export const MAIN_TAB_PATHS = new Set(['/browse', '/watching', '/stats', '/settings'])
-export const MAX_RESTORE_ATTEMPTS = 4
-export const RESTORE_RETRY_DELAY_MS = 50
+// The initial attempt plus 19 bounded retries spans about 1.4 seconds.
+export const MAX_RESTORE_ATTEMPTS = 20
+export const RESTORE_RETRY_DELAY_MS = 75
 
 export function isMainTabPath(pathname) {
   return MAIN_TAB_PATHS.has(pathname) || pathname === '/'
@@ -25,6 +26,14 @@ export function isNestedParentPath(fromPathname, toPathname) {
   }
 
   return false
+}
+
+export function flushPendingScrollPosition(positions, pendingPositions, routeKey) {
+  const pendingPosition = pendingPositions.get(routeKey)
+  if (pendingPosition === undefined) return
+
+  positions.set(routeKey, pendingPosition)
+  pendingPositions.delete(routeKey)
 }
 
 export function getScrollNavigationAction({
@@ -55,22 +64,33 @@ export function createBoundedScrollRestorer({
   scrollTo,
   schedule,
   cancelSchedule,
+  onFinish,
   maxAttempts = MAX_RESTORE_ATTEMPTS,
   retryDelay = RESTORE_RETRY_DELAY_MS,
 }) {
   let attempts = 0
   let cancelled = false
+  let finished = false
   let timerId = null
 
+  const finish = () => {
+    if (finished) return
+    finished = true
+    onFinish?.()
+  }
+
   const run = () => {
-    if (cancelled) return
+    if (cancelled || finished) return
 
     attempts += 1
     const reachablePosition = Math.max(0, getMaxScroll())
     const position = Math.min(target, reachablePosition)
     scrollTo(position)
 
-    if (position >= target || attempts >= maxAttempts) return
+    if (position >= target || attempts >= maxAttempts) {
+      finish()
+      return
+    }
     timerId = schedule(run, retryDelay)
   }
 

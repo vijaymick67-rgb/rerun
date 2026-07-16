@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useLocation, useNavigationType } from 'react-router-dom'
 import {
   createBoundedScrollRestorer,
+  flushPendingScrollPosition,
   getScrollNavigationAction,
   getScrollRouteKey,
 } from '../lib/scrollRestoration'
@@ -16,6 +17,8 @@ export default function ScrollRestorationManager() {
   const currentRouteKeyRef = useRef(getScrollRouteKey(pathname))
   const initialRef = useRef(true)
   const captureFrameRef = useRef(null)
+  const captureFrameKeyRef = useRef(null)
+  const pendingPositionsRef = useRef(new Map())
   const cancelRestoreRef = useRef(null)
   const programmaticScrollRef = useRef(false)
 
@@ -23,12 +26,23 @@ export default function ScrollRestorationManager() {
     if (typeof window === 'undefined') return undefined
 
     const handleScroll = () => {
-      if (programmaticScrollRef.current || captureFrameRef.current !== null) return
+      if (programmaticScrollRef.current) return
+
+      const routeKey = currentRouteKeyRef.current
+      pendingPositionsRef.current.set(routeKey, window.scrollY)
+      if (captureFrameRef.current !== null) return
 
       captureFrameRef.current = window.requestAnimationFrame(() => {
         captureFrameRef.current = null
-        positionsRef.current.set(currentRouteKeyRef.current, window.scrollY)
+        const pendingRouteKey = captureFrameKeyRef.current
+        captureFrameKeyRef.current = null
+        const pendingPosition = pendingPositionsRef.current.get(pendingRouteKey)
+        if (pendingPosition !== undefined) {
+          positionsRef.current.set(pendingRouteKey, pendingPosition)
+          pendingPositionsRef.current.delete(pendingRouteKey)
+        }
       })
+      captureFrameKeyRef.current = routeKey
     }
 
     window.addEventListener('scroll', handleScroll, { passive: true })
@@ -46,12 +60,18 @@ export default function ScrollRestorationManager() {
     if (captureFrameRef.current !== null) {
       window.cancelAnimationFrame(captureFrameRef.current)
       captureFrameRef.current = null
+      captureFrameKeyRef.current = null
     }
 
     const previousPathname = previousPathnameRef.current
     const isInitial = initialRef.current
     if (previousPathname !== pathname) {
-      positionsRef.current.set(getScrollRouteKey(previousPathname), window.scrollY)
+      const previousRouteKey = getScrollRouteKey(previousPathname)
+      flushPendingScrollPosition(
+        positionsRef.current,
+        pendingPositionsRef.current,
+        previousRouteKey,
+      )
     }
 
     const action = getScrollNavigationAction({
@@ -112,13 +132,15 @@ export default function ScrollRestorationManager() {
       scrollTo: (position) => {
         programmaticScrollRef.current = true
         window.scrollTo({ top: position, left: 0, behavior: 'auto' })
+      },
+      schedule: (callback, delay) => window.setTimeout(callback, delay),
+      cancelSchedule: (timerId) => window.clearTimeout(timerId),
+      onFinish: () => {
         restorationFrame = window.requestAnimationFrame(() => {
           programmaticScrollRef.current = false
           restorationFrame = null
         })
       },
-      schedule: (callback, delay) => window.setTimeout(callback, delay),
-      cancelSchedule: (timerId) => window.clearTimeout(timerId),
     })
     cancelRestoreRef.current = cleanup
 
