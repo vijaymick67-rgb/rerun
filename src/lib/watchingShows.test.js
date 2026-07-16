@@ -3,6 +3,7 @@ import {
   attachEpisodeReleaseData,
   attachReleaseData,
   enrichTrackedShowsForWatching,
+  loadWatchingShowData,
   selectTrackedShowsForWatching,
 } from './watchingShows'
 import { episodeKey, hasAired } from './watchHelpers'
@@ -53,6 +54,17 @@ describe('Watching archived-show loading', () => {
       vi.fn(async () => { throw new Error('network') }),
       vi.fn(async () => { throw new Error('network') }),
     )
+    expect(candidates).toEqual([show])
+  })
+
+  it('keeps an archived show eligible when return metadata times out', async () => {
+    const show = { tmdb_id: 13, name: 'Pending return', finished_at: '2026-01-01T00:00:00Z' }
+    const pending = new Promise(() => {})
+    const resultPromise = selectTrackedShowsForWatching(
+      [show], () => pending, () => pending,
+    )
+    await vi.advanceTimersByTimeAsync(12_000)
+    const { candidates } = await resultPromise
     expect(candidates).toEqual([show])
   })
 
@@ -264,6 +276,7 @@ describe('Watching enrichment failure isolation', () => {
       ? new Promise(() => {})
       : Promise.resolve({ seasons: [], status: 'Returning Series' }))
 
+    const settled = []
     const resultPromise = enrichTrackedShowsForWatching(
       candidates,
       new Map(),
@@ -273,7 +286,10 @@ describe('Watching enrichment failure isolation', () => {
         getSeasonEpisodes: vi.fn(),
         getShowReleaseMap: vi.fn(async () => ({})),
       },
+      { onShowSettled: (show) => settled.push(show.tmdb_id) },
     )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toContain(2)
     await vi.advanceTimersByTimeAsync(12_000)
     const result = await resultPromise
 
@@ -281,6 +297,51 @@ describe('Watching enrichment failure isolation', () => {
     expect(result[0].loadError).toBe(true)
     expect(result[0].status).toBeTruthy()
     expect(result[1].loadError).toBe(false)
+    expect(result[0].loadDiagnostics[0]).toMatchObject({
+      code: 'DATA-TIMEOUT', tmdbShowId: 1,
+    })
+    vi.useRealTimers()
+  })
+
+  it('classifies per-show TMDB and TVmaze failures without rejecting the load', async () => {
+    const result = await loadWatchingShowData(
+      { tmdb_id: 21 }, new Set(), undefined,
+      {
+        getShowDetails: vi.fn(async () => { throw new TypeError('TMDB down') }),
+        getSeasonEpisodes: vi.fn(),
+        getShowReleaseMap: vi.fn(async () => { throw new Error('TVmaze down') }),
+      },
+    )
+    expect(result.loadError).toBe(true)
+    expect(result.failures.map((failure) => failure.code)).toEqual(['DATA-TMDB', 'DATA-TVMAZE'])
+    expect(result.failures.every((failure) => failure.tmdbShowId === 21)).toBe(true)
+  })
+
+  it('can retry a timed-out show enrichment without mutating the candidate', async () => {
+    vi.useFakeTimers()
+    const show = { tmdb_id: 9, name: 'Retry me' }
+    let attempt = 0
+    const getShowDetails = vi.fn(() => {
+      attempt += 1
+      return attempt === 1
+        ? new Promise(() => {})
+        : Promise.resolve({ seasons: [], status: 'Returning Series' })
+    })
+    const first = enrichTrackedShowsForWatching(
+      [show], new Map(), new Map(),
+      { getShowDetails, getSeasonEpisodes: vi.fn(), getShowReleaseMap: vi.fn(async () => ({})) },
+    )
+    await vi.advanceTimersByTimeAsync(12_000)
+    const firstResult = await first
+    expect(firstResult[0]).toMatchObject({ tmdb_id: 9, loadError: true })
+
+    const secondResult = await enrichTrackedShowsForWatching(
+      [show], new Map(), new Map(),
+      { getShowDetails, getSeasonEpisodes: vi.fn(), getShowReleaseMap: vi.fn(async () => ({})) },
+    )
+    expect(secondResult[0]).toMatchObject({ tmdb_id: 9, loadError: false })
+    expect(getShowDetails).toHaveBeenCalledTimes(2)
+    expect(show).toEqual({ tmdb_id: 9, name: 'Retry me' })
     vi.useRealTimers()
   })
 })

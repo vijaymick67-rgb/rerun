@@ -15,6 +15,35 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
 import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 
+function sortWatchingShows(shows) {
+  const statusRank = { nextUp: 0, countdown: 1, caughtUp: 2, completed: 3 }
+  return [...shows].sort((a, b) => {
+    const rankDiff = statusRank[a.status.type] - statusRank[b.status.type]
+    if (rankDiff !== 0) return rankDiff
+    if (a.status.type === 'nextUp') return a.status.air_date < b.status.air_date ? -1 : 1
+    if (a.status.type === 'countdown') {
+      return Math.max(0, a.status.daysUntil) - Math.max(0, b.status.daysUntil)
+    }
+    return new Date(b.added_at) - new Date(a.added_at)
+  })
+}
+
+export function WatchingPartialWarning({ error, onRetry }) {
+  if (!error) return null
+  return (
+    <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+      <span>Some show details couldn’t refresh. <span className="whitespace-nowrap">({error.code})</span></span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-amber-200"
+      >
+        Retry
+      </button>
+    </div>
+  )
+}
+
 // v2: shows now carry `status` (nextUp/countdown/caughtUp/completed) instead
 // of a bare `nextUp` — bumped so a stale v1 entry doesn't briefly render as
 // "Caught up" before the fresh load overwrites it.
@@ -25,6 +54,7 @@ export default function Watching() {
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)
+  const [partialError, setPartialError] = useState(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
@@ -35,6 +65,7 @@ export default function Watching() {
 
     async function load() {
       setError(null)
+      setPartialError(null)
       try {
         const { data: trackedShows, error: showsError } = await withTimeout((signal) => {
           let query = supabase.from('tracked_shows').select('*').order('added_at', { ascending: false })
@@ -51,46 +82,74 @@ export default function Watching() {
           return
         }
 
-        const { candidates, preloadedById } = await withTimeout(
-          () => selectTrackedShowsForWatching(
-            trackedShows,
-            getShowDetails,
-            (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
-          ),
-          { stage: 'watching-selection', source: 'tmdb' },
+        const selection = await selectTrackedShowsForWatching(
+          trackedShows,
+          getShowDetails,
+          (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
+          { deferFinished: true },
         )
+        const renderedById = new Map((cachedShows ?? []).map((show) => [show.tmdb_id, show]))
+        const freshById = new Map()
+        let renderedAny = renderedById.size > 0
+        let partialFailureCount = 0
+        let refreshHadFailure = false
 
-        if (candidates.length === 0) {
-          if (!ignore) {
-            setShows([])
-            saveWatchingCache([])
+        const mergeRenderedShow = (show) => {
+          if (ignore) return
+          renderedAny = true
+          renderedById.set(show.tmdb_id, show)
+          freshById.set(show.tmdb_id, show)
+          const next = sortWatchingShows([...renderedById.values()])
+          setShows(next)
+          setLoading(false)
+          if (show.loadError) {
+            refreshHadFailure = true
+            partialFailureCount += 1
+            setPartialError({
+              code: show.loadDiagnostics?.[0]?.code ?? 'DATA-UNKNOWN',
+              count: partialFailureCount,
+            })
           }
-          return
         }
 
-        const tmdbIds = candidates.map((show) => show.tmdb_id)
-        const watchedRows = await withTimeout(
-          (signal) => fetchWatchedEpisodes(
-            supabase,
-            'tmdb_show_id, season_number, episode_number',
-            tmdbIds,
-            { signal },
-          ),
-          { stage: 'watching-watched-episodes', source: 'supabase' },
-        )
-
-        const watchedByShowId = new Map()
-        for (const row of watchedRows ?? []) {
-          if (!watchedByShowId.has(row.tmdb_show_id)) {
-            watchedByShowId.set(row.tmdb_show_id, new Set())
+        const loadCandidateBatch = async (candidates, preloadedById) => {
+          if (candidates.length === 0) return []
+          const tmdbIds = candidates.map((show) => show.tmdb_id)
+          let watchedRows
+          try {
+            watchedRows = await withTimeout(
+              (signal) => fetchWatchedEpisodes(
+                supabase,
+                'tmdb_show_id, season_number, episode_number',
+                tmdbIds,
+                { signal },
+              ),
+              { stage: 'watching-watched-episodes', source: 'supabase' },
+            )
+          } catch (loadFailure) {
+            if (renderedAny) {
+              refreshHadFailure = true
+              const diagnostic = reportDataError(loadFailure, {
+                stage: loadFailure?.stage ?? 'watching-watched-episodes',
+                source: loadFailure?.source ?? 'supabase',
+              })
+              setPartialError({ code: diagnostic.code, count: 1 })
+              return []
+            }
+            throw loadFailure
           }
-          watchedByShowId
-            .get(row.tmdb_show_id)
-            .add(episodeKey(row.season_number, row.episode_number))
-        }
 
-        const enriched = await withTimeout(
-          () => enrichTrackedShowsForWatching(
+          const watchedByShowId = new Map()
+          for (const row of watchedRows ?? []) {
+            if (!watchedByShowId.has(row.tmdb_show_id)) {
+              watchedByShowId.set(row.tmdb_show_id, new Set())
+            }
+            watchedByShowId
+              .get(row.tmdb_show_id)
+              .add(episodeKey(row.season_number, row.episode_number))
+          }
+
+          return enrichTrackedShowsForWatching(
             candidates,
             watchedByShowId,
             preloadedById,
@@ -99,28 +158,34 @@ export default function Watching() {
               getSeasonEpisodes,
               getShowReleaseMap: (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
             },
-          ),
-          { stage: 'watching-enrichment', source: 'tmdb' },
-        )
+            { onShowSettled: mergeRenderedShow },
+          )
+        }
 
-        if (ignore) return
-
-        const statusRank = { nextUp: 0, countdown: 1, caughtUp: 2, completed: 3 }
-        enriched.sort((a, b) => {
-          const rankDiff = statusRank[a.status.type] - statusRank[b.status.type]
-          if (rankDiff !== 0) return rankDiff
-          if (a.status.type === 'nextUp') return a.status.air_date < b.status.air_date ? -1 : 1
-          // Clamp at 0: after computeWatchingStatus only emits a countdown for
-          // still-future releases this can't go negative, but guard so a stale
-          // date can never sort ahead of a genuine soonest-first ordering.
-          if (a.status.type === 'countdown') {
-            return Math.max(0, a.status.daysUntil) - Math.max(0, b.status.daysUntil)
-          }
-          return new Date(b.added_at) - new Date(a.added_at)
+        const initialLoad = loadCandidateBatch(selection.candidates, selection.preloadedById)
+        const finishedLoad = selection.pendingFinished.then(async (finishedEntries) => {
+          const returning = finishedEntries.filter(Boolean)
+          const candidates = returning.map((entry) => entry.show)
+          const preloadedById = new Map(
+            returning.filter((entry) => entry.details).map((entry) => [entry.show.tmdb_id, {
+              details: entry.details,
+              releaseMap: entry.releaseMap,
+            }]),
+          )
+          return loadCandidateBatch(candidates, preloadedById)
         })
 
-        setShows(enriched)
-        saveWatchingCache(enriched)
+        const [initialEnriched, finishedEnriched] = await Promise.all([initialLoad, finishedLoad])
+        if (!ignore) {
+          const enriched = [...initialEnriched, ...finishedEnriched]
+          const nextSource = refreshHadFailure
+            ? [...renderedById.values()]
+            : (enriched.length > 0 ? [...freshById.values()] : [])
+          const next = sortWatchingShows(nextSource)
+          setShows(next)
+          saveWatchingCache(next)
+          if (next.length === 0) setLoading(false)
+        }
       } catch (loadFailure) {
         const diagnostic = reportDataError(loadFailure, {
           stage: loadFailure?.stage ?? 'watching-load',
@@ -197,6 +262,16 @@ export default function Watching() {
             Retry
           </button>
         </div>
+      )}
+
+      {!error && (
+        <WatchingPartialWarning
+          error={partialError}
+          onRetry={() => {
+            setLoading(cachedShows === null)
+            setLoadAttempt((attempt) => attempt + 1)
+          }}
+        />
       )}
 
       {!loading && !error && shows.length === 0 && (
