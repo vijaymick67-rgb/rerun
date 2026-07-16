@@ -29,7 +29,7 @@ function makeSupabase({ watchedRows = [], deleteError = null } = {}) {
 describe('Browse upcoming-show corrections', () => {
   it('offers Undo for delayed new additions and removes the row safely', async () => {
     expect(browseSource).toContain('undoable: !wasTracked')
-    expect(browseSource).toContain("{undoingId != null ? 'Undoingâ€¦' : 'Undo'}")
+    expect(browseSource).toContain("{undoingId != null ? 'Undoing…' : 'Undo'}")
     expect(browseSource).toContain('setTrackedShows((prev) => prev.filter')
 
     const supabase = makeSupabase()
