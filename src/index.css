@@ -58,6 +58,47 @@ body {
   padding-top: calc(var(--safe-area-inset-top) + 1rem);
 }
 
+.nested-page-header {
+  position: relative;
+  z-index: 21;
+}
+
+.nested-top-scrim {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 20;
+  height: calc(var(--safe-area-inset-top) + 2.5rem);
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgb(15 17 21 / 0.96) 0%,
+    rgb(15 17 21 / 0.88) 58%,
+    rgb(15 17 21 / 0) 100%
+  );
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .nested-top-scrim {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .nested-top-scrim {
+    background: linear-gradient(
+      to bottom,
+      rgb(15 17 21 / 0.99) 0%,
+      rgb(15 17 21 / 0.95) 72%,
+      rgb(15 17 21 / 0) 100%
+    );
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 .app-tab-bar {
   min-height: 4rem;
   padding-bottom: var(--safe-area-inset-bottom);
