@@ -50,7 +50,7 @@ export default function Settings() {
       : null
 
   return (
-    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+    <div className="app-page px-4 pb-4">
       <section>
         <h2 className="text-base font-semibold text-(--color-text)">
           Import watch history

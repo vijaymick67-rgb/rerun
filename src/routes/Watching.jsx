@@ -154,7 +154,7 @@ export default function Watching() {
   const visibleShows = shows.filter((show) => isVisibleInWatching(show, show.status))
 
   return (
-    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+    <div className="app-page px-4 pb-4">
       {loading && (
         <div className="flex flex-col gap-3">
           <WatchingRowSkeleton />

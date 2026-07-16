@@ -9,7 +9,7 @@ const TABS = [
 
 export default function TabBar() {
   return (
-    <nav className="fixed inset-x-0 bottom-0 flex border-t border-(--color-border) bg-(--color-surface)">
+    <nav className="app-tab-bar fixed inset-x-0 bottom-0 flex border-t border-(--color-border) bg-(--color-surface)">
       {TABS.map((tab) => (
         <NavLink
           key={tab.to}

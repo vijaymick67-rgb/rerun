@@ -225,7 +225,7 @@ export default function Browse() {
   }
 
   return (
-    <div className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+    <div className="app-page px-4 pb-4">
       <input
         type="text"
         value={query}
@@ -355,4 +355,3 @@ export default function Browse() {
     </div>
   )
 }
-

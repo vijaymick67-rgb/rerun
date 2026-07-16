@@ -23,7 +23,7 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="safe-area-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60"
       onClick={onCancel}
     >
       <div
