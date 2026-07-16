@@ -10,8 +10,8 @@ import {
   shouldCacheRuntimeRequest,
 } from '../vite/pwa-options.js'
 import { removeStaticLoadingShell } from '../src/pwa/appShell.js'
-import { retryOffline } from '../src/pwa/offline.js'
 import { createUpdateLifecycle, requestServiceWorkerUpdate } from '../src/pwa/updateLifecycle.js'
+import NotFound from '../src/components/NotFound.jsx'
 
 const repoRoot = resolve(import.meta.dirname, '..')
 
@@ -55,6 +55,14 @@ describe('PWA foundation', () => {
     expect(lifecycle.getState()).toBe('ready')
   })
 
+  it('allows a future distinct update to prompt after dismissal', () => {
+    const lifecycle = createUpdateLifecycle({ activateAndReload: vi.fn() })
+    expect(lifecycle.announceReady()).toBe(true)
+    expect(lifecycle.dismiss()).toBe(true)
+    expect(lifecycle.announceReady()).toBe(true)
+    expect(lifecycle.getPromptCount()).toBe(2)
+  })
+
   it('explicit Update invokes activation and reload', async () => {
     const updateServiceWorker = vi.fn().mockResolvedValue(undefined)
     await requestServiceWorkerUpdate(updateServiceWorker)
@@ -72,10 +80,24 @@ describe('PWA foundation', () => {
     expect(activateAndReload).not.toHaveBeenCalled()
   })
 
-  it('offline Retry invokes the supplied retry action', () => {
-    const retry = vi.fn()
-    retryOffline(retry)
-    expect(retry).toHaveBeenCalledOnce()
+  it('activates exactly once and returns to retryable state after an update error', async () => {
+    const activateAndReload = vi.fn()
+      .mockRejectedValueOnce(new Error('activation failed'))
+      .mockResolvedValueOnce(undefined)
+    const lifecycle = createUpdateLifecycle({ activateAndReload })
+    lifecycle.announceReady()
+    expect(await lifecycle.update()).toBe(false)
+    expect(lifecycle.getState()).toBe('ready')
+    expect(await lifecycle.update()).toBe(true)
+    expect(lifecycle.getState()).toBe('updated')
+    expect(activateAndReload).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses a distinct Not Found state for unknown online routes', () => {
+    const rendered = NotFound()
+    const output = JSON.stringify(rendered)
+    expect(output).toContain('Page not found')
+    expect(output).not.toContain('RERUN is offline')
   })
 
   it('removes the static loading shell after React mounts', () => {
@@ -121,6 +143,11 @@ describe('PWA foundation', () => {
     expect(isNavigationFallbackAllowed('/api/tmdb/tv/123')).toBe(false)
     expect(isNavigationFallbackAllowed('/api/news')).toBe(false)
     expect(isNavigationFallbackAllowed('/rest/v1/tracked_shows')).toBe(false)
+  })
+
+  it('documents the honest offline behavior as cached-shell-only', () => {
+    expect(PWA_OPTIONS.workbox.navigateFallback).toBe('/index.html')
+    expect(PWA_OPTIONS.includeAssets).not.toContain('offline.html')
   })
 
   it('keeps the static loading shell lightweight and reduced-motion safe', () => {

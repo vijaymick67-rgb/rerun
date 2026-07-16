@@ -23,9 +23,14 @@ export function createUpdateLifecycle({ activateAndReload } = {}) {
     async update() {
       if (state !== 'ready' || typeof activateAndReload !== 'function') return false
       state = 'updating'
-      await activateAndReload()
-      state = 'updated'
-      return true
+      try {
+        await activateAndReload()
+        state = 'updated'
+        return true
+      } catch {
+        state = 'ready'
+        return false
+      }
     },
   }
 }

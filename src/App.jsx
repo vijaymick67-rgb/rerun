@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import TabBar from './components/TabBar'
-import OfflineFallback from './components/OfflineFallback'
+import NotFound from './components/NotFound'
 import ReloadPrompt from './components/ReloadPrompt'
 import Browse from './routes/Browse'
 import Watching from './routes/Watching'
@@ -26,7 +26,7 @@ function App() {
         <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
         <Route path="/stats" element={<Stats />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="*" element={<OfflineFallback />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
       <TabBar />
       <ReloadPrompt />
