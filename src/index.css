@@ -58,6 +58,35 @@ body {
   padding-top: calc(var(--safe-area-inset-top) + 1rem);
 }
 
+.route-content {
+  min-width: 0;
+}
+
+.route-content--tab {
+  animation: route-content-fade 160ms var(--ease-standard) both;
+}
+
+.route-content--nested {
+  animation: route-content-nested-in 160ms var(--ease-standard) both;
+}
+
+@keyframes route-content-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes route-content-nested-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .global-top-scrim {
   position: fixed;
   top: 0;
@@ -193,5 +222,10 @@ body {
   .motion-press:active:not(:disabled):not([aria-disabled='true']) {
     scale: none;
     opacity: 1;
+  }
+
+  .route-content--tab,
+  .route-content--nested {
+    animation: none;
   }
 }
