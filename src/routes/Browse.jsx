@@ -6,7 +6,7 @@ import { getShowReleaseMap } from '../lib/tvmaze'
 import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
-import { upsertTrackedShow } from '../lib/finishedShows'
+import { removeTrackedShowIfUnwatched, upsertTrackedShow } from '../lib/finishedShows'
 import BrowseNews from '../components/BrowseNews'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 
@@ -26,6 +26,10 @@ export default function Browse() {
   const [loggingIds, setLoggingIds] = useState(new Set())
   const [loggedIds, setLoggedIds] = useState(new Set())
   const [delayedAddMessage, setDelayedAddMessage] = useState(null)
+  const [undoingId, setUndoingId] = useState(null)
+  const [undoError, setUndoError] = useState(null)
+  const [notAiredIds, setNotAiredIds] = useState(new Set())
+  const knownTrackedIdsRef = useRef(new Set())
   const debounceRef = useRef(null)
 
   useEffect(() => {
@@ -37,6 +41,7 @@ export default function Browse() {
         if (ignore) return
         if (!fetchError && data) {
           const active = data.filter((row) => row.hidden_at == null)
+          knownTrackedIdsRef.current = new Set(data.map((row) => row.tmdb_id))
           setTrackedShows(active)
           setTrackedIds(new Set(active.map((row) => row.tmdb_id)))
         }
@@ -77,6 +82,7 @@ export default function Browse() {
   }, [query])
 
   async function handleAdd(show) {
+    const wasTracked = knownTrackedIdsRef.current.has(show.id)
     setAddingIds((prev) => new Set(prev).add(show.id))
 
     let insertError = null
@@ -93,6 +99,7 @@ export default function Browse() {
     })
 
     if (!insertError) {
+      knownTrackedIdsRef.current.add(show.id)
       setTrackedIds((prev) => new Set(prev).add(show.id))
       setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
     } else {
@@ -111,35 +118,70 @@ export default function Browse() {
         ? daysUntilRelease(premiereDate, releaseSources(nextEpisode), platformInfo)
         : daysUntil(premiereDate)
       if (daysAway !== null && daysAway > DELAYED_ADD_THRESHOLD_DAYS) {
-        setDelayedAddMessage(
-          "This show premieres in a while! We'll automatically add it to your Watching tab closer to the release date.",
-        )
+        setUndoError(null)
+        setDelayedAddMessage({
+          show,
+          undoable: !wasTracked,
+          text: "This show premieres in a while! We'll automatically add it to your Watching tab closer to the release date.",
+        })
       }
     } catch {
-      // best-effort — premiere timing is a nice-to-have, the show is already tracked
+      // best-effort â€” premiere timing is a nice-to-have, the show is already tracked
     }
   }
 
-  // "Log as watched" — retroactively log a show finished before using the app,
+  async function handleUndoDelayedAdd() {
+    const pending = delayedAddMessage
+    if (!pending?.undoable || undoingId != null) return
+    setUndoingId(pending.show.id)
+    setUndoError(null)
+    try {
+      await removeTrackedShowIfUnwatched(supabase, pending.show.id)
+      knownTrackedIdsRef.current.delete(pending.show.id)
+      setTrackedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(pending.show.id)
+        return next
+      })
+      setTrackedShows((prev) => prev.filter((item) => item.tmdb_id !== pending.show.id))
+      setDelayedAddMessage(null)
+    } catch {
+      setUndoError('Could not undo this show. Try again.')
+    } finally {
+      setUndoingId(null)
+    }
+  }
+
+  // "Log as watched" â€” retroactively log a show finished before using the app,
   // without ticking every episode by hand. Ensures the show is tracked (same
   // UNIQUE_VIOLATION handling as handleAdd), then bulk-marks every already-aired
   // episode watched via the shared bulk-mark routine. Unaired future episodes
-  // are skipped — they don't exist yet to mark, even though the user is claiming
+  // are skipped â€” they don't exist yet to mark, even though the user is claiming
   // to have "seen the whole show".
   async function handleLogWatched(show) {
     setLoggingIds((prev) => new Set(prev).add(show.id))
 
     try {
+      const { rows } = await buildAiredEpisodeRows(show.id)
+      if (rows.length === 0) {
+        setNotAiredIds((prev) => new Set(prev).add(show.id))
+        return
+      }
+
       await upsertTrackedShow(supabase, show)
+      knownTrackedIdsRef.current.add(show.id)
       setTrackedIds((prev) => new Set(prev).add(show.id))
       setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
-
-      const { rows } = await buildAiredEpisodeRows(show.id)
       await upsertWatchedRows(rows)
 
+      setNotAiredIds((prev) => {
+        const next = new Set(prev)
+        next.delete(show.id)
+        return next
+      })
       setLoggedIds((prev) => new Set(prev).add(show.id))
     } catch {
-      // best-effort — leave the button in its default state so the user can retry
+      // best-effort â€” leave the button in its default state so the user can retry
     } finally {
       setLoggingIds((prev) => {
         const next = new Set(prev)
@@ -155,29 +197,36 @@ export default function Browse() {
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Find a show…"
+        placeholder="Find a showâ€¦"
         className="w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
       />
 
       {loading && (
-        <p className="mt-4 text-sm text-(--color-text-muted)">Searching…</p>
+        <p className="mt-4 text-sm text-(--color-text-muted)">Searchingâ€¦</p>
       )}
 
       {error && <p className="motion-banner mt-4 text-sm text-red-400">{error}</p>}
 
       {delayedAddMessage && (
         <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-accent)/40 bg-(--color-accent)/10 px-3 py-2 text-sm text-(--color-accent)">
-          <span>{delayedAddMessage}</span>
+          <span>{delayedAddMessage.text}</span>
+          {delayedAddMessage.undoable && (
+            <button type="button" onClick={handleUndoDelayedAdd} disabled={undoingId != null} className="motion-press shrink-0 font-medium underline">
+              {undoingId != null ? 'Undoingâ€¦' : 'Undo'}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setDelayedAddMessage(null)}
-            aria-label="Dismiss"
+            onClick={() => delayedAddMessage.undoable ? handleUndoDelayedAdd() : setDelayedAddMessage(null)}
+            aria-label={delayedAddMessage.undoable ? 'Undo' : 'Dismiss'}
             className="motion-press shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
           >
-            ✕
+            âœ•
           </button>
         </div>
       )}
+
+      {undoError && <p role="alert" className="mt-2 text-xs text-red-400">{undoError} <button type="button" onClick={handleUndoDelayedAdd} className="underline">Retry</button></p>}
 
       {!loading && !error && searched && query.trim() && results.length === 0 && (
         <p className="mt-8 text-center text-(--color-text-muted)">
@@ -235,7 +284,7 @@ export default function Browse() {
                         : 'bg-(--color-accent) text-(--color-bg) disabled:opacity-60'
                     }`}
                   >
-                    {isTracked ? 'Added' : isAdding ? 'Adding…' : 'Add'}
+                    {isTracked ? 'Added' : isAdding ? 'Addingâ€¦' : 'Add'}
                   </button>
 
                   <button
@@ -248,8 +297,11 @@ export default function Browse() {
                         : 'border border-(--color-border) text-(--color-text-muted) disabled:opacity-60'
                     }`}
                   >
-                    {isLogged ? 'Logged ✓' : isLogging ? 'Logging…' : 'Log as watched'}
+                    {isLogged ? 'Logged âœ“' : isLogging ? 'Loggingâ€¦' : 'Log as watched'}
                   </button>
+                  {notAiredIds.has(show.id) && (
+                    <p role="status" className="mt-1 text-xs text-(--color-text-muted)">Not aired yet</p>
+                  )}
                 </div>
               </div>
             )
@@ -264,3 +316,4 @@ export default function Browse() {
     </div>
   )
 }
+
