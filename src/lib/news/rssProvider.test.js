@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRssProvider, RSS_MAX_RESPONSE_BYTES } from './rssProvider.js'
 import { CURATED_FEED_SOURCES } from './feedSources.js'
-import { isNewsProviderError } from './provider.js'
+import { createNewsProvider, isNewsProviderError } from './provider.js'
+import { aggregateProviders } from './aggregateNews.js'
 
 const RSS_FEED = `<?xml version="1.0"?>
 <rss version="2.0">
@@ -68,6 +69,26 @@ function streamResponse(body, { chunkBytes, ok = true, status = 200 } = {}) {
             index += 1
             return { done: false, value }
           },
+          releaseLock() {},
+          cancel,
+        }
+      },
+    },
+    async text() { throw new Error('text() must not be called when a readable stream is available') },
+    _cancel: cancel,
+  }
+}
+
+function stalledBodyResponse() {
+  const cancel = vi.fn(async () => {})
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: {
+      getReader() {
+        return {
+          read() { return new Promise(() => {}) },
           releaseLock() {},
           cancel,
         }
@@ -180,6 +201,56 @@ describe('curated RSS/Atom provider', () => {
 
     expect(isNewsProviderError(result)).toBe(true)
     expect(result.code).toBe('TIMEOUT')
+    vi.useRealTimers()
+  })
+
+  it('times out a body stream that stalls after fetch already resolved with headers', async () => {
+    vi.useFakeTimers()
+    const response = stalledBodyResponse()
+    const fetchImpl = vi.fn(async () => response)
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl, timeoutMs: 50 })
+
+    const pending = provider.fetchArticles().catch((error) => error)
+    await vi.advanceTimersByTimeAsync(50)
+    const result = await pending
+
+    expect(isNewsProviderError(result)).toBe(true)
+    expect(result.code).toBe('TIMEOUT')
+    expect(response._cancel).toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('clears the timer exactly once after a successful complete body read', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const fetchImpl = vi.fn(async () => textResponse(RSS_FEED))
+    const provider = createRssProvider({ name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl })
+
+    await provider.fetchArticles()
+
+    expect(clearSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('still serves other providers via aggregateProviders when one body times out', async () => {
+    vi.useFakeTimers()
+    const response = stalledBodyResponse()
+    const stalledFetch = vi.fn(async () => response)
+    const stalledProvider = createRssProvider({
+      name: 'TVLine', url: 'https://tvline.com/feed/', fetchImpl: stalledFetch, timeoutMs: 50,
+    })
+    const goodProvider = createNewsProvider({
+      name: 'Deadline', async fetchArticles() { return [{ id: 'ok' }] },
+    })
+
+    const pending = aggregateProviders([stalledProvider, goodProvider])
+    await vi.advanceTimersByTimeAsync(50)
+    const result = await pending
+
+    expect(result.providersUsed).toEqual(['Deadline'])
+    expect(result.failureCount).toBe(1)
+    const failed = result.results.find((r) => r.name === 'TVLine')
+    expect(failed.ok).toBe(false)
+    expect(isNewsProviderError(failed.error)).toBe(true)
+    expect(failed.error.code).toBe('TIMEOUT')
     vi.useRealTimers()
   })
 

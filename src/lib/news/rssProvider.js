@@ -1,5 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
-import { createNewsProvider, NewsProviderError } from './provider.js'
+import { createNewsProvider, isNewsProviderError, NewsProviderError } from './provider.js'
 
 const DEFAULT_TIMEOUT_MS = 6000
 const DEFAULT_MAX_ARTICLES = 8
@@ -94,10 +94,36 @@ function contentLengthOf(response) {
   return Number.isFinite(value) ? value : null
 }
 
+function abortError() {
+  const error = new Error('Aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+// Races a promise against an abort signal so a stalled body read (fetch already
+// resolved with headers, but the stream never delivers a chunk) still rejects the
+// instant the caller's timeout fires — rather than waiting on a promise that may
+// never settle on its own.
+function raceWithAbort(promise, signal) {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortError())
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError())
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value) },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error) },
+    )
+  })
+}
+
 // Reads the response body up to `maxBytes`, counting actual bytes (not JS string
 // characters, which undercount multi-byte UTF-8 text). Cancels the stream the instant
-// the cap is crossed rather than finishing the download first.
-async function readBoundedText(response, maxBytes) {
+// the cap is crossed rather than finishing the download first. `signal` is the same
+// AbortSignal used for the initial fetch — headers can arrive quickly while the body
+// stalls indefinitely, so the timeout has to keep covering this read, not just the
+// fetch call that returned headers.
+async function readBoundedText(response, maxBytes, signal) {
   const contentLength = contentLengthOf(response)
   if (contentLength !== null && contentLength > maxBytes) {
     throw new NewsProviderError('RESPONSE_TOO_LARGE', 'The feed response was too large')
@@ -110,7 +136,14 @@ async function readBoundedText(response, maxBytes) {
     let text = ''
     try {
       for (;;) {
-        const { done, value } = await reader.read()
+        let result
+        try {
+          result = await raceWithAbort(reader.read(), signal)
+        } catch (error) {
+          await reader.cancel().catch(() => {})
+          throw error
+        }
+        const { done, value } = result
         if (done) break
         received += value?.byteLength ?? 0
         if (received > maxBytes) {
@@ -126,7 +159,7 @@ async function readBoundedText(response, maxBytes) {
     return text
   }
 
-  const text = await response.text()
+  const text = await raceWithAbort(response.text(), signal)
   if (new TextEncoder().encode(text).length > maxBytes) {
     throw new NewsProviderError('RESPONSE_TOO_LARGE', 'The feed response was too large')
   }
@@ -175,33 +208,48 @@ export function createRssProvider({
         throw new NewsProviderError('FETCH_UNAVAILABLE', 'The feed provider is unavailable')
       }
 
+      // This timer has to stay live through the connection, the headers, and the
+      // full bounded body read — fetch resolves as soon as headers arrive, so a feed
+      // that stalls its streaming body would otherwise run past the timeout with
+      // nothing left watching it. It is cleared exactly once, in the outer `finally`.
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
-      let response
       try {
-        response = await fetchImpl(url, {
-          method: 'GET',
-          headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' },
-          signal: controller.signal,
-        })
-      } catch (error) {
-        if (error?.name === 'AbortError') {
-          throw new NewsProviderError('TIMEOUT', 'The feed provider timed out', error)
+        let response
+        try {
+          response = await fetchImpl(url, {
+            method: 'GET',
+            headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' },
+            signal: controller.signal,
+          })
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            throw new NewsProviderError('TIMEOUT', 'The feed provider timed out', error)
+          }
+          throw new NewsProviderError('NETWORK_ERROR', 'The feed provider could not be reached', error)
         }
-        throw new NewsProviderError('NETWORK_ERROR', 'The feed provider could not be reached', error)
+
+        if (!response.ok) {
+          throw new NewsProviderError('UPSTREAM_ERROR', 'The feed provider returned an error', null, {
+            status: Number.isInteger(response.status) ? response.status : null, code: null, message: null,
+          })
+        }
+
+        let xml
+        try {
+          xml = await readBoundedText(response, MAX_RESPONSE_BYTES, controller.signal)
+        } catch (error) {
+          if (isNewsProviderError(error)) throw error
+          if (error?.name === 'AbortError') {
+            throw new NewsProviderError('TIMEOUT', 'The feed provider timed out', error)
+          }
+          throw new NewsProviderError('NETWORK_ERROR', 'The feed body could not be read', error)
+        }
+
+        return parseFeed(xml, name, maxArticles)
       } finally {
         clearTimeout(timer)
       }
-
-      if (!response.ok) {
-        throw new NewsProviderError('UPSTREAM_ERROR', 'The feed provider returned an error', null, {
-          status: Number.isInteger(response.status) ? response.status : null, code: null, message: null,
-        })
-      }
-
-      const xml = await readBoundedText(response, MAX_RESPONSE_BYTES)
-
-      return parseFeed(xml, name, maxArticles)
     },
   })
 }
