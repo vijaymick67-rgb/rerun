@@ -63,6 +63,10 @@ export function BrowseNewsView({ state, trackedShows = [], loading = false, erro
           News is temporarily unavailable. <button type="button" onClick={onRetry}
             className="motion-press min-h-11 font-medium text-(--color-accent)">Retry</button>
         </div>}
+        {error && hasUsableCache && <p role="status" className="mt-3 text-xs text-(--color-text-muted)">
+          Showing saved stories — refresh failed. <button type="button" onClick={onRetry}
+            className="motion-press min-h-11 font-medium text-(--color-accent)">Retry</button>
+        </p>}
         <div>
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="text-base font-semibold text-(--color-text)">Latest from your shows</h2>

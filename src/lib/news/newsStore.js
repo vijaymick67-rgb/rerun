@@ -7,6 +7,31 @@ export const NEWS_CACHE_VERSION = 1
 export const MY_SHOWS_VISIBLE_LIMIT = 10
 export const MY_SHOWS_POOL_LIMIT = 50
 export const GENERAL_VISIBLE_LIMIT = 6
+// Freshness intent (Phase 8): prefer the last 7 days, but don't hide a sparse
+// personal match just for being a little older; never resurface anything past 30 days.
+export const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+export const MAX_ARTICLE_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+function articleAgeMs(article, now) {
+  const published = Date.parse(article.publishedAt)
+  return Number.isFinite(published) ? now - published : Infinity
+}
+
+function isWithinMaxAge(article, now) {
+  return articleAgeMs(article, now) <= MAX_ARTICLE_AGE_MS
+}
+
+function isRecent(article, now) {
+  return articleAgeMs(article, now) <= RECENT_WINDOW_MS
+}
+
+function curatedBonus(article) {
+  return article.provider && article.provider !== 'gnews' ? 1 : 0
+}
+
+function completenessScore(article) {
+  return (article.imageUrl ? 1 : 0) + (article.description ? 1 : 0)
+}
 
 export function emptyNewsState() {
   return { version: NEWS_CACHE_VERSION, articles: {}, visibleIds: [], queuedIds: [], dismissedIds: [], lastSuccess: null }
@@ -68,23 +93,41 @@ export function mergeNews(state, incoming, trackedShows, now = Date.now()) {
     incomingIds.push(article.id)
     incomingUrls.add(article.canonicalUrl)
   }
-  const visibleIds = current.visibleIds.filter((id) => articles[id] && !dismissed.has(id))
+  // Existing visible/queued personal matches age out too — a story pinned when fresh
+  // must not stay visible or queued forever just because it was already promoted.
+  const visibleIds = current.visibleIds.filter((id) =>
+    articles[id] && !dismissed.has(id) && isWithinMaxAge(articles[id], now))
   const existing = new Set(visibleIds)
-  const queuedIds = current.queuedIds.filter((id) => articles[id] && !dismissed.has(id) && !existing.has(id))
+  const queuedIds = current.queuedIds.filter((id) =>
+    articles[id] && !dismissed.has(id) && !existing.has(id) && isWithinMaxAge(articles[id], now))
   queuedIds.forEach((id) => existing.add(id))
+  const newlyMatched = []
   for (const id of incomingIds) {
     if (dismissed.has(id) || existing.has(id)) continue
     const match = matchArticleToTrackedShow(articles[id], trackedShows)
     if (!match.matched) continue
+    if (!isWithinMaxAge(articles[id], now)) continue
     articles[id] = { ...articles[id], matchedShowId: match.showId, matchedShowName: match.showName }
-    queuedIds.push(id)
+    newlyMatched.push(id)
     existing.add(id)
   }
+  // Recent matches lead the queue; a sparse pool can still surface an older
+  // (but never past MAX_ARTICLE_AGE_MS) personal match rather than showing nothing.
+  newlyMatched.sort((a, b) => {
+    const articleA = articles[a]
+    const articleB = articles[b]
+    const recentDelta = (isRecent(articleB, now) ? 1 : 0) - (isRecent(articleA, now) ? 1 : 0)
+    if (recentDelta) return recentDelta
+    const dateDelta = Date.parse(articleB.publishedAt) - Date.parse(articleA.publishedAt)
+    if (dateDelta) return dateDelta
+    return curatedBonus(articleB) - curatedBonus(articleA)
+  })
+  queuedIds.push(...newlyMatched)
   while (visibleIds.length < MY_SHOWS_VISIBLE_LIMIT && queuedIds.length) visibleIds.push(queuedIds.shift())
   const cappedQueue = queuedIds.slice(0, Math.max(0, MY_SHOWS_POOL_LIMIT - visibleIds.length))
   const pool = new Set([...visibleIds, ...cappedQueue])
   const generalIds = Object.values(articles)
-    .filter((article) => !pool.has(article.id) && !dismissed.has(article.id))
+    .filter((article) => !pool.has(article.id) && !dismissed.has(article.id) && isWithinMaxAge(article, now))
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
     .slice(0, 30).map((article) => article.id)
   const retained = new Set([...pool, ...generalIds])
@@ -102,17 +145,22 @@ export function dismissMyShowsArticle(state, id) {
     dismissedIds: unique([...current.dismissedIds, id]) })
 }
 
-export function visibleMyShowsArticles(state) {
+export function visibleMyShowsArticles(state, now = Date.now()) {
   const current = sanitizeNewsState(state)
-  return current.visibleIds.map((id) => current.articles[id]).filter(Boolean)
+  return current.visibleIds.map((id) => current.articles[id])
+    .filter((article) => article && isWithinMaxAge(article, now))
 }
 
-export function selectGeneralNews(state, trackedShows) {
+export function selectGeneralNews(state, trackedShows, now = Date.now()) {
   const current = sanitizeNewsState(state)
   const myShowsIds = new Set([...current.visibleIds, ...current.queuedIds, ...current.dismissedIds])
   return Object.values(current.articles)
     .filter((article) => !myShowsIds.has(article.id) && !matchArticleToTrackedShow(article, trackedShows).matched)
     .filter(isTvNewsArticle)
-    .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id))
+    .filter((article) => isWithinMaxAge(article, now))
+    .sort((a, b) => curatedBonus(b) - curatedBonus(a)
+      || Date.parse(b.publishedAt) - Date.parse(a.publishedAt)
+      || completenessScore(b) - completenessScore(a)
+      || a.id.localeCompare(b.id))
     .slice(0, GENERAL_VISIBLE_LIMIT)
 }
