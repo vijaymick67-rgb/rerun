@@ -693,7 +693,13 @@ export default function Stats() {
                       disabled={isBusy}
                       className="motion-press absolute right-0.5 top-0.5 flex h-11 w-11 items-center justify-center rounded-full text-white/80 active:text-white active:opacity-100 disabled:opacity-60"
                     >
-                      <svg viewBox="0 0 14 4" className="h-1 w-3.5" fill="currentColor" aria-hidden="true">
+                      <svg
+                        viewBox="0 0 14 4"
+                        className="h-1 w-3.5"
+                        fill="currentColor"
+                        aria-hidden="true"
+                        style={{ filter: 'drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65))' }}
+                      >
                         <circle cx="2" cy="2" r="1.25" />
                         <circle cx="7" cy="2" r="1.25" />
                         <circle cx="12" cy="2" r="1.25" />
