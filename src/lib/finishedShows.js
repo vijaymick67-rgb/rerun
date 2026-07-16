@@ -26,9 +26,7 @@ export function isVisibleInWatching(show, status) {
   if (isHiddenShow(show)) return false
   // Keep a tracked show visible while transient metadata is retried.
   if (show?.loadError) return true
-  if (!isPersonallyFinished(show)) {
-    return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
-  }
+  if (!isPersonallyFinished(show)) return !isHiddenFromWatching(status)
   return status?.type === 'nextUp' || (status?.type === 'countdown' && !isHiddenFromWatching(status))
 }
 
