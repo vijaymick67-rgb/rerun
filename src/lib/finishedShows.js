@@ -148,7 +148,7 @@ export async function finishTrackedShows(shows, options = {}) {
     }
     results.push({ tmdb_id: show.tmdb_id, name: show.name, error })
     current += 1
-    onProgress?.({ current, total: shows.length, label: `Finishing ${show.name} (${current}/${shows.length})â€¦` })
+    onProgress?.({ current, total: shows.length, label: `Finishing ${show.name} (${current}/${shows.length})…` })
   }
   return results
 }
