@@ -11,17 +11,38 @@ const CONTEXT_SIGNAL = /\b(?:season|seasons|series|episode|episodes|premiere|pre
 // proof the word is being used *as a title* — see hasTitleStructuralEvidence below.
 const ULTRA_AMBIGUOUS_TITLES = new Set(['from', 'you'])
 
-// Words that, appearing immediately next to an ultra-ambiguous title (touching it, not
-// merely present somewhere in the same sentence), mark the title as a production noun
-// rather than a preposition/pronoun: "From renewed", "From season 4", "series From",
-// "You sets", "'You' adds". Deliberately excludes generic nouns like platform names or
-// "trailer" that commonly precede "from" in ordinary sentences ("a trailer from Netflix").
-const TITLE_ADJACENCY_SIGNAL = new Set([
+// Words that, appearing immediately next to "From" (touching it, not merely present
+// somewhere in the same sentence), mark it as a production noun rather than a
+// preposition: "From renewed", "From season 4", "the series From". Deliberately
+// excludes generic nouns like platform names, or "cast"/"trailer", that commonly
+// precede "from" in ordinary sentences ("a trailer from Netflix", "cast from your
+// phone") — those describe something else entirely, not the show.
+const FROM_ADJACENCY_SIGNAL = new Set([
   'season', 'seasons', 'series', 'renew', 'renews', 'renewed', 'renewal',
   'cancel', 'cancels', 'cancelled', 'canceled', 'cancellation', 'finale',
-  'premiere', 'premieres', 'premiered', 'cast', 'casts', 'casting',
+  'premiere', 'premieres', 'premiered', 'casts', 'casting',
   'spinoff', 'showrunner', 'greenlit', 'reboot', 'revival', 'returns', 'sets', 'adds',
 ])
+
+// "You" is not just ambiguous, it's a second-person pronoun — so unlike "From", a bare
+// production verb sitting next to it proves nothing: "Have you renewed your Netflix
+// subscription?" and "You Renewed Netflix" both place "renewed" directly next to "you"
+// while talking to the reader, not about a show. Two narrower, grammar-driven signals
+// are used instead of a plain adjacency word list:
+//  1. Subject-verb agreement — a third-person singular ("-s") verb form directly after
+//     "you" is ungrammatical for the pronoun (you set/add/cast/return/renew/cancel, never
+//     "you sets"), so seeing one means "you" is standing in for a proper noun instead.
+//  2. The "renewed for" / "cancelled for" renewal-announcement idiom — "renewed" and
+//     "cancelled" are past tense and so look identical for any subject, but immediately
+//     followed by "for"/"after" they are the standard trade-press phrasing ("You renewed
+//     for a final season"), a construction ordinary second-person sentences don't produce.
+const YOU_AGREEMENT_SIGNAL = new Set([
+  'season', 'seasons', 'series', 'finale', 'premiere', 'premieres',
+  'spinoff', 'showrunner', 'revival', 'reboot', 'cancellation', 'renewal',
+  'sets', 'adds', 'casts', 'returns', 'renews', 'cancels',
+])
+const YOU_ANNOUNCEMENT_VERBS = new Set(['renewed', 'cancelled', 'canceled'])
+const YOU_ANNOUNCEMENT_FOLLOWERS = new Set(['for', 'after'])
 
 const QUOTE_CHAR_PATTERN = '[\'"‘’“”]'
 
@@ -38,6 +59,16 @@ function hasQuotedTitle(rawHeadline, title) {
   return new RegExp(`${QUOTE_CHAR_PATTERN}\\s*${escaped}\\s*${QUOTE_CHAR_PATTERN}`, 'i').test(rawHeadline)
 }
 
+// A possessive platform/network construction ("Netflix's You", "MGM+'s From") names the
+// title as a thing the platform owns, never as a pronoun/preposition. Checked against the
+// raw headline because the apostrophe is what carries the meaning, and normalizeNewsText
+// strips it (splitting "Netflix's" into separate "netflix"/"s" tokens).
+function hasPossessiveBeforeTitle(rawHeadline, title) {
+  if (typeof rawHeadline !== 'string' || !rawHeadline) return false
+  const escaped = title.split(' ').map(escapeRegExp).join('\\s+')
+  return new RegExp(`\\b[a-z0-9+]+['’]s\\s+${escaped}\\b`, 'i').test(rawHeadline)
+}
+
 function indicesOfPhrase(words, phraseWords) {
   const indices = []
   for (let i = 0; i <= words.length - phraseWords.length; i += 1) {
@@ -46,25 +77,47 @@ function indicesOfPhrase(words, phraseWords) {
   return indices
 }
 
-// True when a TITLE_ADJACENCY_SIGNAL word directly touches the title's occurrence in the
+// True when a FROM_ADJACENCY_SIGNAL word directly touches "from"'s occurrence in the
 // headline — "From season 4" or "the series From" — rather than merely co-occurring
 // somewhere in the same headline, which is what let "Actor from Netflix series joins
 // season 2 cast" slip through before.
-function hasAdjacentTitleSignal(headline, title) {
-  const words = headline.split(' ').filter(Boolean)
+function hasFromTitleEvidence(rawHeadline, normalizedHeadline, title) {
+  const words = normalizedHeadline.split(' ').filter(Boolean)
   const phraseWords = title.split(' ')
-  return indicesOfPhrase(words, phraseWords).some((index) => {
+  const adjacent = indicesOfPhrase(words, phraseWords).some((index) => {
     const before = index > 0 ? words[index - 1] : null
     const after = index + phraseWords.length < words.length ? words[index + phraseWords.length] : null
-    return (before && TITLE_ADJACENCY_SIGNAL.has(before)) || (after && TITLE_ADJACENCY_SIGNAL.has(after))
+    return (before && FROM_ADJACENCY_SIGNAL.has(before)) || (after && FROM_ADJACENCY_SIGNAL.has(after))
+  })
+  return adjacent || hasQuotedTitle(rawHeadline, title) || hasPossessiveBeforeTitle(rawHeadline, title)
+}
+
+// "You" only accepts right-adjacency (never left — "the series you watched" is ordinary
+// relative-clause grammar, not a title introduction) and only the two narrower signals
+// described above, plus quoted/possessive evidence.
+function hasYouTitleEvidence(rawHeadline, normalizedHeadline) {
+  if (hasQuotedTitle(rawHeadline, 'you') || hasPossessiveBeforeTitle(rawHeadline, 'you')) return true
+  const words = normalizedHeadline.split(' ').filter(Boolean)
+  return indicesOfPhrase(words, ['you']).some((index) => {
+    const after = index + 1 < words.length ? words[index + 1] : null
+    if (!after) return false
+    if (YOU_AGREEMENT_SIGNAL.has(after)) return true
+    if (YOU_ANNOUNCEMENT_VERBS.has(after)) {
+      const next = index + 2 < words.length ? words[index + 2] : null
+      return Boolean(next && YOU_ANNOUNCEMENT_FOLLOWERS.has(next))
+    }
+    return false
   })
 }
 
 // Ultra-ambiguous titles need proof the word is functioning as a title in the headline
 // itself — a generic context word anywhere in the headline/body (the ordinary weak-title
 // rule) isn't enough, because "from"/"you" appear constantly with no relation to the show.
+// Each title gets its own rule rather than a shared one, because the grammar of a
+// preposition ("from") and a second-person pronoun ("you") fail in different ways.
 function hasTitleStructuralEvidence(rawHeadline, normalizedHeadline, title) {
-  return hasAdjacentTitleSignal(normalizedHeadline, title) || hasQuotedTitle(rawHeadline, title)
+  if (title === 'you') return hasYouTitleEvidence(rawHeadline, normalizedHeadline)
+  return hasFromTitleEvidence(rawHeadline, normalizedHeadline, title)
 }
 
 export function normalizeNewsText(value) {

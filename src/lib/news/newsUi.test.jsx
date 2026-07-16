@@ -137,6 +137,19 @@ describe('ultra-ambiguous common-language titles (From, You)', () => {
     ).matched).toBe(false)
   })
 
+  // A bare production verb next to "you" is not enough — these place "renewed"/"cast"/
+  // "add"/"return" directly next to "you" while addressing the reader about their own
+  // subscription/device/watchlist, not describing a show called You.
+  it.each([
+    ['Have You Renewed Your Netflix Subscription?'],
+    ["You Renewed Netflix — Here's What to Watch"],
+    ['You Cast From Your Phone to the TV Wrong'],
+    ['You Add These Shows to Your Watchlist'],
+    ['You Return to Netflix After Cancelling'],
+  ])('rejects reader-addressing "you" next to a production verb: %s', (title) => {
+    expect(matchArticleToTrackedShow(article(1, title), wideShows).matched).toBe(false)
+  })
+
   it.each([
     ['You renewed for a final season', 11],
     ['Netflix\'s You sets final-season premiere', 11],
