@@ -46,6 +46,16 @@ describe('Watching archived-show loading', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('keeps an archived show eligible when refresh calls fail', async () => {
+    const show = { tmdb_id: 12, name: 'Retry me', finished_at: '2026-01-01T00:00:00Z' }
+    const { candidates } = await selectTrackedShowsForWatching(
+      [show],
+      vi.fn(async () => { throw new Error('network') }),
+      vi.fn(async () => { throw new Error('network') }),
+    )
+    expect(candidates).toEqual([show])
+  })
+
   it('does not fetch seasons for ineligible archived shows', async () => {
     const shows = [
       { tmdb_id: 1, name: 'Active', finished_at: null },
