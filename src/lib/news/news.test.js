@@ -4,6 +4,7 @@ import { dedupeArticles } from './dedupeArticles.js'
 import { normalizeArticle, canonicalizeUrl, stableArticleId } from './normalizeArticle.js'
 import { filterTvNews, isTvNewsArticle } from './tvNewsFilter.js'
 import { createGnewsProvider } from './gnewsProvider.js'
+import { CURATED_FEED_SOURCES } from './feedSources.js'
 
 function makeResponse({ status = 200, body = {} } = {}) {
   return {
@@ -14,6 +15,22 @@ function makeResponse({ status = 200, body = {} } = {}) {
     },
   }
 }
+
+function makeXmlResponse(xml, { status = 200 } = {}) {
+  return { ok: status >= 200 && status < 300, status, async text() { return xml } }
+}
+
+const RSS_FEED_XML = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Curated series renewed for another season</title>
+      <link>https://curated.example/story</link>
+      <description>Straight from the curated desk.</description>
+      <pubDate>Mon, 13 Jul 2026 11:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
 
 function makeHttpResponse() {
   const headers = new Map()
@@ -115,6 +132,24 @@ describe('news normalization and filtering', () => {
     expect(result[0].sourceName).toBe('Variety')
   })
 
+  it('prefers a curated-source duplicate over an equivalent GNews duplicate', () => {
+    const result = dedupeArticles([
+      article({
+        canonicalUrl: 'https://gnews-aggregator.example/story',
+        sourceName: 'Unlisted Aggregator',
+        provider: 'gnews',
+      }),
+      article({
+        canonicalUrl: 'https://tvline.com/story',
+        sourceName: 'Unlisted Aggregator',
+        provider: 'tvline',
+      }),
+    ])
+
+    expect(result).toHaveLength(1)
+    expect(result[0].provider).toBe('tvline')
+  })
+
   it.each([
     'HBO renews The Last of Us for season 3',
     'Netflix releases first trailer for new limited series',
@@ -170,10 +205,10 @@ describe('GET /api/news', () => {
     expect(parseNewsLimit(['2'])).toBeNull()
   })
 
-  it('returns a controlled response when the API key is missing', async () => {
+  it('returns a controlled response when no providers are configured at all', async () => {
     const fetchImpl = vi.fn()
     const res = makeHttpResponse()
-    const newsHandler = createNewsHandler({ env: {}, fetchImpl })
+    const newsHandler = createNewsHandler({ env: {}, fetchImpl, feedSources: [] })
 
     await newsHandler({ method: 'GET', query: {} }, res)
 
@@ -185,8 +220,25 @@ describe('GET /api/news', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
+  it('still serves curated articles when the GNews key is missing', async () => {
+    const fetchImpl = vi.fn(async () => makeXmlResponse(RSS_FEED_XML))
+    const res = makeHttpResponse()
+    const newsHandler = createNewsHandler({
+      env: {}, fetchImpl, feedSources: [{ name: 'Curated', url: 'https://curated.example/feed' }],
+    })
+
+    await newsHandler({ method: 'GET', query: {} }, res)
+
+    expect(res.statusCode).toBe(200)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl).toHaveBeenCalledWith('https://curated.example/feed', expect.any(Object))
+    expect(res.body.meta.providers).toEqual(['Curated'])
+    expect(res.body.articles.length).toBeGreaterThan(0)
+    expect(res.body.articles[0].provider).toBe('curated')
+  })
+
   it('rejects unsupported methods and invalid limits', async () => {
-    const newsHandler = createNewsHandler({ env: { GNEWS_API_KEY: 'secret' } })
+    const newsHandler = createNewsHandler({ env: { GNEWS_API_KEY: 'secret' }, feedSources: [] })
     const methodRes = makeHttpResponse()
     const limitRes = makeHttpResponse()
 
@@ -199,10 +251,25 @@ describe('GET /api/news', () => {
     expect(limitRes.body.error.code).toBe('INVALID_LIMIT')
   })
 
-  it('returns normalized, deduplicated candidates with safe metadata', async () => {
-    let requestedUrl
+  it('ignores any client-supplied feed URL — only the fixed allow-list is ever fetched', async () => {
+    const fetchImpl = vi.fn(async () => makeXmlResponse(RSS_FEED_XML))
+    const res = makeHttpResponse()
+    const newsHandler = createNewsHandler({
+      env: {}, fetchImpl, feedSources: [{ name: 'Curated', url: 'https://curated.example/feed' }],
+    })
+
+    await newsHandler({ method: 'GET', query: { limit: '5', feedUrl: 'https://evil.example/feed' } }, res)
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl).toHaveBeenCalledWith('https://curated.example/feed', expect.any(Object))
+  })
+
+  it('aggregates curated and GNews results, preferring curated stories when trimming to the limit', async () => {
+    const calledUrls = []
     const fetchImpl = vi.fn(async (url) => {
-      requestedUrl = new URL(url)
+      const key = String(url)
+      calledUrls.push(key)
+      if (key.includes('curated.example')) return makeXmlResponse(RSS_FEED_XML)
       return makeResponse({
         body: {
           articles: [
@@ -213,12 +280,6 @@ describe('GET /api/news', () => {
               image: 'https://images.example.com/story.jpg',
               source: { name: 'Variety' },
               publishedAt: '2026-07-13T10:00:00Z',
-            },
-            {
-              title: 'A TV series is renewed for season 2!',
-              url: 'https://other.example/story',
-              source: { name: 'Small Source' },
-              publishedAt: '2026-07-13T09:00:00Z',
             },
             {
               title: 'Movie box office rises',
@@ -232,25 +293,40 @@ describe('GET /api/news', () => {
     })
     const res = makeHttpResponse()
 
-    await createNewsHandler({ env: { GNEWS_API_KEY: 'secret' }, fetchImpl })(
-      { method: 'GET', query: { limit: '5' } },
-      res,
-    )
+    await createNewsHandler({
+      env: { GNEWS_API_KEY: 'secret' }, fetchImpl,
+      feedSources: [{ name: 'Curated', url: 'https://curated.example/feed' }],
+    })({ method: 'GET', query: { limit: '5' } }, res)
 
     expect(res.statusCode).toBe(200)
     expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=1800, stale-while-revalidate=10800')
-    expect(res.body.articles).toHaveLength(2)
-    expect(res.body.articles[0]).toMatchObject({
-      title: 'A TV series is renewed for season 2',
-      sourceName: 'Variety',
-      provider: 'gnews',
-    })
+    expect(calledUrls).toHaveLength(2)
+    expect(res.body.articles.some((article) => article.provider === 'curated')).toBe(true)
+    expect(res.body.articles.some((article) => article.provider === 'gnews')).toBe(true)
+    // Curated stories are ordered ahead of GNews stories in the final list.
+    const providerOrder = res.body.articles.map((article) => article.provider)
+    expect(providerOrder.indexOf('curated')).toBeLessThan(providerOrder.lastIndexOf('gnews'))
     expect(res.body.articles[0]).not.toHaveProperty('source')
-    expect(res.body.meta).toMatchObject({ provider: 'gnews', cached: false, count: 2 })
+    expect(res.body.meta).toMatchObject({ providers: ['Curated', 'gnews'], sourceFailureCount: 0 })
     expect(Number.isNaN(new Date(res.body.meta.fetchedAt).getTime())).toBe(false)
-    expect(requestedUrl.searchParams.get('apikey')).toBe('secret')
-    expect(requestedUrl.searchParams.get('q')).toBe('television')
-    expect(requestedUrl.searchParams.get('max')).toBe('5')
+  })
+
+  it('keeps the feed alive when one curated source fails and GNews succeeds', async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      const key = String(url)
+      if (key.includes('broken.example')) throw new Error('dns failure')
+      return makeResponse({ body: { articles: [] } })
+    })
+    const res = makeHttpResponse()
+
+    await createNewsHandler({
+      env: { GNEWS_API_KEY: 'secret' }, fetchImpl,
+      feedSources: [{ name: 'Broken', url: 'https://broken.example/feed' }],
+    })({ method: 'GET', query: {} }, res)
+
+    expect(res.statusCode).toBe(200)
+    expect(res.body.meta.providers).toEqual(['gnews'])
+    expect(res.body.meta.sourceFailureCount).toBe(1)
   })
 
   it('never requests more than ten articles from GNews', async () => {
@@ -275,7 +351,7 @@ describe('GET /api/news', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = makeHttpResponse()
     const newsHandler = createNewsHandler({
-      env: { GNEWS_API_KEY: 'secret' },
+      env: { GNEWS_API_KEY: 'secret' }, feedSources: [],
       fetchImpl: vi.fn(async () => makeResponse({ status: 500, body: { error: 'secret' } })),
     })
 
@@ -307,7 +383,7 @@ describe('GET /api/news', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = makeHttpResponse()
     const newsHandler = createNewsHandler({
-      env: { GNEWS_API_KEY: 'secret-key' },
+      env: { GNEWS_API_KEY: 'secret-key' }, feedSources: [],
       fetchImpl: vi.fn(async () => makeResponse({ status, body })),
     })
 
@@ -332,7 +408,7 @@ describe('GET /api/news', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = makeHttpResponse()
     const newsHandler = createNewsHandler({
-      env: { GNEWS_API_KEY: 'secret' },
+      env: { GNEWS_API_KEY: 'secret' }, feedSources: [],
       fetchImpl: vi.fn(async () => ({ ok: true, status: 200, text: async () => '{bad json' })),
     })
 
@@ -349,5 +425,19 @@ describe('GET /api/news', () => {
 
   it('exports a Vercel-compatible default handler', () => {
     expect(typeof handler).toBe('function')
+  })
+
+  it('bounds total upstream requests to the curated allow-list plus one GNews call', async () => {
+    const calledUrls = []
+    const fetchImpl = vi.fn(async (url) => {
+      calledUrls.push(String(url))
+      return makeXmlResponse(RSS_FEED_XML)
+    })
+    const res = makeHttpResponse()
+
+    await createNewsHandler({ env: {}, fetchImpl })({ method: 'GET', query: {} }, res)
+
+    expect(calledUrls).toEqual(CURATED_FEED_SOURCES.map((source) => source.url))
+    expect(calledUrls).toHaveLength(CURATED_FEED_SOURCES.length)
   })
 })

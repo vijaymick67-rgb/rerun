@@ -51,6 +51,62 @@ describe('tracked-show news matching', () => {
   })
 })
 
+const wideShows = [
+  { tmdb_id: 10, name: 'Beef' },
+  { tmdb_id: 11, name: 'You' },
+  { tmdb_id: 12, name: 'From' },
+  { tmdb_id: 13, name: 'Dark' },
+  { tmdb_id: 14, name: 'The Bear' },
+  { tmdb_id: 15, name: 'A Knight of the Seven Kingdoms' },
+  { tmdb_id: 16, name: 'Only Murders in the Building' },
+  { tmdb_id: 17, name: 'Your Friends & Neighbors' },
+]
+
+describe('single-word title disambiguation (Phase 5)', () => {
+  it.each([
+    ["'Beef' stars reunite for Netflix event", 10],
+    ["'You' Season 5 premiere breaks streaming records", 11],
+    ["'From' renewed for season 3 by MGM+", 12],
+    ["Dark is streaming again after a surprise re-release", 13],
+  ])('matches a weak single-word title when the headline names it with TV context: %s', (title, showId) => {
+    expect(matchArticleToTrackedShow(article(1, title), wideShows)).toMatchObject({ matched: true, showId })
+  })
+
+  it.each([
+    ['Beef sales rise as inflation hits grocery stores'],
+    ['You should try this new dessert trend'],
+    ['From New York, our correspondent reports on the housing market'],
+    ["It's dark outside during winter evenings"],
+  ])('rejects ordinary use of a common word with no TV context: %s', (title) => {
+    expect(matchArticleToTrackedShow(
+      { ...article(1, title), description: 'A local reporter filed this story.' }, wideShows,
+    ).matched).toBe(false)
+  })
+
+  it.each([
+    ['A Knight of the Seven Kingdoms sets premiere date', 15],
+    ['Only Murders in the Building renewed for another season', 16],
+    ['Your Friends & Neighbors trailer released', 17],
+    ['The Bear renewed for season 4', 14],
+  ])('matches a distinctive multi-word title directly: %s', (title, showId) => {
+    expect(matchArticleToTrackedShow(article(1, title), wideShows)).toMatchObject({ matched: true, showId })
+  })
+
+  it('prefers a headline match over a weak description-only mention', () => {
+    const result = matchArticleToTrackedShow(
+      { ...article(1, 'The Bear renewed for season 4'), description: 'You should also watch this.' },
+      wideShows,
+    )
+    expect(result.showId).toBe(14)
+  })
+
+  it('does not match an actor-only story with no show-title context', () => {
+    expect(matchArticleToTrackedShow(
+      article(1, 'Jeremy Allen White spotted at a downtown restaurant'), wideShows,
+    ).matched).toBe(false)
+  })
+})
+
 describe('in-session tracked-show updates', () => {
   it('makes a newly added show eligible for My Shows news without a reload', () => {
     const cached = mergeNews(emptyNewsState(), [
@@ -120,6 +176,50 @@ describe('My Shows inbox', () => {
     const state = mergeNews(first, Array.from({ length: 60 }, (_, i) => myArticle(i + 10)), shows)
     expect([...state.visibleIds]).toEqual(first.visibleIds)
     expect(state.visibleIds.length + state.queuedIds.length).toBe(50)
+  })
+})
+
+describe('freshness and ranking (Phase 8)', () => {
+  const now = Date.parse('2026-07-14T12:00:00Z')
+  function daysAgoArticle(id, title, days) {
+    return { id: `f${id}`, title, description: 'TV series news', url: `https://example.com/f${id}`,
+      canonicalUrl: `https://example.com/f${id}`, imageUrl: null, sourceName: `Source ${id}`,
+      publishedAt: new Date(now - days * 24 * 60 * 60 * 1000).toISOString() }
+  }
+  function matchedArticle(id, title, days) { return daysAgoArticle(id, `House of the Dragon ${title}`, days) }
+
+  it('prefers a recent personal match over an older one when both are queued', () => {
+    const older = matchedArticle(1, 'older update', 10)
+    const recent = matchedArticle(2, 'recent update', 1)
+    const state = mergeNews(emptyNewsState(), [older, recent], shows, now)
+    expect(state.visibleIds[0]).toBe(recent.id)
+    expect(state.visibleIds[1]).toBe(older.id)
+  })
+
+  it('still surfaces an older personal match when the pool is sparse rather than showing nothing', () => {
+    const older = matchedArticle(3, 'sparse pool update', 15)
+    const state = mergeNews(emptyNewsState(), [older], shows, now)
+    expect(state.visibleIds).toContain(older.id)
+  })
+
+  it('never queues a personal match older than 30 days', () => {
+    const ancient = matchedArticle(4, 'ancient update', 40)
+    const state = mergeNews(emptyNewsState(), [ancient], shows, now)
+    expect(state.visibleIds).not.toContain(ancient.id)
+    expect(state.queuedIds).not.toContain(ancient.id)
+  })
+
+  it('excludes a general story older than 30 days', () => {
+    const ancient = daysAgoArticle(5, 'Streaming series renewed after a long run', 40)
+    const state = mergeNews(emptyNewsState(), [ancient], shows, now)
+    expect(selectGeneralNews(state, shows, now).map((item) => item.id)).not.toContain(ancient.id)
+  })
+
+  it('prefers a curated-source general story over an equally fresh GNews story', () => {
+    const curated = { ...daysAgoArticle(6, 'Streaming series renewed for another season', 1), provider: 'tvline' }
+    const gnews = { ...daysAgoArticle(7, 'Streaming series renewed for a different season', 1), provider: 'gnews' }
+    const state = mergeNews(emptyNewsState(), [curated, gnews], shows, now)
+    expect(selectGeneralNews(state, shows, now)[0].id).toBe(curated.id)
   })
 })
 
@@ -219,6 +319,13 @@ describe('news UI', () => {
     expect(empty).toContain('No new updates from your shows.')
     expect(empty).toContain('No TV news available right now.')
     expect(renderToStaticMarkup(<BrowseNewsView state={emptyNewsState()} error />)).toContain('Retry')
+  })
+  it('shows a non-blocking stale-cache notice instead of hiding cached stories on refresh failure', () => {
+    const state = mergeNews(emptyNewsState(), [myArticle(1)], shows)
+    const html = renderToStaticMarkup(<BrowseNewsView state={state} trackedShows={shows} error />)
+    expect(html).toContain('House of the Dragon update 1')
+    expect(html).toContain('Showing saved stories')
+    expect(html).toContain('Retry')
   })
   it('formats relative publication age without a live timer', () => {
     const now = Date.parse('2026-07-14T12:00:00Z')

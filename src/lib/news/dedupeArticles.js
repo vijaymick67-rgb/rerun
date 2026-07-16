@@ -16,9 +16,17 @@ function sourceScore(sourceName) {
   return RECOGNIZED_SOURCES.some((name) => source.includes(name)) ? 4 : 0
 }
 
+// Curated feeds (provider !== 'gnews') are a quality signal independent of whether
+// the outlet name happens to be in RECOGNIZED_SOURCES — this is what lets a curated
+// duplicate win over a generic GNews aggregation of the same story.
+function providerScore(article) {
+  return article.provider && article.provider !== 'gnews' ? 3 : 0
+}
+
 function articleScore(article) {
   return [
     sourceScore(article.sourceName),
+    providerScore(article),
     article.imageUrl ? 2 : 0,
     article.description ? 1 : 0,
     new Date(article.publishedAt).getTime() / 1e13,

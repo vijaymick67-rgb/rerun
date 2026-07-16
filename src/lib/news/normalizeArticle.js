@@ -51,12 +51,14 @@ function stableHash(value) {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-export function stableArticleId(canonicalUrl) {
+const MAX_FUTURE_SKEW_MS = 48 * 60 * 60 * 1000
+
+export function stableArticleId(canonicalUrl, provider = 'gnews') {
   const canonical = canonicalizeUrl(canonicalUrl)
-  return canonical ? `gnews-${stableHash(canonical)}` : null
+  return canonical ? `${provider}-${stableHash(canonical)}` : null
 }
 
-export function normalizeArticle(raw, { fetchedAt = new Date().toISOString() } = {}) {
+export function normalizeArticle(raw, { fetchedAt = new Date().toISOString(), provider = 'gnews' } = {}) {
   if (!raw || typeof raw !== 'object') return null
 
   const title = cleanText(raw.title)
@@ -70,9 +72,12 @@ export function normalizeArticle(raw, { fetchedAt = new Date().toISOString() } =
     return null
   }
   if (Number.isNaN(fetchedDate.getTime())) return null
+  // Reject impossible future-dated articles (bad feed clocks) rather than letting
+  // them rank as the freshest thing in the feed.
+  if (publishedDate.getTime() - fetchedDate.getTime() > MAX_FUTURE_SKEW_MS) return null
 
   return {
-    id: stableArticleId(canonicalUrl),
+    id: stableArticleId(canonicalUrl, provider),
     title,
     description: cleanDescription(raw.description),
     url: canonicalUrl,
@@ -81,7 +86,7 @@ export function normalizeArticle(raw, { fetchedAt = new Date().toISOString() } =
     sourceName,
     publishedAt: publishedDate.toISOString(),
     fetchedAt: fetchedDate.toISOString(),
-    provider: 'gnews',
+    provider,
   }
 }
 

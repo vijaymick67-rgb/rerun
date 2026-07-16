@@ -1,4 +1,7 @@
-const AMBIGUOUS_SINGLE_WORD_TITLES = new Set(['sugar', 'lucky', 'adults', 'task'])
+// A single-word title (Sugar, Beef, You, From, Dark, Lucky…) is inherently ambiguous —
+// it can only match when the headline names it AND the surrounding text carries real
+// TV-production context. Multi-word titles are distinctive enough to match directly.
+const CONTEXT_SIGNAL = /\b(?:season|seasons|series|episode|episodes|premiere|premieres|premiered|renew|renews|renewed|renewal|cancel|cancels|cancelled|canceled|cancellation|trailer|showrunner|finale|spinoff|streaming|stream|cast|casts|casting|network|debut|debuts|greenlit|greenlight|revival|reboot|hbo|max|netflix|apple tv|prime video|disney|hulu|peacock|paramount|fx|amc|showtime|starz|bbc|itv|mgm)\b/
 
 export function normalizeNewsText(value) {
   return typeof value === 'string'
@@ -35,8 +38,12 @@ export function matchArticleToTrackedShow(article, trackedShows = []) {
       const words = variant.split(' ')
       const headlineMatch = titleInHeadline(headline, variant)
       const contextMatch = phraseIn(body, variant)
-      if (!headlineMatch && !contextMatch) continue
-      if (words.length === 1 && AMBIGUOUS_SINGLE_WORD_TITLES.has(variant) && !headlineMatch) continue
+      const isWeakTitle = words.length === 1
+      if (isWeakTitle) {
+        if (!headlineMatch || !CONTEXT_SIGNAL.test(`${headline} ${body}`)) continue
+      } else if (!headlineMatch && !contextMatch) {
+        continue
+      }
       candidates.push({
         show,
         variant,
