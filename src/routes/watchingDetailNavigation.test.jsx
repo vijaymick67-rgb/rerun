@@ -6,6 +6,10 @@ import {
   getRouteLevel,
   getScrollNavigationAction,
 } from '../lib/scrollRestoration'
+import {
+  advanceWatchingRefreshState,
+  getWatchingInteractionState,
+} from '../lib/watchingNavigation'
 
 vi.mock('../components/ReloadPrompt', () => ({ default: () => null }))
 
@@ -17,6 +21,14 @@ function renderApp(path) {
       <App />
     </MemoryRouter>,
   )
+}
+
+function getTabLinkMarkup(html, label) {
+  const endMarker = `>${label}</a>`
+  const end = html.indexOf(endMarker)
+  const start = html.lastIndexOf('<a ', end)
+  if (start === -1 || end === -1) throw new Error(`Missing ${label} tab link`)
+  return html.slice(start, end + endMarker.length)
 }
 
 // The reported regression: returning from Show Detail visibly blinked/faded the
@@ -115,6 +127,76 @@ describe('App structure: route destinations unchanged', () => {
     expect(renderApp('/watching/123')).toContain('nested-page')
     expect(renderApp('/watching/123/season/1')).toContain('nested-page')
   })
+
+  it('keeps unknown routes outside the Watching subtree and renders NotFound', () => {
+    const html = renderApp('/missing-navigation-audit')
+    expect(html).toContain('Page not found')
+    expect(html).not.toContain('route-content--nested')
+    expect(html.match(/aria-current="page"/g) ?? []).toHaveLength(0)
+  })
+})
+
+describe('Watching route transitions', () => {
+  it('refreshes exactly once after detail -> season -> detail -> Watching', () => {
+    let state = { detailOpen: false, refreshToken: 0 }
+    for (const detailOpen of [true, true, true, false]) {
+      state = advanceWatchingRefreshState(state, detailOpen)
+    }
+    expect(state).toEqual({ detailOpen: false, refreshToken: 1 })
+  })
+
+  it('increments once per repeated detail round-trip and never on detail entry', () => {
+    let state = { detailOpen: false, refreshToken: 0 }
+    for (let roundTrip = 0; roundTrip < 10; roundTrip += 1) {
+      state = advanceWatchingRefreshState(state, true)
+      expect(state.refreshToken).toBe(roundTrip)
+      state = advanceWatchingRefreshState(state, false)
+      expect(state.refreshToken).toBe(roundTrip + 1)
+    }
+  })
+
+  it('disarms swipe and remove-dialog state while Watching is hidden', () => {
+    const confirmingShow = { id: 7, name: 'Frasier' }
+    expect(getWatchingInteractionState(true, 7, confirmingShow)).toEqual({
+      openSwipeId: 7,
+      confirmingShow,
+    })
+    expect(getWatchingInteractionState(false, 7, confirmingShow)).toEqual({
+      openSwipeId: null,
+      confirmingShow: null,
+    })
+  })
+})
+
+describe('tab highlighting follows route shell identity', () => {
+  it('highlights Watching consistently at both / and /watching', () => {
+    for (const path of ['/', '/watching']) {
+      const html = renderApp(path)
+      expect(getTabLinkMarkup(html, 'Watching')).toContain('aria-current="page"')
+      expect(html.match(/aria-current="page"/g) ?? []).toHaveLength(1)
+    }
+  })
+
+  it('keeps Watching highlighted at Show and Season detail depths', () => {
+    for (const path of ['/watching/123', '/watching/123/season/1']) {
+      const html = renderApp(path)
+      expect(getTabLinkMarkup(html, 'Watching')).toContain('aria-current="page"')
+      expect(html.match(/aria-current="page"/g) ?? []).toHaveLength(1)
+    }
+  })
+
+  it('highlights only the selected real tab after a genuine tab switch', () => {
+    for (const [path, label] of [
+      ['/browse', 'Discover'],
+      ['/stats', 'Insights'],
+      ['/settings', 'Settings'],
+    ]) {
+      const html = renderApp(path)
+      expect(getTabLinkMarkup(html, label)).toContain('aria-current="page"')
+      expect(getTabLinkMarkup(html, 'Watching')).not.toContain('aria-current')
+      expect(html.match(/aria-current="page"/g) ?? []).toHaveLength(1)
+    }
+  })
 })
 
 describe('scroll restoration still restores the Watching list on detail Back', () => {
@@ -126,5 +208,21 @@ describe('scroll restoration still restores the Watching list on detail Back', (
       pathname: '/watching',
     })
     expect(action).toEqual({ type: 'restore', key: '/watching' })
+  })
+
+  it('keeps browser Forward into detail at top and Back to either list alias restored', () => {
+    expect(getScrollNavigationAction({
+      isInitial: false,
+      navigationType: 'POP',
+      previousPathname: '/watching',
+      pathname: '/watching/123',
+    })).toEqual({ type: 'top', key: '/watching/123' })
+
+    expect(getScrollNavigationAction({
+      isInitial: false,
+      navigationType: 'POP',
+      previousPathname: '/watching/123',
+      pathname: '/',
+    })).toEqual({ type: 'restore', key: '/watching' })
   })
 })
