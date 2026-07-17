@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-80 -80 1184 1184" role="img" aria-labelledby="title desc">
+  <title id="title">Rerun app icon</title>
+  <desc id="desc">A rounded television outline with an integrated replay loop on a deep navy background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#121726"/>
+      <stop offset="0.55" stop-color="#0f1320"/>
+      <stop offset="1" stop-color="#090c14"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0.15" y1="0.1" x2="0.85" y2="0.9">
+      <stop offset="0" stop-color="#84a7ff"/>
+      <stop offset="0.45" stop-color="#4f7dff"/>
+      <stop offset="1" stop-color="#1f5cff"/>
+    </linearGradient>
+    <filter id="softGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect x="20" y="20" width="984" height="984" rx="212" fill="none" stroke="#263149" stroke-width="3"/>
+
+  <g fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M406 302 L512 408 L618 302" stroke-width="54"/>
+    <path d="M278 420 C220 420 176 465 176 522 V690 C176 760 226 810 296 810 H382" stroke-width="58"/>
+    <path d="M642 810 H728 C798 810 848 760 848 690 V522 C848 465 804 420 746 420 H278" stroke-width="58"/>
+    <path d="M646 724 C709 770 728 854 688 922 C646 992 550 1004 492 948 C451 908 446 848 468 800" stroke-width="58"/>
+  </g>
+
+  <path d="M462 748 L542 784 L474 838 Z" fill="url(#mark)"/>
+  <ellipse cx="512" cy="650" rx="270" ry="220" fill="#285dff" opacity="0.08" filter="url(#softGlow)"/>
+</svg>
