@@ -8,6 +8,7 @@ import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { removeTrackedShow, upsertTrackedShow } from '../lib/finishedShows'
 import BrowseNews from '../components/BrowseNews'
+import BrowseResultsSkeleton from '../components/BrowseResultsSkeleton'
 import ProgressiveImage from '../components/ProgressiveImage'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 
@@ -236,7 +237,10 @@ export default function Browse() {
       />
 
       {loading && (
-        <p className="mt-4 text-sm text-(--color-text-muted)">Searching…</p>
+        <>
+          <p role="status" aria-live="polite" className="sr-only">Searching…</p>
+          <BrowseResultsSkeleton />
+        </>
       )}
 
       {error && <p className="motion-banner mt-4 text-sm text-red-400">{error}</p>}
