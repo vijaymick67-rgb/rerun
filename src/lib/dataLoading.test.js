@@ -43,6 +43,23 @@ describe('portable data loading', () => {
     vi.useRealTimers()
   })
 
+  it('aborts the underlying operation when a request times out', async () => {
+    vi.useFakeTimers()
+    const abort = vi.fn()
+    const controller = { signal: { aborted: false }, abort }
+    const pending = withTimeout(() => new Promise(() => {}), {
+      timeoutMs: 30,
+      AbortControllerImpl: function FakeAbortController() {
+        return controller
+      },
+    })
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'DATA-TIMEOUT' })
+    await vi.advanceTimersByTimeAsync(30)
+    await assertion
+    expect(abort).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+  })
+
   it('classifies network, Supabase, TMDB, TVmaze, and storage failures', () => {
     expect(classifyDataError(new TypeError('Load failed'))).toBe('DATA-NETWORK')
     expect(classifyDataError({ code: 'PGRST116', message: 'row error' })).toBe('DATA-SUPABASE')

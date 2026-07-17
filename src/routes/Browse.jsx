@@ -11,6 +11,7 @@ import BrowseNews from '../components/BrowseNews'
 import BrowseResultsSkeleton from '../components/BrowseResultsSkeleton'
 import ProgressiveImage from '../components/ProgressiveImage'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
+import { withTimeout } from '../lib/dataLoading'
 
 const DEBOUNCE_MS = 400
 const DELAYED_ADD_THRESHOLD_DAYS = 60
@@ -20,6 +21,7 @@ export default function Browse() {
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [searchAttempt, setSearchAttempt] = useState(0)
   const [searched, setSearched] = useState(false)
   const [trackedIds, setTrackedIds] = useState(new Set())
   const [trackedShows, setTrackedShows] = useState([])
@@ -27,6 +29,7 @@ export default function Browse() {
   const [addingIds, setAddingIds] = useState(new Set())
   const [removingIds, setRemovingIds] = useState(new Set())
   const [trackErrors, setTrackErrors] = useState({})
+  const [logErrors, setLogErrors] = useState({})
   const [loggingIds, setLoggingIds] = useState(new Set())
   const [loggedIds, setLoggedIds] = useState(new Set())
   const [delayedAddMessage, setDelayedAddMessage] = useState(null)
@@ -38,9 +41,13 @@ export default function Browse() {
 
   useEffect(() => {
     let ignore = false
-    supabase
-      .from('tracked_shows')
-      .select('tmdb_id, name, hidden_at')
+    withTimeout((signal) => {
+      let query = supabase
+        .from('tracked_shows')
+        .select('tmdb_id, name, hidden_at')
+      if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+      return query
+    }, { stage: 'browse-tracked-shows', source: 'supabase' })
       .then(({ data, error: fetchError }) => {
         if (ignore) return
         if (!fetchError && data) {
@@ -51,12 +58,16 @@ export default function Browse() {
         }
         setTrackedShowsReady(true)
       })
+      .catch(() => {
+        if (!ignore) setTrackedShowsReady(true)
+      })
     return () => {
       ignore = true
     }
   }, [])
 
   useEffect(() => {
+    let ignore = false
     clearTimeout(debounceRef.current)
 
     if (!query.trim()) {
@@ -71,19 +82,29 @@ export default function Browse() {
       setLoading(true)
       setError(null)
       try {
-        const data = await searchShows(query.trim())
-        setResults(data)
+        const data = await withTimeout(
+          () => searchShows(query.trim()),
+          { stage: 'browse-search', source: 'tmdb' },
+        )
+        if (!ignore) setResults(data)
       } catch {
-        setError('Search failed. Try again.')
-        setResults([])
+        if (!ignore) {
+          setError('Search failed. Try again.')
+          setResults([])
+        }
       } finally {
-        setSearched(true)
-        setLoading(false)
+        if (!ignore) {
+          setSearched(true)
+          setLoading(false)
+        }
       }
     }, DEBOUNCE_MS)
 
-    return () => clearTimeout(debounceRef.current)
-  }, [query])
+    return () => {
+      ignore = true
+      clearTimeout(debounceRef.current)
+    }
+  }, [query, searchAttempt])
 
   async function handleAdd(show) {
     const wasTracked = knownTrackedIdsRef.current.has(show.id)
@@ -107,6 +128,7 @@ export default function Browse() {
       setTrackedIds((prev) => new Set(prev).add(show.id))
       setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
     } else {
+      setTrackErrors((prev) => ({ ...prev, [show.id]: 'Could not update tracking. Try again.' }))
       return false
     }
 
@@ -194,6 +216,11 @@ export default function Browse() {
   // are skipped — they don't exist yet to mark, even though the user is claiming
   // to have "seen the whole show".
   async function handleLogWatched(show) {
+    setLogErrors((prev) => {
+      const next = { ...prev }
+      delete next[show.id]
+      return next
+    })
     setLoggingIds((prev) => new Set(prev).add(show.id))
 
     try {
@@ -216,7 +243,7 @@ export default function Browse() {
       })
       setLoggedIds((prev) => new Set(prev).add(show.id))
     } catch {
-      // best-effort — leave the button in its default state so the user can retry
+      setLogErrors((prev) => ({ ...prev, [show.id]: 'Could not log this show. Try again.' }))
     } finally {
       setLoggingIds((prev) => {
         const next = new Set(prev)
@@ -243,7 +270,18 @@ export default function Browse() {
         </>
       )}
 
-      {error && <p className="motion-banner mt-4 text-sm text-red-400">{error}</p>}
+      {error && (
+        <p role="alert" className="motion-banner mt-4 flex items-center justify-between gap-3 text-sm text-red-400">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setSearchAttempt((attempt) => attempt + 1)}
+            className="motion-press shrink-0 font-semibold underline"
+          >
+            Retry
+          </button>
+        </p>
+      )}
 
       {delayedAddMessage && (
         <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-accent)/40 bg-(--color-accent)/10 px-3 py-2 text-sm text-(--color-accent)">
@@ -340,6 +378,11 @@ export default function Browse() {
                   </button>
                   {notAiredIds.has(show.id) && (
                     <p role="status" className="mt-1 text-xs text-(--color-text-muted)">Not aired yet</p>
+                  )}
+                  {logErrors[show.id] && (
+                    <p role="alert" className="mt-1 text-xs text-red-400">
+                      {logErrors[show.id]} <button type="button" onClick={() => handleLogWatched(show)} className="motion-press ml-1 underline">Retry</button>
+                    </p>
                   )}
                 </div>
               </div>

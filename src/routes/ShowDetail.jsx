@@ -17,6 +17,7 @@ import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
 import WatchedCircle from '../components/WatchedCircle'
 import ProgressiveImage from '../components/ProgressiveImage'
 import { createWatchMutationQueue, toggleSeasonOptimistically } from '../lib/seasonWatchMutations'
+import { withTimeout } from '../lib/dataLoading'
 
 // tmdbId changes are handled by remounting (see the keyed wrapper below)
 // rather than resetting state in an effect, so the cache-on-mount
@@ -34,6 +35,9 @@ function ShowDetailInner({ tmdbId }) {
   const mutationQueueRef = useRef(createWatchMutationQueue())
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const retryingRef = useRef(false)
 
   useEffect(() => {
     let ignore = false
@@ -42,11 +46,15 @@ function ShowDetailInner({ tmdbId }) {
       const mutationVersion = mutationQueueRef.current.version
       setError(null)
       try {
-        const { data: trackedShow, error: showError } = await supabase
-          .from('tracked_shows')
-          .select('*')
-          .eq('tmdb_id', numericTmdbId)
-          .maybeSingle()
+        const { data: trackedShow, error: showError } = await withTimeout((signal) => {
+          let query = supabase
+            .from('tracked_shows')
+            .select('*')
+            .eq('tmdb_id', numericTmdbId)
+            .maybeSingle()
+          if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+          return query
+        }, { stage: 'show-detail-tracked-show', source: 'supabase' })
         if (showError) throw showError
         if (!trackedShow) {
           if (!ignore) {
@@ -56,22 +64,33 @@ function ShowDetailInner({ tmdbId }) {
           return
         }
 
-        const { data: watchedRows, error: watchedError } = await supabase
-          .from('watched_episodes')
-          .select('season_number, episode_number')
-          .eq('tmdb_show_id', numericTmdbId)
+        const { data: watchedRows, error: watchedError } = await withTimeout((signal) => {
+          let query = supabase
+            .from('watched_episodes')
+            .select('season_number, episode_number')
+            .eq('tmdb_show_id', numericTmdbId)
+          if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+          return query
+        }, { stage: 'show-detail-watched-episodes', source: 'supabase' })
         if (watchedError) throw watchedError
 
         const [details, releaseMap] = await Promise.all([
-          getShowDetails(numericTmdbId),
-          getShowReleaseMap(numericTmdbId, { getExternalIds }),
+          withTimeout(() => getShowDetails(numericTmdbId), {
+            stage: 'show-detail-details', source: 'tmdb',
+          }),
+          withTimeout(() => getShowReleaseMap(numericTmdbId, { getExternalIds }), {
+            stage: 'show-detail-release-map', source: 'tvmaze',
+          }).catch(() => ({})),
         ])
         const seasonList = (details.seasons ?? [])
           .filter((season) => season.season_number > 0)
           .sort((a, b) => a.season_number - b.season_number)
 
         const episodesArrays = await Promise.all(
-          seasonList.map((season) => getSeasonEpisodes(numericTmdbId, season.season_number)),
+          seasonList.map((season) => withTimeout(
+            () => getSeasonEpisodes(numericTmdbId, season.season_number),
+            { stage: 'show-detail-season-episodes', source: 'tmdb' },
+          )),
         )
         const plainEpisodesBySeason = {}
         seasonList.forEach((season, i) => {
@@ -104,9 +123,15 @@ function ShowDetailInner({ tmdbId }) {
           watchedList: [...nextWatched],
         })
       } catch {
-        if (!ignore) setError('Failed to load this show. Try refreshing.')
+        if (!ignore) setError(cached
+          ? 'Couldn\'t refresh this show. Try again.'
+          : 'Failed to load this show. Try again.')
       } finally {
-        if (!ignore) setLoading(false)
+        if (!ignore) {
+          setLoading(false)
+          setRefreshing(false)
+          retryingRef.current = false
+        }
       }
     }
 
@@ -114,7 +139,15 @@ function ShowDetailInner({ tmdbId }) {
     return () => {
       ignore = true
     }
-  }, [numericTmdbId, cacheKey])
+  }, [numericTmdbId, cacheKey, loadAttempt, cached])
+
+  function retryLoad() {
+    if (retryingRef.current) return
+    retryingRef.current = true
+    setRefreshing(true)
+    setLoading(cached === null)
+    setLoadAttempt((attempt) => attempt + 1)
+  }
 
   const totalEpisodeCount = seasons.reduce(
     (sum, season) => sum + (episodesBySeason[season.season_number]?.length ?? 0),
@@ -179,16 +212,19 @@ function ShowDetailInner({ tmdbId }) {
       {loading && <ShowDetailSkeleton />}
 
       {error && (
-        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className={`motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${show ? 'border-amber-400/40 bg-amber-500/10 text-amber-300' : 'border-red-400/40 bg-red-500/10 text-red-400'}`} role="alert">
           <span>{error}</span>
-          <button
+          <button type="button" onClick={retryLoad} disabled={refreshing} className="motion-press min-h-11 shrink-0 rounded-md px-2 font-semibold underline disabled:opacity-60">
+            {refreshing ? 'Retrying...' : 'Retry'}
+          </button>
+          {show && (<button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
             className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
-          </button>
+          </button>)}
         </div>
       )}
 
