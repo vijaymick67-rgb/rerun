@@ -236,7 +236,12 @@ export default function Browse() {
         className="w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
       />
 
-      {loading && <BrowseResultsSkeleton />}
+      {loading && (
+        <>
+          <p role="status" aria-live="polite" className="sr-only">Searching…</p>
+          <BrowseResultsSkeleton />
+        </>
+      )}
 
       {error && <p className="motion-banner mt-4 text-sm text-red-400">{error}</p>}
 
