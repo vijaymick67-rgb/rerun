@@ -15,6 +15,7 @@ import {
 } from '../lib/detailCache'
 import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
 import WatchedCircle from '../components/WatchedCircle'
+import ProgressiveImage from '../components/ProgressiveImage'
 import { createWatchMutationQueue, toggleSeasonOptimistically } from '../lib/seasonWatchMutations'
 
 // tmdbId changes are handled by remounting (see the keyed wrapper below)
@@ -203,17 +204,14 @@ function ShowDetailInner({ tmdbId }) {
       {!loading && show && (
         <>
           <div className="mt-4 flex gap-3">
-            {show.poster_path ? (
-              <img
-                src={POSTER_BASE + show.poster_path}
-                alt={show.name}
-                className="h-32 w-24 shrink-0 rounded-md object-cover"
-              />
-            ) : (
-              <div className="flex h-32 w-24 shrink-0 items-center justify-center rounded-md bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-                No poster
-              </div>
-            )}
+            <ProgressiveImage
+              src={show.poster_path ? POSTER_BASE + show.poster_path : null}
+              alt={show.name}
+              fallbackLabel="No poster"
+              loading="eager"
+              fetchPriority="high"
+              className="h-32 w-24 shrink-0 rounded-md"
+            />
             <div className="min-w-0 flex-1">
               <p className="text-sm text-(--color-text-muted)">
                 {seasons.length} season{seasons.length === 1 ? '' : 's'}

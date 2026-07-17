@@ -8,6 +8,7 @@ import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { removeTrackedShow, upsertTrackedShow } from '../lib/finishedShows'
 import BrowseNews from '../components/BrowseNews'
+import ProgressiveImage from '../components/ProgressiveImage'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 
 const DEBOUNCE_MS = 400
@@ -288,17 +289,12 @@ export default function Browse() {
                 key={show.id}
                 className="overflow-hidden rounded-lg bg-(--color-surface)"
               >
-                {show.poster_path ? (
-                  <img
-                    src={POSTER_BASE + show.poster_path}
-                    alt={show.name}
-                    className="aspect-2/3 w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex aspect-2/3 w-full items-center justify-center bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-                    No poster
-                  </div>
-                )}
+                <ProgressiveImage
+                  src={show.poster_path ? POSTER_BASE + show.poster_path : null}
+                  alt={show.name}
+                  fallbackLabel="No poster"
+                  className="aspect-2/3 w-full"
+                />
 
                 <div className="p-2">
                   <p className="truncate text-sm font-medium text-(--color-text)">

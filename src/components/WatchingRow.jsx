@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { POSTER_BASE } from '../lib/tmdb'
 import { watchingStatusLabel } from '../lib/watchHelpers'
+import ProgressiveImage from './ProgressiveImage'
 
 const REVEAL_WIDTH = 84
 const DRAG_THRESHOLD = 6
@@ -127,17 +128,12 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
           onClick={handleLinkClick}
           className="flex flex-1 items-center gap-3 text-left"
         >
-          {show.poster_path ? (
-            <img
-              src={POSTER_BASE + show.poster_path}
-              alt={show.name}
-              className="h-24 w-16 shrink-0 rounded-md object-cover"
-            />
-          ) : (
-            <div className="flex h-24 w-16 shrink-0 items-center justify-center rounded-md bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-              No poster
-            </div>
-          )}
+          <ProgressiveImage
+            src={show.poster_path ? POSTER_BASE + show.poster_path : null}
+            alt={show.name}
+            fallbackLabel="No poster"
+            className="h-24 w-16 shrink-0 rounded-md"
+          />
 
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-(--color-text)">{show.name}</p>
