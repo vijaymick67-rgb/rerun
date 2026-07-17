@@ -9,23 +9,81 @@
     <meta name="description" content="A personal TV tracker for keeping up with the shows you watch." />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="RERUN" />
-    <title>RERUN</title>
+    <meta name="apple-mobile-web-app-title" content="Rerun" />
+    <title>Rerun</title>
     <style>
       :root, body { background: #0f1115; }
       body { margin: 0; color: #e5e7eb; }
-      .app-loading-shell { min-height: 100vh; display: grid; place-items: center; background: #0f1115; color: #e5e7eb; font: 600 0.875rem system-ui, sans-serif; letter-spacing: 0.18em; }
-      .app-loading-shell__mark { display: grid; gap: 0.75rem; justify-items: center; }
-      .app-loading-shell__dot { width: 0.45rem; height: 0.45rem; border-radius: 999px; background: #5b8def; }
-      @media (prefers-reduced-motion: no-preference) { .app-loading-shell__dot { animation: rerun-loading-pulse 1.2s ease-in-out infinite; } }
-      @keyframes rerun-loading-pulse { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+      .app-loading-shell {
+        box-sizing: border-box;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        background: #0f1115;
+        color: #e5e7eb;
+        font: 600 1rem system-ui, -apple-system, sans-serif;
+        letter-spacing: 0.06em;
+        padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+          env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+      }
+      .app-loading-shell__mark {
+        display: grid;
+        justify-items: center;
+        gap: 0.85rem;
+      }
+      .app-loading-shell__icon {
+        width: 4.25rem;
+        height: 4.25rem;
+        filter: drop-shadow(0 10px 26px rgba(37, 82, 255, 0.28));
+      }
+      .app-loading-shell__wordmark {
+        color: #e7ebff;
+        font-size: 1.05rem;
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .app-loading-shell__mark {
+          animation: rerun-shell-settle 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+      }
+      @keyframes rerun-shell-settle {
+        from {
+          opacity: 0;
+          transform: translateY(6px) scale(0.97);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
     </style>
   </head>
   <body>
-    <div id="app-loading" class="app-loading-shell" role="status" aria-live="polite" aria-label="Loading RERUN">
+    <div id="app-loading" class="app-loading-shell" role="status" aria-live="polite" aria-label="Loading Rerun">
       <div class="app-loading-shell__mark">
-        <span>RERUN</span>
-        <span class="app-loading-shell__dot" aria-hidden="true"></span>
+        <svg class="app-loading-shell__icon" viewBox="0 0 1024 1024" role="img" aria-hidden="true">
+          <defs>
+            <linearGradient id="shellBg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#121726" />
+              <stop offset="0.55" stop-color="#0f1320" />
+              <stop offset="1" stop-color="#090c14" />
+            </linearGradient>
+            <linearGradient id="shellMark" x1="0.15" y1="0.1" x2="0.85" y2="0.9">
+              <stop offset="0" stop-color="#84a7ff" />
+              <stop offset="0.45" stop-color="#4f7dff" />
+              <stop offset="1" stop-color="#1f5cff" />
+            </linearGradient>
+          </defs>
+          <rect width="1024" height="1024" rx="230" fill="url(#shellBg)" />
+          <g fill="none" stroke="url(#shellMark)" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M406 302 L512 408 L618 302" stroke-width="54" />
+            <path d="M278 420 C220 420 176 465 176 522 V690 C176 760 226 810 296 810 H382" stroke-width="58" />
+            <path d="M642 810 H728 C798 810 848 760 848 690 V522 C848 465 804 420 746 420 H278" stroke-width="58" />
+            <path d="M646 724 C709 770 728 854 688 922 C646 992 550 1004 492 948 C451 908 446 848 468 800" stroke-width="58" />
+          </g>
+          <path d="M462 748 L542 784 L474 838 Z" fill="url(#shellMark)" />
+        </svg>
+        <span class="app-loading-shell__wordmark">Rerun</span>
       </div>
     </div>
     <div id="root"></div>

@@ -11,7 +11,7 @@ export function UpdatePrompt({ onUpdate, onDismiss, updating = false }) {
   return (
     <div className="update-prompt motion-banner" role="status" aria-live="polite">
       <p className="min-w-0 flex-1 text-sm text-(--color-text)">
-        A new version of RERUN is ready.
+        A new version of Rerun is ready.
       </p>
       <button
         type="button"

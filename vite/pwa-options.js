@@ -1,8 +1,8 @@
 export const PWA_THEME_COLOR = '#0f1115'
 
 export const PWA_MANIFEST = {
-  name: 'RERUN',
-  short_name: 'RERUN',
+  name: 'Rerun',
+  short_name: 'Rerun',
   description: 'A personal TV tracker for keeping up with the shows you watch.',
   display: 'standalone',
   orientation: 'portrait-primary',

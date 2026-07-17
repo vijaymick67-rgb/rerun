@@ -10,7 +10,7 @@ export default function NotFound() {
         Page not found
       </h1>
       <p className="mt-2 max-w-xs text-sm leading-6 text-(--color-text-muted)">
-        That RERUN page does not exist.
+        That Rerun page does not exist.
       </p>
       <Link
         to="/"
