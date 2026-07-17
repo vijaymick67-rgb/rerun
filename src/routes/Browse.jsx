@@ -257,14 +257,14 @@ export default function Browse() {
             type="button"
             onClick={() => setDelayedAddMessage(null)}
             aria-label="Dismiss"
-            className="motion-press shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
+            className="motion-press min-h-11 min-w-11 shrink-0 text-(--color-accent)/80 hover:text-(--color-accent)"
           >
             ✕
           </button>
         </div>
       )}
 
-      {undoError && <p role="alert" className="mt-2 text-xs text-red-400">{undoError} <button type="button" onClick={handleUndoDelayedAdd} className="underline">Retry</button></p>}
+      {undoError && <p role="alert" className="mt-2 text-xs text-red-400">{undoError} <button type="button" onClick={handleUndoDelayedAdd} className="motion-press underline">Retry</button></p>}
 
       {!loading && !error && searched && query.trim() && results.length === 0 && (
         <p className="mt-8 text-center text-(--color-text-muted)">
@@ -322,7 +322,7 @@ export default function Browse() {
                   </button>
                   {trackErrors[show.id] && (
                     <p role="alert" className="mt-1 text-xs text-red-400">
-                      {trackErrors[show.id]} <button type="button" onClick={() => handleTrackToggle(show)} className="underline">Retry</button>
+                      {trackErrors[show.id]} <button type="button" onClick={() => handleTrackToggle(show)} className="motion-press underline">Retry</button>
                     </p>
                   )}
 
