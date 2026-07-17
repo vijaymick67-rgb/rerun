@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { getExternalIds, getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { getShowReleaseMap } from '../lib/tvmaze'
@@ -49,7 +49,7 @@ export function WatchingPartialWarning({ error, onRetry }) {
 // "Caught up" before the fresh load overwrites it.
 // v3: one-time cache-bust so the Settings bulk-mark-watched writes are picked
 // up — old v2 entries are simply never matched and a fresh Supabase fetch runs.
-export default function Watching() {
+export default function Watching({ refreshSignal = 0 }) {
   const [cachedShows] = useState(() => loadWatchingCache()?.filter((show) => !isHiddenShow(show)) ?? null)
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
@@ -59,6 +59,26 @@ export default function Watching() {
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
   const [openSwipeId, setOpenSwipeId] = useState(null)
+
+  // Latest rendered rows, readable synchronously inside the loader. A background
+  // refresh seeds its streaming merge from what's already on screen (not the
+  // mount-time cache snapshot), so rows update in place instead of collapsing
+  // and re-growing.
+  const showsRef = useRef(shows)
+  showsRef.current = shows
+
+  // The Watching instance is preserved (not remounted) while a Show/Season
+  // detail route is open, so `refreshSignal` — bumped by the router each time we
+  // return from a detail route — is how a background refresh is requested. It
+  // re-runs the loader WITHOUT flipping `loading` on, so already-rendered rows
+  // stay put (no skeleton, no page reconstruction) while newly-marked watched
+  // episodes stream in and re-sort in place.
+  const seenRefreshSignalRef = useRef(refreshSignal)
+  useEffect(() => {
+    if (seenRefreshSignalRef.current === refreshSignal) return
+    seenRefreshSignalRef.current = refreshSignal
+    setLoadAttempt((attempt) => attempt + 1)
+  }, [refreshSignal])
 
   useEffect(() => {
     let ignore = false
@@ -88,7 +108,8 @@ export default function Watching() {
           (tmdbId) => getShowReleaseMap(tmdbId, { getExternalIds }),
           { deferFinished: true },
         )
-        const renderedById = new Map((cachedShows ?? []).map((show) => [show.tmdb_id, show]))
+        const seedShows = showsRef.current?.length ? showsRef.current : (cachedShows ?? [])
+        const renderedById = new Map(seedShows.map((show) => [show.tmdb_id, show]))
         const freshById = new Map()
         let renderedAny = renderedById.size > 0
         let partialFailureCount = 0
@@ -192,7 +213,9 @@ export default function Watching() {
           source: loadFailure?.source ?? 'unknown',
         })
         if (!ignore) setError({
-          message: cachedShows ? 'Couldn’t refresh your shows.' : 'Failed to load your shows.',
+          message: (cachedShows || showsRef.current?.length)
+            ? 'Couldn’t refresh your shows.'
+            : 'Failed to load your shows.',
           code: diagnostic.code,
         })
       } finally {
