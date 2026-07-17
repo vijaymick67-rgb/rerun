@@ -30,8 +30,8 @@ function readPngDimensions(fileName) {
 describe('PWA foundation', () => {
   it('contains the required manifest installability fields', () => {
     expect(PWA_MANIFEST).toMatchObject({
-      name: 'RERUN',
-      short_name: 'RERUN',
+      name: 'Rerun',
+      short_name: 'Rerun',
       display: 'standalone',
       orientation: 'portrait-primary',
       start_url: '/',
@@ -261,7 +261,7 @@ describe('PWA foundation', () => {
     const rendered = NotFound()
     const output = JSON.stringify(rendered)
     expect(output).toContain('Page not found')
-    expect(output).not.toContain('RERUN is offline')
+    expect(output).not.toContain('RERUN')
   })
 
   it('removes the static loading shell after React mounts', () => {
