@@ -28,6 +28,21 @@ function renderRow(overrides = {}) {
   )
 }
 
+// Two distinct issues live in this file's history:
+//   1. A swipe-open row left open when the same outside tap navigates away
+//      (fixed by the instant-close-before-navigation patch below). Proven via
+//      A/B frame-capture in Chromium (8 exposed frames without the fix, 0
+//      with it) — but a real iPhone recording later showed the reported flash
+//      also happens with NO swipe ever performed, so this fix alone doesn't
+//      explain the reported bug. Kept because it's a real, separately
+//      verified correctness fix, not because it's the primary root cause.
+//   2. The actual reported bug: on ordinary (no-swipe) return-to-Watching,
+//      multiple rows can briefly expose their red Remove layer as the whole
+//      page's opacity fade-in (route-content--tab, re-triggered on every
+//      remount) races each row's own overflow-hidden/rounded clip against its
+//      front layer's transform-driven compositing-layer promotion — a known
+//      class of WebKit rendering bug. Fixed by forcing each row onto its own
+//      stable compositing layer (transform-gpu) below.
 describe('watching remove-flash fix: root cause and containment', () => {
   it('closes an open row instantly (no CSS transition) before the outside-tap state update commits', () => {
     const outsideEffect = watchingRowSrc.slice(
@@ -156,5 +171,39 @@ describe('watching remove-flash fix: PR #75 press feedback remains intact', () =
     expect(watchingRowSrc).toContain(
       'className="motion-press flex flex-1 items-center gap-3 text-left"',
     )
+  })
+})
+
+describe('watching remove-flash fix: WebKit compositing/clip-layer race on remount (primary root cause)', () => {
+  it('the row container is forced onto its own stable compositing layer via transform-gpu', () => {
+    const html = renderRow()
+    expect(html).toContain('class="watching-row transform-gpu')
+  })
+
+  it('transform-gpu is present unconditionally — not gated behind isOpen or drag state', () => {
+    expect(renderRow({ isOpen: true })).toContain('transform-gpu')
+    expect(renderRow({ isOpen: false })).toContain('transform-gpu')
+  })
+
+  it('the clip that must be pre-composited (overflow-hidden + rounded-lg) is still present on the same element', () => {
+    expect(watchingRowSrc).toContain(
+      'className="watching-row transform-gpu relative overflow-hidden rounded-lg',
+    )
+  })
+
+  it('the front (foreground) layer still fully spans the row — no fixed/partial width was introduced', () => {
+    const frontDivSrc = watchingRowSrc.slice(
+      watchingRowSrc.indexOf('ref={frontRef}'),
+      watchingRowSrc.indexOf('<Link'),
+    )
+    expect(frontDivSrc).not.toMatch(/\bw-(\d|\[|1\/)/)
+  })
+
+  it('does not special-case any specific show name or row status — applies to every row uniformly', () => {
+    const rowDivSrc = watchingRowSrc.slice(
+      watchingRowSrc.indexOf('return (\n    //'),
+      watchingRowSrc.indexOf('<button', watchingRowSrc.indexOf('return (')),
+    )
+    expect(rowDivSrc).not.toMatch(/Lanterns|Adults|status\?\.type/)
   })
 })
