@@ -10,7 +10,12 @@ import {
   shouldCacheRuntimeRequest,
 } from '../vite/pwa-options.js'
 import { removeStaticLoadingShell } from '../src/pwa/appShell.js'
-import { createUpdateLifecycle, requestServiceWorkerUpdate } from '../src/pwa/updateLifecycle.js'
+import {
+  createUpdateChecker,
+  createUpdateLifecycle,
+  PWA_UPDATE_CHECK_INTERVAL_MS,
+  requestServiceWorkerUpdate,
+} from '../src/pwa/updateLifecycle.js'
 import NotFound from '../src/components/NotFound.jsx'
 
 const repoRoot = resolve(import.meta.dirname, '..')
@@ -40,6 +45,13 @@ describe('PWA foundation', () => {
     ]))
   })
 
+  it('keeps first install idle and prompt-driven', () => {
+    const lifecycle = createUpdateLifecycle({ activateAndReload: vi.fn() })
+    expect(PWA_OPTIONS.registerType).toBe('prompt')
+    expect(lifecycle.getState()).toBe('idle')
+    expect(lifecycle.getPromptCount()).toBe(0)
+  })
+
   it('ships valid required icon dimensions', () => {
     expect(readPngDimensions('icon-192.png')).toEqual({ width: 192, height: 192 })
     expect(readPngDimensions('icon-512.png')).toEqual({ width: 512, height: 512 })
@@ -49,17 +61,20 @@ describe('PWA foundation', () => {
 
   it('does not create duplicate update prompts', () => {
     const lifecycle = createUpdateLifecycle({ activateAndReload: vi.fn() })
-    expect(lifecycle.announceReady()).toBe(true)
-    expect(lifecycle.announceReady()).toBe(false)
+    const worker = {}
+    expect(lifecycle.announceReady(worker)).toBe(true)
+    expect(lifecycle.announceReady(worker)).toBe(false)
     expect(lifecycle.getPromptCount()).toBe(1)
     expect(lifecycle.getState()).toBe('ready')
   })
 
   it('allows a future distinct update to prompt after dismissal', () => {
     const lifecycle = createUpdateLifecycle({ activateAndReload: vi.fn() })
-    expect(lifecycle.announceReady()).toBe(true)
+    const firstWorker = { version: 'a' }
+    expect(lifecycle.announceReady(firstWorker)).toBe(true)
     expect(lifecycle.dismiss()).toBe(true)
-    expect(lifecycle.announceReady()).toBe(true)
+    expect(lifecycle.announceReady(firstWorker)).toBe(false)
+    expect(lifecycle.announceReady({ version: 'b' })).toBe(true)
     expect(lifecycle.getPromptCount()).toBe(2)
   })
 
@@ -91,6 +106,110 @@ describe('PWA foundation', () => {
     expect(await lifecycle.update()).toBe(true)
     expect(lifecycle.getState()).toBe('updated')
     expect(activateAndReload).toHaveBeenCalledTimes(2)
+  })
+
+  it('gates prompts while offline and permits them after reconnect', () => {
+    let online = false
+    const lifecycle = createUpdateLifecycle({
+      activateAndReload: vi.fn(),
+      isOnline: () => online,
+    })
+    const worker = {}
+    expect(lifecycle.announceReady(worker)).toBe(false)
+    online = true
+    expect(lifecycle.announceReady(worker)).toBe(true)
+  })
+
+  it('sends one activation request even when Update is tapped repeatedly', async () => {
+    let release
+    const activateAndReload = vi.fn(() => new Promise((resolve) => { release = resolve }))
+    const lifecycle = createUpdateLifecycle({ activateAndReload })
+    lifecycle.announceReady({ version: 'a' })
+    const first = lifecycle.update()
+    const second = lifecycle.update()
+    expect(activateAndReload).toHaveBeenCalledOnce()
+    release()
+    await expect(first).resolves.toBe(true)
+    await expect(second).resolves.toBe(true)
+  })
+
+  it('reloads once for duplicate controllerchange events and preserves the browser URL', async () => {
+    const reload = vi.fn()
+    const location = { pathname: '/watching/123', search: '?tab=season', hash: '#episode-4' }
+    const activateAndReload = vi.fn().mockResolvedValue(undefined)
+    const lifecycle = createUpdateLifecycle({
+      activateAndReload,
+      reload: () => reload(location.pathname + location.search + location.hash),
+    })
+    lifecycle.announceReady({ version: 'a' })
+    await lifecycle.update()
+    expect(lifecycle.handleControllerChange()).toBe(true)
+    expect(lifecycle.handleControllerChange()).toBe(false)
+    expect(reload).toHaveBeenCalledOnce()
+    expect(reload).toHaveBeenCalledWith('/watching/123?tab=season#episode-4')
+    expect(location).toEqual({ pathname: '/watching/123', search: '?tab=season', hash: '#episode-4' })
+    expect(lifecycle.getState()).toBe('reloading')
+    expect(lifecycle.announceReady({ version: 'a' })).toBe(false)
+  })
+
+  it('handles stale or redundant workers without throwing', async () => {
+    const activateAndReload = vi.fn().mockRejectedValue(new Error('worker is gone'))
+    const lifecycle = createUpdateLifecycle({ activateAndReload })
+    lifecycle.announceReady({ version: 'a' })
+    await expect(lifecycle.update()).resolves.toBe(false)
+    expect(lifecycle.getState()).toBe('ready')
+    expect(lifecycle.handleControllerChange()).toBe(true)
+  })
+
+  it('reloads when another tab activates a dismissed update', () => {
+    const reload = vi.fn()
+    const lifecycle = createUpdateLifecycle({ reload })
+    lifecycle.announceReady({ version: 'a' })
+    lifecycle.dismiss()
+    expect(lifecycle.handleControllerChange()).toBe(true)
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('keeps reloading state when controllerchange wins the activation race', async () => {
+    let release
+    const reload = vi.fn()
+    const activateAndReload = vi.fn(() => new Promise((resolve) => { release = resolve }))
+    const lifecycle = createUpdateLifecycle({ activateAndReload, reload })
+    lifecycle.announceReady({ version: 'a' })
+    const update = lifecycle.update()
+    expect(lifecycle.handleControllerChange()).toBe(true)
+    release()
+    await expect(update).resolves.toBe(true)
+    expect(lifecycle.getState()).toBe('reloading')
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('checks for updates at most once at a time and cleans up its timer', async () => {
+    const update = vi.fn().mockResolvedValue(undefined)
+    const setIntervalFn = vi.fn(() => 42)
+    const clearIntervalFn = vi.fn()
+    const checker = createUpdateChecker({
+      registration: { update },
+      setIntervalFn,
+      clearIntervalFn,
+    })
+    expect(PWA_UPDATE_CHECK_INTERVAL_MS).toBe(60 * 60 * 1000)
+    expect(checker.start()).toBe(true)
+    expect(checker.start()).toBe(false)
+    const first = checker.check()
+    const second = checker.check()
+    await expect(first).resolves.toBe(true)
+    await expect(second).resolves.toBe(true)
+    expect(update).toHaveBeenCalledOnce()
+    checker.stop()
+    expect(clearIntervalFn).toHaveBeenCalledWith(42)
+    expect(checker.isRunning()).toBe(false)
+  })
+
+  it('keeps activation prompt-driven while retaining Workbox cache safety', () => {
+    expect(PWA_OPTIONS.workbox.clientsClaim).toBe(true)
+    expect(PWA_OPTIONS.workbox.cleanupOutdatedCaches).toBe(true)
+    expect(PWA_OPTIONS.workbox.skipWaiting).toBeUndefined()
   })
 
   it('uses a distinct Not Found state for unknown online routes', () => {

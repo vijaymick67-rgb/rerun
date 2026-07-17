@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
-import { requestServiceWorkerUpdate } from '../pwa/updateLifecycle'
+import {
+  createUpdateChecker,
+  createUpdateLifecycle,
+  requestServiceWorkerUpdate,
+} from '../pwa/updateLifecycle'
 
 export function UpdatePrompt({ onUpdate, onDismiss, updating = false }) {
   return (
@@ -29,30 +33,88 @@ export function UpdatePrompt({ onUpdate, onDismiss, updating = false }) {
 }
 
 export default function ReloadPrompt() {
-  const {
-    needRefresh: [needRefresh, setNeedRefresh],
-    updateServiceWorker,
-  } = useRegisterSW()
-  const [dismissed, setDismissed] = useState(false)
+  const registrationRef = useRef(null)
+  const updateServiceWorkerRef = useRef(null)
+  const updateCheckerRef = useRef(null)
+  const mountedRef = useRef(true)
+  const lifecycleRef = useRef(null)
+  const [promptVisible, setPromptVisible] = useState(false)
   const [updating, setUpdating] = useState(false)
 
-  useEffect(() => {
-    if (needRefresh) setDismissed(false)
-  }, [needRefresh])
+  if (!lifecycleRef.current) {
+    lifecycleRef.current = createUpdateLifecycle({
+      activateAndReload: () => {
+        if (registrationRef.current && !registrationRef.current.waiting) {
+          throw new Error('No waiting service worker is available')
+        }
+        return requestServiceWorkerUpdate(updateServiceWorkerRef.current)
+      },
+    })
+  }
 
-  if (!needRefresh || dismissed) return null
+  const {
+    needRefresh: [, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onNeedRefresh() {
+      if (!mountedRef.current) return
+      const waitingWorker = registrationRef.current?.waiting
+      if (lifecycleRef.current.announceReady(waitingWorker)) setPromptVisible(true)
+    },
+    onNeedReload() {
+      lifecycleRef.current.handleControllerChange()
+    },
+    onRegisteredSW(_swUrl, registration) {
+      if (!mountedRef.current) return
+      registrationRef.current = registration ?? null
+      updateCheckerRef.current?.stop()
+      updateCheckerRef.current = createUpdateChecker({ registration })
+      updateCheckerRef.current.start()
+    },
+  })
+
+  updateServiceWorkerRef.current = updateServiceWorker
+
+  useEffect(() => {
+    mountedRef.current = true
+    const checkForUpdate = () => {
+      if (globalThis.navigator?.onLine === false) return
+      updateCheckerRef.current?.check()
+      const waitingWorker = registrationRef.current?.waiting
+      if (waitingWorker && lifecycleRef.current.announceReady(waitingWorker)) {
+        setPromptVisible(true)
+      }
+    }
+    const handleVisibilityChange = () => {
+      if (globalThis.document?.visibilityState === 'visible') checkForUpdate()
+    }
+
+    globalThis.addEventListener?.('online', checkForUpdate)
+    globalThis.document?.addEventListener?.('visibilitychange', handleVisibilityChange)
+    updateCheckerRef.current?.start()
+
+    return () => {
+      mountedRef.current = false
+      globalThis.removeEventListener?.('online', checkForUpdate)
+      globalThis.document?.removeEventListener?.('visibilitychange', handleVisibilityChange)
+      updateCheckerRef.current?.stop()
+    }
+  }, [])
+
+  if (!promptVisible) return null
 
   async function handleUpdate() {
+    if (updating) return
     setUpdating(true)
-    try {
-      await requestServiceWorkerUpdate(updateServiceWorker)
-    } catch {
+    const accepted = await lifecycleRef.current.update()
+    if (!accepted && mountedRef.current) {
       setUpdating(false)
     }
   }
 
   function handleDismiss() {
-    setDismissed(true)
+    lifecycleRef.current.dismiss()
+    setPromptVisible(false)
     setNeedRefresh(false)
   }
 
