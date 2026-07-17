@@ -1,5 +1,7 @@
 export function requestServiceWorkerUpdate(updateServiceWorker) {
-  return updateServiceWorker(true)
+  // vite-plugin-pwa 1.3.0 ignores this argument and only sends SKIP_WAITING.
+  // Passing false documents that RERUN owns the controllerchange reload.
+  return updateServiceWorker(false)
 }
 
 const DEFAULT_WAITING_WORKER = 'waiting-worker'
@@ -86,6 +88,23 @@ export function createUpdateLifecycle({
 }
 
 export const PWA_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
+
+export function installControllerChangeListener({
+  serviceWorkerContainer = globalThis.navigator?.serviceWorker,
+  onControllerChange,
+} = {}) {
+  if (typeof serviceWorkerContainer?.addEventListener !== 'function') return () => {}
+
+  const handleControllerChange = () => onControllerChange?.()
+  serviceWorkerContainer.addEventListener('controllerchange', handleControllerChange)
+  let removed = false
+
+  return () => {
+    if (removed) return
+    removed = true
+    serviceWorkerContainer.removeEventListener?.('controllerchange', handleControllerChange)
+  }
+}
 
 export function createUpdateChecker({
   registration,

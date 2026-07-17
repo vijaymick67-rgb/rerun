@@ -13,6 +13,7 @@ import { removeStaticLoadingShell } from '../src/pwa/appShell.js'
 import {
   createUpdateChecker,
   createUpdateLifecycle,
+  installControllerChangeListener,
   PWA_UPDATE_CHECK_INTERVAL_MS,
   requestServiceWorkerUpdate,
 } from '../src/pwa/updateLifecycle.js'
@@ -78,10 +79,34 @@ describe('PWA foundation', () => {
     expect(lifecycle.getPromptCount()).toBe(2)
   })
 
-  it('explicit Update invokes activation and reload', async () => {
+  it('explicit Update sends one activation request to the waiting worker', async () => {
     const updateServiceWorker = vi.fn().mockResolvedValue(undefined)
     await requestServiceWorkerUpdate(updateServiceWorker)
-    expect(updateServiceWorker).toHaveBeenCalledWith(true)
+    expect(updateServiceWorker).toHaveBeenCalledWith(false)
+  })
+
+  it('confirms the installed vite-plugin-pwa 1.3.0 reload contract', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'node_modules/vite-plugin-pwa/package.json'), 'utf8'))
+    const reactSource = readFileSync(
+      resolve(repoRoot, 'node_modules/vite-plugin-pwa/dist/client/build/react.js'),
+      'utf8',
+    )
+    expect(packageJson.version).toBe('1.3.0')
+    const registerSource = readFileSync(
+      resolve(repoRoot, 'node_modules/vite-plugin-pwa/dist/client/build/register.js'),
+      'utf8',
+    )
+    const typeSource = readFileSync(
+      resolve(repoRoot, 'node_modules/vite-plugin-pwa/types/index.d.ts'),
+      'utf8',
+    )
+    expect(reactSource).toContain('onNeedReload')
+    expect(typeSource).toContain('onNeedReload?: () => void')
+    expect(registerSource).toContain('wb?.addEventListener("controlling"')
+    expect(registerSource).toContain('if (event.isUpdate)')
+    expect(registerSource).toContain('sendSkipWaitingMessage?.()')
+    expect(registerSource).toContain('if (onNeedReload)')
+    expect(registerSource).toContain('window.location.reload()')
   })
 
   it('dismissed or idle state does not reload', async () => {
@@ -150,6 +175,26 @@ describe('PWA foundation', () => {
     expect(location).toEqual({ pathname: '/watching/123', search: '?tab=season', hash: '#episode-4' })
     expect(lifecycle.getState()).toBe('reloading')
     expect(lifecycle.announceReady({ version: 'a' })).toBe(false)
+  })
+
+  it('attaches one native controllerchange listener and removes it on cleanup', () => {
+    const listeners = new Map()
+    const serviceWorkerContainer = {
+      addEventListener: vi.fn((type, listener) => listeners.set(type, listener)),
+      removeEventListener: vi.fn((type, listener) => {
+        if (listeners.get(type) === listener) listeners.delete(type)
+      }),
+    }
+    const onControllerChange = vi.fn()
+    const remove = installControllerChangeListener({ serviceWorkerContainer, onControllerChange })
+    expect(serviceWorkerContainer.addEventListener).toHaveBeenCalledOnce()
+    listeners.get('controllerchange')()
+    listeners.get('controllerchange')()
+    expect(onControllerChange).toHaveBeenCalledTimes(2)
+    remove()
+    remove()
+    expect(serviceWorkerContainer.removeEventListener).toHaveBeenCalledOnce()
+    expect(listeners.has('controllerchange')).toBe(false)
   })
 
   it('handles stale or redundant workers without throwing', async () => {

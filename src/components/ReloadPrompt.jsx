@@ -3,6 +3,7 @@ import { useRegisterSW } from 'virtual:pwa-register/react'
 import {
   createUpdateChecker,
   createUpdateLifecycle,
+  installControllerChangeListener,
   requestServiceWorkerUpdate,
 } from '../pwa/updateLifecycle'
 
@@ -62,6 +63,11 @@ export default function ReloadPrompt() {
       if (lifecycleRef.current.announceReady(waitingWorker)) setPromptVisible(true)
     },
     onNeedReload() {
+      if (!mountedRef.current) return
+      // vite-plugin-pwa 1.3.0 calls this from its Workbox `controlling`
+      // listener. Route that signal through the same owner as the native
+      // controllerchange listener so repeated Workbox listeners cannot reload
+      // more than once.
       lifecycleRef.current.handleControllerChange()
     },
     onRegisteredSW(_swUrl, registration) {
@@ -91,12 +97,16 @@ export default function ReloadPrompt() {
 
     globalThis.addEventListener?.('online', checkForUpdate)
     globalThis.document?.addEventListener?.('visibilitychange', handleVisibilityChange)
+    const removeControllerChangeListener = installControllerChangeListener({
+      onControllerChange: () => lifecycleRef.current.handleControllerChange(),
+    })
     updateCheckerRef.current?.start()
 
     return () => {
       mountedRef.current = false
       globalThis.removeEventListener?.('online', checkForUpdate)
       globalThis.document?.removeEventListener?.('visibilitychange', handleVisibilityChange)
+      removeControllerChangeListener()
       updateCheckerRef.current?.stop()
     }
   }, [])
