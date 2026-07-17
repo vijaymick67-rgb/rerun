@@ -13,6 +13,7 @@ import { patchShowDetailState } from '../lib/detailCache'
 import { clearWatchingCache, removeWatchingShow } from '../lib/watchingCache'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ProgressiveImage from '../components/ProgressiveImage'
 import {
   filterVisibleStatsRows,
   isStatsShowBusy,
@@ -692,17 +693,12 @@ export default function Stats() {
                 <div key={show.tmdb_id} className="min-w-0">
                   <div className="relative">
                     <Link to={`/watching/${show.tmdb_id}`} className="block">
-                      {show.poster_path ? (
-                        <img
-                          src={POSTER_BASE + show.poster_path}
-                          alt={show.name}
-                          className="aspect-[2/3] w-full rounded-lg border border-(--color-border) object-cover"
-                        />
-                      ) : (
-                        <div className="flex aspect-[2/3] w-full items-center justify-center rounded-lg border border-(--color-border) bg-(--color-surface-raised) text-xs text-(--color-text-muted)">
-                          No poster
-                        </div>
-                      )}
+                      <ProgressiveImage
+                        src={show.poster_path ? POSTER_BASE + show.poster_path : null}
+                        alt={show.name}
+                        fallbackLabel="No poster"
+                        className="aspect-[2/3] w-full rounded-lg border border-(--color-border)"
+                      />
                     </Link>
 
                     <button
