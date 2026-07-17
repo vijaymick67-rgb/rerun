@@ -11,6 +11,7 @@ import {
 } from '../lib/watchingShows'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
+import { getWatchingInteractionState } from '../lib/watchingNavigation'
 import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
 import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
@@ -49,7 +50,7 @@ export function WatchingPartialWarning({ error, onRetry }) {
 // "Caught up" before the fresh load overwrites it.
 // v3: one-time cache-bust so the Settings bulk-mark-watched writes are picked
 // up — old v2 entries are simply never matched and a fresh Supabase fetch runs.
-export default function Watching({ refreshSignal = 0 }) {
+export default function Watching({ active = true, refreshSignal = 0 }) {
   const [cachedShows] = useState(() => loadWatchingCache()?.filter((show) => !isHiddenShow(show)) ?? null)
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
@@ -59,6 +60,19 @@ export default function Watching({ refreshSignal = 0 }) {
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
   const [openSwipeId, setOpenSwipeId] = useState(null)
+  const interactionState = getWatchingInteractionState(
+    active,
+    openSwipeId,
+    confirmingShow,
+  )
+
+  // The list stays mounted while detail is open, but transient destructive UI
+  // must not stay armed behind the hidden subtree or reappear on return.
+  useEffect(() => {
+    if (active) return
+    setOpenSwipeId(null)
+    setConfirmingShow(null)
+  }, [active])
 
   // Latest rendered rows, readable synchronously inside the loader. A background
   // refresh seeds its streaming merge from what's already on screen (not the
@@ -316,7 +330,7 @@ export default function Watching({ refreshSignal = 0 }) {
               key={show.id}
               show={show}
               isRemoving={removingIds.has(show.id)}
-              isOpen={openSwipeId === show.id}
+              isOpen={interactionState.openSwipeId === show.id}
               onOpenChange={setOpenSwipeId}
               onRemove={handleRemove}
             />
@@ -325,11 +339,11 @@ export default function Watching({ refreshSignal = 0 }) {
       )}
 
       <ConfirmDialog
-        open={confirmingShow !== null}
+        open={interactionState.confirmingShow !== null}
         title="Remove show?"
         message={
-          confirmingShow
-            ? `Remove "${confirmingShow.name}" from Watching? Your watch history won't be deleted.`
+          interactionState.confirmingShow
+            ? `Remove "${interactionState.confirmingShow.name}" from Watching? Your watch history won't be deleted.`
             : ''
         }
         confirmLabel="Remove"

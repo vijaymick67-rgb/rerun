@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
+import { getRouteShellKey } from '../lib/scrollRestoration'
 
 const TABS = [
   { to: '/browse', label: 'Discover' },
@@ -8,23 +9,28 @@ const TABS = [
 ]
 
 export default function TabBar() {
+  const { pathname } = useLocation()
+  const activeTabPath = getRouteShellKey(pathname)
+
   return (
     <nav className="app-tab-bar fixed inset-x-0 bottom-0 flex border-t border-(--color-border) bg-(--color-surface)">
-      {TABS.map((tab) => (
-        <NavLink
-          key={tab.to}
-          to={tab.to}
-          className={({ isActive }) =>
-            `motion-press flex-1 py-3 text-center text-sm ${
+      {TABS.map((tab) => {
+        const isActive = activeTabPath === tab.to
+        return (
+          <Link
+            key={tab.to}
+            to={tab.to}
+            aria-current={isActive ? 'page' : undefined}
+            className={`motion-press flex-1 py-3 text-center text-sm ${
               isActive
                 ? 'text-(--color-accent)'
                 : 'text-(--color-text-muted)'
-            }`
-          }
-        >
-          {tab.label}
-        </NavLink>
-      ))}
+            }`}
+          >
+            {tab.label}
+          </Link>
+        )
+      })}
     </nav>
   )
 }

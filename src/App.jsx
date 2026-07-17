@@ -13,6 +13,7 @@ import Stats from './routes/Stats'
 import Settings from './routes/Settings'
 import { removeStaticLoadingShell } from './pwa/appShell'
 import { getRouteLevel, getRouteShellKey } from './lib/scrollRestoration'
+import { advanceWatchingRefreshState } from './lib/watchingNavigation'
 
 // The Watching list is a persistent layout parent for its whole subtree (the
 // list plus the nested Show/Season detail routes). Because the single
@@ -28,19 +29,19 @@ function WatchingSubtree() {
   const location = useLocation()
   const detailOpen = getRouteLevel(location.pathname) > 0
 
-  const wasDetailOpenRef = useRef(detailOpen)
-  const refreshTokenRef = useRef(0)
-  if (wasDetailOpenRef.current && !detailOpen) {
-    // Just came back from a detail route to the list — bump the token so the
-    // preserved <Watching> runs one background refresh.
-    refreshTokenRef.current += 1
-  }
-  wasDetailOpenRef.current = detailOpen
+  const refreshStateRef = useRef({ detailOpen, refreshToken: 0 })
+  refreshStateRef.current = advanceWatchingRefreshState(
+    refreshStateRef.current,
+    detailOpen,
+  )
 
   return (
     <>
       <div style={detailOpen ? { display: 'none' } : undefined}>
-        <Watching refreshSignal={refreshTokenRef.current} />
+        <Watching
+          active={!detailOpen}
+          refreshSignal={refreshStateRef.current.refreshToken}
+        />
       </div>
       {detailOpen && (
         <div key={location.pathname} className="route-content route-content--nested">
