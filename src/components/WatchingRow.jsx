@@ -126,7 +126,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
         <Link
           to={`/watching/${show.tmdb_id}`}
           onClick={handleLinkClick}
-          className="flex flex-1 items-center gap-3 text-left"
+          className="motion-press flex flex-1 items-center gap-3 text-left"
         >
           <ProgressiveImage
             src={show.poster_path ? POSTER_BASE + show.poster_path : null}

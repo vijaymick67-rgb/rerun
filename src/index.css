@@ -232,6 +232,11 @@ body {
   transition: opacity 150ms ease;
 }
 
+.watching-row-hover-remove:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .watching-row:hover .watching-row-hover-remove {
     opacity: 1;

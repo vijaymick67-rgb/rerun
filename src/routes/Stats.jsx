@@ -692,7 +692,7 @@ export default function Stats() {
               return (
                 <div key={show.tmdb_id} className="min-w-0">
                   <div className="relative">
-                    <Link to={`/watching/${show.tmdb_id}`} className="block">
+                    <Link to={`/watching/${show.tmdb_id}`} className="motion-press block">
                       <ProgressiveImage
                         src={show.poster_path ? POSTER_BASE + show.poster_path : null}
                         alt={show.name}

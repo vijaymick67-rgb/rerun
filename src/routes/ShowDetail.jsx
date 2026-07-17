@@ -185,7 +185,7 @@ function ShowDetailInner({ tmdbId }) {
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
           </button>
@@ -257,7 +257,7 @@ function ShowDetailInner({ tmdbId }) {
                 >
                   <Link
                     to={`/watching/${numericTmdbId}/season/${season.season_number}`}
-                    className="flex min-w-0 flex-1 items-center justify-between py-3 pr-2"
+                    className="motion-press flex min-w-0 flex-1 items-center justify-between py-3 pr-2"
                   >
                     <span className="text-sm font-medium text-(--color-text)">
                       Season {season.season_number}

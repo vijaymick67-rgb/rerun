@@ -177,7 +177,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="motion-press shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
           </button>
