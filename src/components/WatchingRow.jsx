@@ -82,6 +82,20 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
     if (!isOpen) return
     function handleOutside(e) {
       if (rowRef.current && !rowRef.current.contains(e.target)) {
+        // Snap shut immediately (no animated transition) instead of letting the
+        // usual 200ms close play out. The outside tap that triggers this is
+        // often the same tap that navigates elsewhere (e.g. another row's
+        // Link), and if navigation unmounts this row mid-transition, a
+        // partially-revealed frame can get painted right before teardown —
+        // that transient frame is what produces the brief red flash reported
+        // after returning to Watching. Forcing the closed state to paint
+        // synchronously here removes that window entirely.
+        const el = frontRef.current
+        if (el) {
+          el.style.transition = 'none'
+          el.style.transform = 'translateX(0px)'
+          void el.offsetHeight
+        }
         onOpenChange(null)
       }
     }
@@ -101,9 +115,16 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
   }
 
   return (
+    // transform-gpu (translateZ(0)) forces this row onto its own stable
+    // compositing layer from first paint, so its overflow-hidden/rounded clip
+    // is established before the front layer's own transform promotes it to a
+    // separate layer. Without it, the ancestor route-content fade-in
+    // (opacity 0->1, re-triggered on every remount) can race that clip
+    // against the child layer promotion on WebKit, letting the red Remove
+    // layer paint through unclipped for a frame or two on return.
     <div
       ref={rowRef}
-      className="watching-row relative overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)"
+      className="watching-row transform-gpu relative overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)"
     >
       <button
         type="button"
