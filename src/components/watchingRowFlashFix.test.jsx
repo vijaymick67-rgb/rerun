@@ -131,7 +131,8 @@ describe('watching-row: navigation destination and mutation semantics unchanged'
   })
 
   it('remove is still routed through the confirm dialog + Supabase delete, not a direct mutation', () => {
-    expect(watchingSrc).toContain("supabase\n      .from('tracked_shows')\n      .delete()")
+    expect(watchingSrc).toContain(".from('tracked_shows')")
+    expect(watchingSrc).toContain('.delete()')
     expect(watchingSrc).toContain('.eq(\'id\', show.id)')
   })
 })

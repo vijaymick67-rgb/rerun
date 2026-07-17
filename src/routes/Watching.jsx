@@ -56,6 +56,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
   const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)
   const [partialError, setPartialError] = useState(null)
+  const [removeError, setRemoveError] = useState(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
@@ -252,19 +253,28 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
     const show = confirmingShow
     if (!show) return
     setConfirmingShow(null)
+    setRemoveError(null)
 
     setRemovingIds((prev) => new Set(prev).add(show.id))
-    const { error: deleteError } = await supabase
-      .from('tracked_shows')
-      .delete()
-      .eq('id', show.id)
+    try {
+      const deleteQuery = supabase
+        .from('tracked_shows')
+        .delete()
+        .eq('id', show.id)
+      const { error: deleteError } = await withTimeout((signal) => {
+        let query = deleteQuery
+        if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+        return query
+      }, { stage: 'watching-remove-show', source: 'supabase' })
+      if (deleteError) throw deleteError
 
-    if (!deleteError) {
       setShows((prev) => {
         const next = prev.filter((s) => s.id !== show.id)
         saveWatchingCache(next)
         return next
       })
+    } catch {
+      setRemoveError('Couldn\'t remove this show. Try again.')
     }
     setRemovingIds((prev) => {
       const next = new Set(prev)
@@ -299,6 +309,12 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
             Retry
           </button>
         </div>
+      )}
+
+      {removeError && (
+        <p role="alert" className="motion-banner mt-4 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          {removeError}
+        </p>
       )}
 
       {!error && (

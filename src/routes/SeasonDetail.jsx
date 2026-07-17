@@ -18,6 +18,7 @@ import {
   createWatchMutationQueue,
   toggleEpisodeOptimistically,
 } from '../lib/seasonWatchMutations'
+import { withTimeout } from '../lib/dataLoading'
 
 // tmdbId/seasonNumber changes are handled by remounting (see the keyed
 // wrapper below) rather than resetting state in an effect, so the
@@ -34,6 +35,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   const watchedRef = useRef(watched)
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const retryingRef = useRef(false)
   const mutationQueueRef = useRef(createWatchMutationQueue())
 
   useEffect(() => {
@@ -51,14 +55,24 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         // the same correction the Watching list already applies.
         const [{ data: watchedRows, error: watchedError }, details, seasonData, airstamps] =
           await Promise.all([
-            supabase
-              .from('watched_episodes')
-              .select('episode_number')
-              .eq('tmdb_show_id', numericTmdbId)
-              .eq('season_number', numericSeasonNumber),
-            getShowDetails(numericTmdbId),
-            getSeasonEpisodes(numericTmdbId, numericSeasonNumber),
-            getShowReleaseMap(numericTmdbId, { getExternalIds }),
+            withTimeout((signal) => {
+              let query = supabase
+                .from('watched_episodes')
+                .select('episode_number')
+                .eq('tmdb_show_id', numericTmdbId)
+                .eq('season_number', numericSeasonNumber)
+              if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
+              return query
+            }, { stage: 'season-detail-watched-episodes', source: 'supabase' }),
+            withTimeout(() => getShowDetails(numericTmdbId), {
+              stage: 'season-detail-details', source: 'tmdb',
+            }),
+            withTimeout(() => getSeasonEpisodes(numericTmdbId, numericSeasonNumber), {
+              stage: 'season-detail-episodes', source: 'tmdb',
+            }),
+            withTimeout(() => getShowReleaseMap(numericTmdbId, { getExternalIds }), {
+              stage: 'season-detail-release-map', source: 'tvmaze',
+            }).catch(() => ({})),
           ])
         if (watchedError) throw watchedError
         if (ignore) return
@@ -85,9 +99,15 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
           watchedList: [...nextWatched],
         })
       } catch {
-        if (!ignore) setError('Failed to load this season. Try refreshing.')
+        if (!ignore) setError(cached
+          ? 'Couldn\'t refresh this season. Try again.'
+          : 'Failed to load this season. Try again.')
       } finally {
-        if (!ignore) setLoading(false)
+        if (!ignore) {
+          setLoading(false)
+          setRefreshing(false)
+          retryingRef.current = false
+        }
       }
     }
 
@@ -95,7 +115,15 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     return () => {
       ignore = true
     }
-  }, [numericTmdbId, numericSeasonNumber, cacheKey])
+  }, [numericTmdbId, numericSeasonNumber, cacheKey, loadAttempt, cached])
+
+  function retryLoad() {
+    if (retryingRef.current) return
+    retryingRef.current = true
+    setRefreshing(true)
+    setLoading(cached === null)
+    setLoadAttempt((attempt) => attempt + 1)
+  }
 
   // Writes the season's own cache with the new watched set, and patches the
   // parent ShowDetail cache (if present) so its watched counts don't go
@@ -170,17 +198,20 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       {error && (
         <div
           role="alert"
-          className="motion-banner mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+          className={`motion-banner mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${episodes ? 'border-amber-400/40 bg-amber-500/10 text-amber-300' : 'border-red-400/40 bg-red-500/10 text-red-400'}`}
         >
           <span className="min-w-0 break-words">{error}</span>
-          <button
+          <button type="button" onClick={retryLoad} disabled={refreshing} className="motion-press min-h-11 shrink-0 rounded-md px-2 font-semibold underline disabled:opacity-60">
+            {refreshing ? 'Retrying...' : 'Retry'}
+          </button>
+          {episodes && (<button
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
             className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"
           >
             ✕
-          </button>
+          </button>)}
         </div>
       )}
 
