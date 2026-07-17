@@ -56,6 +56,15 @@ describe('Rerun launch identity', () => {
     expect(html).toContain('viewport-fit=cover')
   })
 
+  it('sizes the shell with border-box so safe-area padding stays inside the viewport height', () => {
+    const shellRule = html.match(/\.app-loading-shell\s*\{([^}]*)\}/)
+    expect(shellRule).not.toBeNull()
+    const [, body] = shellRule
+    expect(body).toContain('box-sizing: border-box')
+    expect(body).toMatch(/min-height:\s*100dvh/)
+    expect(body).toMatch(/padding:\s*env\(safe-area-inset-top/)
+  })
+
   it('supports reduced motion and keeps shell motion restrained and non-blocking', () => {
     expect(html).toContain('@media (prefers-reduced-motion: no-preference)')
     expect(html).not.toMatch(/infinite/)
