@@ -17,6 +17,20 @@ export function getRouteLevel(pathname) {
   return 0
 }
 
+// Identity of the on-screen "shell" a path belongs to. The route wrapper is
+// keyed by this, so it only remounts (and replays its tab-entry fade) when the
+// identity changes — i.e. on a genuine tab switch. Every Watching-subtree path
+// (the list plus its nested Show/Season detail routes) shares one identity, so
+// navigating into a detail route and back never remounts the persistent
+// Watching list nor replays the page fade. This is distinct from
+// `location.key`, which changes on every history entry (including Back).
+export function getRouteShellKey(pathname) {
+  if (pathname === '/' || pathname === '/watching' || getRouteLevel(pathname) > 0) {
+    return '/watching'
+  }
+  return pathname || '/'
+}
+
 export function isNestedParentPath(fromPathname, toPathname) {
   const seasonMatch = fromPathname.match(/^\/watching\/([^/]+)\/season\/[^/]+$/)
   if (seasonMatch) return toPathname === `/watching/${seasonMatch[1]}`

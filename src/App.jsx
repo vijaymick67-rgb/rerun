@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Routes, Route, useLocation } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
+import { Routes, Route, Outlet, useLocation } from 'react-router-dom'
 import TabBar from './components/TabBar'
 import NotFound from './components/NotFound'
 import ReloadPrompt from './components/ReloadPrompt'
@@ -12,24 +12,60 @@ import SeasonDetail from './routes/SeasonDetail'
 import Stats from './routes/Stats'
 import Settings from './routes/Settings'
 import { removeStaticLoadingShell } from './pwa/appShell'
-import { getRouteLevel } from './lib/scrollRestoration'
+import { getRouteLevel, getRouteShellKey } from './lib/scrollRestoration'
+
+// The Watching list is a persistent layout parent for its whole subtree (the
+// list plus the nested Show/Season detail routes). Because the single
+// <Watching> instance lives above the <Outlet>, opening a detail route does
+// NOT unmount it — it's only hidden while the detail overlay is on screen, then
+// revealed untouched on Back: same scroll, same rows, same content, no
+// skeleton, no page fade, no red Remove-layer flash. Detail routes render in a
+// nested-entry wrapper via <Outlet>, keyed by pathname so each detail entry
+// keeps its slide-in animation. When we return from a detail route the list is
+// asked to refresh in the background (`refreshSignal`) so freshly-marked
+// watched episodes are reflected without visibly reconstructing the screen.
+function WatchingSubtree() {
+  const location = useLocation()
+  const detailOpen = getRouteLevel(location.pathname) > 0
+
+  const wasDetailOpenRef = useRef(detailOpen)
+  const refreshTokenRef = useRef(0)
+  if (wasDetailOpenRef.current && !detailOpen) {
+    // Just came back from a detail route to the list — bump the token so the
+    // preserved <Watching> runs one background refresh.
+    refreshTokenRef.current += 1
+  }
+  wasDetailOpenRef.current = detailOpen
+
+  return (
+    <>
+      <div style={detailOpen ? { display: 'none' } : undefined}>
+        <Watching refreshSignal={refreshTokenRef.current} />
+      </div>
+      {detailOpen && (
+        <div key={location.pathname} className="route-content route-content--nested">
+          <Outlet />
+        </div>
+      )}
+    </>
+  )
+}
 
 function RouteContent() {
   const location = useLocation()
-  const transitionClass = getRouteLevel(location.pathname) > 0
-    ? 'route-content route-content--nested'
-    : 'route-content route-content--tab'
 
   return (
-    <div key={location.key} className={transitionClass}>
+    <div key={getRouteShellKey(location.pathname)} className="route-content route-content--tab">
       <Routes>
-        <Route path="/" element={<Watching />} />
         <Route path="/browse" element={<Browse />} />
-        <Route path="/watching" element={<Watching />} />
-        <Route path="/watching/:tmdbId" element={<ShowDetail />} />
-        <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
         <Route path="/stats" element={<Stats />} />
         <Route path="/settings" element={<Settings />} />
+        <Route element={<WatchingSubtree />}>
+          <Route path="/" element={null} />
+          <Route path="/watching" element={null} />
+          <Route path="/watching/:tmdbId" element={<ShowDetail />} />
+          <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
+        </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>
     </div>

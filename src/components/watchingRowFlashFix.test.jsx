@@ -28,52 +28,46 @@ function renderRow(overrides = {}) {
   )
 }
 
-// Two distinct issues live in this file's history:
-//   1. A swipe-open row left open when the same outside tap navigates away
-//      (fixed by the instant-close-before-navigation patch below). Proven via
-//      A/B frame-capture in Chromium (8 exposed frames without the fix, 0
-//      with it) — but a real iPhone recording later showed the reported flash
-//      also happens with NO swipe ever performed, so this fix alone doesn't
-//      explain the reported bug. Kept because it's a real, separately
-//      verified correctness fix, not because it's the primary root cause.
-//   2. The actual reported bug: on ordinary (no-swipe) return-to-Watching,
-//      multiple rows can briefly expose their red Remove layer as the whole
-//      page's opacity fade-in (route-content--tab, re-triggered on every
-//      remount) races each row's own overflow-hidden/rounded clip against its
-//      front layer's transform-driven compositing-layer promotion — a known
-//      class of WebKit rendering bug. Fixed by forcing each row onto its own
-//      stable compositing layer (transform-gpu) below.
-describe('watching remove-flash fix: root cause and containment', () => {
-  it('closes an open row instantly (no CSS transition) before the outside-tap state update commits', () => {
-    const outsideEffect = watchingRowSrc.slice(
-      watchingRowSrc.indexOf('useEffect(() => {\n    if (!isOpen) return'),
-      watchingRowSrc.indexOf('function handleLinkClick'),
-    )
-    expect(outsideEffect).toContain("el.style.transition = 'none'")
-    expect(outsideEffect).toContain("el.style.transform = 'translateX(0px)'")
-    expect(outsideEffect).toContain('void el.offsetHeight')
-    // The imperative snap must happen before the React state update, so the
-    // browser's very next paint already reflects the closed, non-animating
-    // state — eliminating the mid-transition frame a navigation could unmount
-    // mid-flight (the mechanism behind the reported flash).
-    expect(outsideEffect.indexOf('el.style.transition')).toBeLessThan(
-      outsideEffect.indexOf('onOpenChange(null)'),
+// History: the red Remove-layer flash on returning to Watching was originally
+// attributed to a WatchingRow-level compositing race and two speculative CSS
+// workarounds were merged in PR #76 — an imperative outside-tap snap
+// (transition:none + forced layout flush) and a `transform-gpu` promotion on
+// every row. Real-device footage disproved that theory: the flash also fired
+// with no swipe ever performed, and the whole page visibly blinked. The real
+// cause was the route wrapper remounting the Watching page (and replaying its
+// fade) on every navigation. That is now fixed at the routing layer by keeping
+// the Watching instance mounted across its detail subtree, so PR #76's
+// row-level workarounds are removed. These tests lock in the revert and assert
+// the swipe/press contract PR #76 must not have disturbed on the way out.
+describe('watching-row: PR #76 compositor workarounds are removed', () => {
+  it('no longer forces a GPU compositing layer (transform-gpu) on the row container', () => {
+    expect(renderRow()).not.toContain('transform-gpu')
+    expect(watchingRowSrc).not.toContain('transform-gpu')
+  })
+
+  it('the outer container still keeps its overflow-hidden/rounded clip', () => {
+    expect(watchingRowSrc).toContain(
+      'className="watching-row relative overflow-hidden rounded-lg',
     )
   })
 
-  it('does not special-case any specific show name or status type — the fix applies uniformly', () => {
-    expect(watchingRowSrc).not.toMatch(/Lanterns|Adults/)
-    // The instant-close fix lives inside the generic isOpen-gated outside-tap
-    // effect, not behind any status-type branch, so nextUp/countdown/caughtUp
-    // rows are all covered identically.
-    const outsideEffectIndex = watchingRowSrc.indexOf("if (!isOpen) return")
-    const statusBranchIndex = watchingRowSrc.indexOf("status?.type === 'countdown'")
-    expect(outsideEffectIndex).toBeGreaterThan(-1)
-    expect(statusBranchIndex).toBeGreaterThan(outsideEffectIndex)
+  it('no longer runs the imperative outside-tap snap / forced layout flush', () => {
+    expect(watchingRowSrc).not.toContain("el.style.transition = 'none'")
+    expect(watchingRowSrc).not.toContain("el.style.transform = 'translateX(0px)'")
+    expect(watchingRowSrc).not.toContain('void el.offsetHeight')
+  })
+
+  it('outside tap still closes the row via plain React state (onOpenChange(null))', () => {
+    const outsideEffect = watchingRowSrc.slice(
+      watchingRowSrc.indexOf('function handleOutside(e)'),
+      watchingRowSrc.indexOf("document.addEventListener('touchstart', handleOutside)"),
+    )
+    expect(outsideEffect).toContain('!rowRef.current.contains(e.target)')
+    expect(outsideEffect).toContain('onOpenChange(null)')
   })
 })
 
-describe('watching remove-flash fix: swipe contract untouched', () => {
+describe('watching-row: swipe contract untouched', () => {
   it('preserves REVEAL_WIDTH, DRAG_THRESHOLD, and passive touch listener flags', () => {
     expect(watchingRowSrc).toContain('const REVEAL_WIDTH = 84')
     expect(watchingRowSrc).toContain('const DRAG_THRESHOLD = 6')
@@ -89,8 +83,6 @@ describe('watching remove-flash fix: swipe contract untouched', () => {
     )
     expect(touchEndBody).toContain('const shouldOpen = current < -REVEAL_WIDTH / 2')
     expect(touchEndBody).toContain('onOpenChange(shouldOpen ? show.id : null)')
-    // The instant-snap fix must NOT appear in the gesture-driven close path —
-    // a live drag release should keep its natural animated settle.
     expect(touchEndBody).not.toContain("style.transition = 'none'")
   })
 
@@ -99,22 +91,13 @@ describe('watching remove-flash fix: swipe contract untouched', () => {
     expect(html).toContain('translateX(-84px)')
   })
 
-  it('outside tap still closes the row (onOpenChange still invoked with null)', () => {
-    const outsideEffect = watchingRowSrc.slice(
-      watchingRowSrc.indexOf('function handleOutside(e)'),
-      watchingRowSrc.indexOf("document.addEventListener('touchstart', handleOutside)"),
-    )
-    expect(outsideEffect).toContain('!rowRef.current.contains(e.target)')
-    expect(outsideEffect).toContain('onOpenChange(null)')
-  })
-
   it('a tap on the open row itself still just closes it (never navigates in the same tap)', () => {
     expect(watchingRowSrc).toContain('function handleLinkClick(e) {')
     expect(watchingRowSrc).toContain('if (isOpen) {\n      e.preventDefault()\n      onOpenChange(null)\n    }')
   })
 })
 
-describe('watching remove-flash fix: row identity and state lifecycle', () => {
+describe('watching-row: row identity and state lifecycle', () => {
   it('rows are keyed by the stable show.id so identity survives sorting/refresh', () => {
     expect(watchingSrc).toContain('key={show.id}')
   })
@@ -141,7 +124,7 @@ describe('watching remove-flash fix: row identity and state lifecycle', () => {
   })
 })
 
-describe('watching remove-flash fix: navigation destination and mutation semantics unchanged', () => {
+describe('watching-row: navigation destination and mutation semantics unchanged', () => {
   it('WatchingRow still links to /watching/:tmdb_id', () => {
     const html = renderRow()
     expect(html).toContain('href="/watching/9001"')
@@ -153,7 +136,7 @@ describe('watching remove-flash fix: navigation destination and mutation semanti
   })
 })
 
-describe('watching remove-flash fix: sort/status/countdown semantics untouched', () => {
+describe('watching-row: sort/status/countdown semantics untouched', () => {
   it('sortWatchingShows keeps its exact existing rank/ordering rules', () => {
     expect(watchingSrc).toContain(
       "const statusRank = { nextUp: 0, countdown: 1, caughtUp: 2, completed: 3 }",
@@ -166,44 +149,10 @@ describe('watching remove-flash fix: sort/status/countdown semantics untouched',
   })
 })
 
-describe('watching remove-flash fix: PR #75 press feedback remains intact', () => {
-  it('the navigation Link still carries motion-press (not the cause of this bug)', () => {
+describe('watching-row: PR #75 press feedback remains intact', () => {
+  it('the navigation Link still carries motion-press', () => {
     expect(watchingRowSrc).toContain(
       'className="motion-press flex flex-1 items-center gap-3 text-left"',
     )
-  })
-})
-
-describe('watching remove-flash fix: WebKit compositing/clip-layer race on remount (primary root cause)', () => {
-  it('the row container is forced onto its own stable compositing layer via transform-gpu', () => {
-    const html = renderRow()
-    expect(html).toContain('class="watching-row transform-gpu')
-  })
-
-  it('transform-gpu is present unconditionally — not gated behind isOpen or drag state', () => {
-    expect(renderRow({ isOpen: true })).toContain('transform-gpu')
-    expect(renderRow({ isOpen: false })).toContain('transform-gpu')
-  })
-
-  it('the clip that must be pre-composited (overflow-hidden + rounded-lg) is still present on the same element', () => {
-    expect(watchingRowSrc).toContain(
-      'className="watching-row transform-gpu relative overflow-hidden rounded-lg',
-    )
-  })
-
-  it('the front (foreground) layer still fully spans the row — no fixed/partial width was introduced', () => {
-    const frontDivSrc = watchingRowSrc.slice(
-      watchingRowSrc.indexOf('ref={frontRef}'),
-      watchingRowSrc.indexOf('<Link'),
-    )
-    expect(frontDivSrc).not.toMatch(/\bw-(\d|\[|1\/)/)
-  })
-
-  it('does not special-case any specific show name or row status — applies to every row uniformly', () => {
-    const rowDivSrc = watchingRowSrc.slice(
-      watchingRowSrc.indexOf('return (\n    //'),
-      watchingRowSrc.indexOf('<button', watchingRowSrc.indexOf('return (')),
-    )
-    expect(rowDivSrc).not.toMatch(/Lanterns|Adults|status\?\.type/)
   })
 })
