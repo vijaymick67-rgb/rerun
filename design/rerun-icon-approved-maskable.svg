@@ -24,13 +24,15 @@
   <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
   <rect x="20" y="20" width="984" height="984" rx="212" fill="none" stroke="#263149" stroke-width="3"/>
 
-  <g fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M406 302 L512 408 L618 302" stroke-width="54"/>
-    <path d="M278 420 C220 420 176 465 176 522 V690 C176 760 226 810 296 810 H382" stroke-width="58"/>
-    <path d="M642 810 H728 C798 810 848 760 848 690 V522 C848 465 804 420 746 420 H278" stroke-width="58"/>
-    <path d="M646 724 C709 770 728 854 688 922 C646 992 550 1004 492 948 C451 908 446 848 468 800" stroke-width="58"/>
-  </g>
+  <g transform="translate(0 -48)">
+    <g fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M406 302 L512 408 L618 302" stroke-width="54"/>
+      <path d="M278 420 C220 420 176 465 176 522 V690 C176 760 226 810 296 810 H382" stroke-width="58"/>
+      <path d="M642 810 H728 C798 810 848 760 848 690 V522 C848 465 804 420 746 420 H278" stroke-width="58"/>
+      <path d="M646 724 C709 770 728 854 688 922 C646 992 550 1004 492 948 C451 908 446 848 468 800" stroke-width="58"/>
+    </g>
 
-  <path d="M462 748 L542 784 L474 838 Z" fill="url(#mark)"/>
-  <ellipse cx="512" cy="650" rx="270" ry="220" fill="#285dff" opacity="0.08" filter="url(#softGlow)"/>
+    <path d="M462 748 L542 784 L474 838 Z" fill="url(#mark)"/>
+    <ellipse cx="512" cy="650" rx="270" ry="220" fill="#285dff" opacity="0.08" filter="url(#softGlow)"/>
+  </g>
 </svg>

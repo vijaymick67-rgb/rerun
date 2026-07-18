@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { inflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { PWA_MANIFEST, PWA_THEME_COLOR } from '../vite/pwa-options.js'
 
@@ -7,9 +8,27 @@ const repoRoot = resolve(import.meta.dirname, '..')
 const html = readFileSync(resolve(repoRoot, 'index.html'), 'utf8')
 const approvedIconSvg = readFileSync(resolve(repoRoot, 'design/rerun-icon-approved.svg'), 'utf8')
 const approvedMaskableSvg = readFileSync(resolve(repoRoot, 'design/rerun-icon-approved-maskable.svg'), 'utf8')
+const iconGenerator = readFileSync(resolve(repoRoot, 'scripts/generate-icons.mjs'), 'utf8')
 
 function readPng(fileName) {
   return readFileSync(resolve(repoRoot, 'public', fileName))
+}
+
+function alphaAt(png, x, y) {
+  const width = png.readUInt32BE(16)
+  let offset = 8
+  const idat = []
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset)
+    if (png.toString('ascii', offset + 4, offset + 8) === 'IDAT') {
+      idat.push(png.subarray(offset + 8, offset + 8 + length))
+    }
+    offset += length + 12
+  }
+  const scanlines = inflateSync(Buffer.concat(idat))
+  // Generated PNGs deliberately use filter type 0, so each scanline begins
+  // with one filter byte followed directly by RGBA pixels.
+  return scanlines[y * (width * 4 + 1) + 1 + x * 4 + 3]
 }
 
 describe('Rerun launch identity', () => {
@@ -46,7 +65,23 @@ describe('Rerun launch identity', () => {
   it('contains the approved mark geometry and Rerun wordmark in the shell', () => {
     expect(html).toContain('M406 302 L512 408 L618 302')
     expect(html).toContain('M646 724 C709 770 728 854 688 922')
+    expect(html).toContain('transform="translate(0 -48)"')
     expect(html).toContain('>Rerun<')
+  })
+
+  it('uses one approved 48-unit optical translation in both canonical icon sources', () => {
+    for (const svg of [approvedIconSvg, approvedMaskableSvg]) {
+      expect(svg).toContain('transform="translate(0 -48)"')
+      expect(svg).toContain('<rect width="1024" height="1024" rx="230" fill="url(#bg)"/>')
+    }
+  })
+
+  it('renders generated assets from the canonical foreground translation', () => {
+    expect(iconGenerator).toContain('function parseForegroundTranslateY')
+    expect(iconGenerator).toContain('foregroundTranslateY')
+    expect(iconGenerator).toContain('function parseGlowEllipse')
+    expect(iconGenerator).toContain('fillSoftEllipse')
+    expect(iconGenerator).not.toContain('translate(0 -48)')
   })
 
   it('uses the deep app background with no white flash and covers safe areas', () => {
@@ -91,6 +126,10 @@ describe('Rerun launch identity', () => {
       expect(png.readUInt32BE(16)).toBe(size)
       expect(png.readUInt32BE(20)).toBe(size)
     }
+    expect(readPng('icon-512.png')).not.toEqual(readPng('icon-maskable-512.png'))
+    const maskable = readPng('icon-maskable-512.png')
+    expect(alphaAt(maskable, 0, 0)).toBe(255)
+    expect(alphaAt(maskable, 511, 511)).toBe(255)
   })
 
   it('keeps favicon.svg and rerun-icon.svg parseable and free of external references', () => {

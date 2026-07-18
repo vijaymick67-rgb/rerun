@@ -102,6 +102,23 @@ function parseFilledPath(svg) {
   return match[1]
 }
 
+function parseGlowEllipse(svg) {
+  const match = svg.match(/<ellipse ([^/]*)\/>/)
+  if (!match) return null
+  const attrs = match[1]
+  const get = (name) => Number(attrs.match(new RegExp(`${name}="([-\\d.]+)"`))?.[1])
+  const color = attrs.match(/fill="(#[0-9a-fA-F]+)"/)?.[1]
+  const opacity = Number(attrs.match(/opacity="([\d.]+)"/)?.[1])
+  if (!color || !Number.isFinite(opacity)) return null
+  return { cx: get('cx'), cy: get('cy'), rx: get('rx'), ry: get('ry'), color, opacity }
+}
+
+function parseForegroundTranslateY(svg) {
+  const match = svg.match(/<g transform="translate\(0\s+(-?[\d.]+)\)">/)
+  if (!match) throw new Error('Approved icon source must define one foreground translate(0 y) group')
+  return Number(match[1])
+}
+
 // ---------- SVG path (M/L/H/V/C, absolute only, matches source) flattening ----------
 
 function flattenPath(d, samplesPerCurve = 24) {
@@ -197,6 +214,15 @@ function setPixel(canvas, x, y, [r, g, b]) {
   canvas.pixels[i + 3] = 255
 }
 
+function blendPixel(canvas, x, y, [r, g, b], alpha) {
+  if (x < 0 || y < 0 || x >= canvas.size || y >= canvas.size || alpha <= 0) return
+  const i = (y * canvas.size + x) * 4
+  canvas.pixels[i] = Math.round(r * alpha + canvas.pixels[i] * (1 - alpha))
+  canvas.pixels[i + 1] = Math.round(g * alpha + canvas.pixels[i + 1] * (1 - alpha))
+  canvas.pixels[i + 2] = Math.round(b * alpha + canvas.pixels[i + 2] * (1 - alpha))
+  canvas.pixels[i + 3] = 255
+}
+
 function fillCircle(canvas, cx, cy, radius, color) {
   const min = Math.floor(cx - radius)
   const max = Math.ceil(cx + radius)
@@ -205,6 +231,23 @@ function fillCircle(canvas, cx, cy, radius, color) {
   for (let y = minY; y <= maxY; y++) {
     for (let x = min; x <= max; x++) {
       if ((x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2) setPixel(canvas, x, y, color)
+    }
+  }
+}
+
+function fillSoftEllipse(canvas, transform, ellipse) {
+  const blur = 36
+  const [minX, minY] = transform.toCanvas(ellipse.cx - ellipse.rx - blur, ellipse.cy - ellipse.ry - blur)
+  const [maxX, maxY] = transform.toCanvas(ellipse.cx + ellipse.rx + blur, ellipse.cy + ellipse.ry + blur)
+  const color = hexToRgb(ellipse.color)
+  for (let py = Math.floor(minY); py <= Math.ceil(maxY); py++) {
+    for (let px = Math.floor(minX); px <= Math.ceil(maxX); px++) {
+      const [ex, ey] = transform.toElement(px, py)
+      const distance = Math.hypot((ex - ellipse.cx) / ellipse.rx, (ey - ellipse.cy) / ellipse.ry)
+      const alpha = distance <= 1
+        ? ellipse.opacity
+        : ellipse.opacity * Math.exp(-(((distance - 1) * Math.min(ellipse.rx, ellipse.ry)) ** 2) / (2 * 12 ** 2))
+      blendPixel(canvas, px, py, color, alpha)
     }
   }
 }
@@ -297,7 +340,12 @@ function loadIconSource(svgText) {
   const [backgroundRect, borderRect] = rects
   const strokedPaths = parseStrokedPaths(svgText).map((p) => ({ ...p, points: flattenPath(p.d) }))
   const filledTriangle = flattenPath(parseFilledPath(svgText))
-  return { viewBox, bgStops, markStops, backgroundRect, borderRect, strokedPaths, filledTriangle }
+  const glowEllipse = parseGlowEllipse(svgText)
+  const foregroundTranslateY = parseForegroundTranslateY(svgText)
+  return {
+    viewBox, bgStops, markStops, backgroundRect, borderRect,
+    strokedPaths, filledTriangle, glowEllipse, foregroundTranslateY,
+  }
 }
 
 function makeTransform(viewBox, pixelSize) {
@@ -324,11 +372,22 @@ function renderIcon(source, pixelSize, { forceOpaqueSquare = false, extendBackgr
     strokeRoundedRectRing(canvas, transform, source.borderRect, source.borderRect.strokeWidth, hexToRgb(source.borderRect.stroke))
   }
 
-  const markSampler = makeGradientSampler(source.markStops, 0.15, 0.1, 0.85, 0.9, source.backgroundRect.width)
-  for (const path of source.strokedPaths) {
-    strokePolyline(canvas, transform, path.points, path.strokeWidth, markSampler)
+  if (source.glowEllipse) {
+    fillSoftEllipse(canvas, transform, {
+      ...source.glowEllipse,
+      cy: source.glowEllipse.cy + source.foregroundTranslateY,
+    })
   }
-  fillPolygon(canvas, transform, source.filledTriangle, markSampler(462, 748))
+
+  const sourceMarkSampler = makeGradientSampler(source.markStops, 0.15, 0.1, 0.85, 0.9, source.backgroundRect.width)
+  const markSampler = (ex, ey) => sourceMarkSampler(ex, ey - source.foregroundTranslateY)
+  for (const path of source.strokedPaths) {
+    const translatedPoints = path.points.map(([x, y]) => [x, y + source.foregroundTranslateY])
+    strokePolyline(canvas, transform, translatedPoints, path.strokeWidth, markSampler)
+  }
+  const translatedTriangle = source.filledTriangle
+    .map(([x, y]) => [x, y + source.foregroundTranslateY])
+  fillPolygon(canvas, transform, translatedTriangle, markSampler(462, 748 + source.foregroundTranslateY))
 
   return downsample(canvas, pixelSize, supersample)
 }
