@@ -48,13 +48,18 @@ describe('root navigation polish', () => {
 
   it('keeps the poster action accessible, visible, and behaviorally unchanged', () => {
     const stats = source('./Stats.jsx')
-    expect(stats).toContain('aria-label={`Actions for ${show.name}`}')
-    expect(stats).toContain('aria-expanded={actionsOpen}')
-    expect(stats).toContain('aria-controls="stats-actions-sheet"')
+    const actionButtonAttributes = stats.match(
+      /aria-label=\{`Actions for \$\{show\.name\}`\}[\s\S]*?className="[^"]*"/,
+    )?.[0]
+
+    expect(actionButtonAttributes).toBeDefined()
+    expect(actionButtonAttributes).toContain('aria-expanded={actionsOpen}')
+    expect(actionButtonAttributes).toContain('aria-controls="stats-actions-sheet"')
+    expect(actionButtonAttributes).toContain(
+      'className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11',
+    )
     expect(stats).toContain('toggleStatsActionSheet(openActionId, show.tmdb_id)')
     expect(stats).toContain('to={`/watching/${show.tmdb_id}`}')
-    expect(stats).toContain('absolute right-0.5 top-0.5')
-    expect(stats).toContain('h-11 w-11')
     expect(stats).toContain('viewBox="0 0 14 4"')
     expect(stats).toContain('h-7 w-7')
     expect(stats).toContain('bg-black/55 text-white')
