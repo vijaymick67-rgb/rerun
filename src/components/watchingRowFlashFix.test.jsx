@@ -93,7 +93,9 @@ describe('watching-row: swipe contract untouched', () => {
 
   it('a tap on the open row itself still just closes it (never navigates in the same tap)', () => {
     expect(watchingRowSrc).toContain('function handleLinkClick(e) {')
-    expect(watchingRowSrc).toContain('if (isOpen) {\n      e.preventDefault()\n      onOpenChange(null)\n    }')
+    expect(watchingRowSrc).toContain(
+      'if (isOpen) {\n      e.preventDefault()\n      onOpenChange(null)\n      return\n    }',
+    )
   })
 })
 

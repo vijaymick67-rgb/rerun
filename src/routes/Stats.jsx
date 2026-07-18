@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
 import { episodeKey, localTodayISO } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
+import { handleTapNavigateClick } from '../lib/pressIntent'
 import {
   hideTrackedShow,
   isRepresentedInStats,
@@ -334,6 +335,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
 }
 
 export default function Stats() {
+  const navigate = useNavigate()
   const [cached] = useState(() => loadCache())
   const [shows, setShows] = useState(() => cached?.shows ?? [])
   const [watchedRows, setWatchedRows] = useState(() => cached?.watchedRows ?? [])
@@ -692,7 +694,11 @@ export default function Stats() {
               return (
                 <div key={show.tmdb_id} className="min-w-0">
                   <div className="relative">
-                    <Link to={`/watching/${show.tmdb_id}`} className="motion-press block">
+                    <Link
+                      to={`/watching/${show.tmdb_id}`}
+                      onClick={(e) => handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)}
+                      className="motion-press block"
+                    >
                       <ProgressiveImage
                         src={show.poster_path ? POSTER_BASE + show.poster_path : null}
                         alt={show.name}

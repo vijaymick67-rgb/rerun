@@ -7,6 +7,7 @@ const hookSrc = src('./usePressIntent.js')
 const appSrc = src('../App.jsx')
 const indexCss = src('../index.css')
 const watchingRow = src('../components/WatchingRow.jsx')
+const pressIntentSrc = src('../lib/pressIntent.js')
 
 describe('usePressIntent: touch-only, delegated, cleaned-up wiring', () => {
   it('only reacts to touch pointers, leaving mouse/pen and keyboard activation untouched', () => {
@@ -31,14 +32,16 @@ describe('usePressIntent: touch-only, delegated, cleaned-up wiring', () => {
     expect(hookSrc).not.toContain('stopPropagation')
   })
 
-  it('resets tracked state on route change, window blur, and unmount cleanup', () => {
+  it('resets the shared tracker on route change, window blur, and unmount cleanup', () => {
     expect(hookSrc).toContain('[pathname]')
     expect(hookSrc).toContain("window.addEventListener('blur'")
     expect(hookSrc).toContain("window.removeEventListener('blur'")
-    const resetCallCount =
-      (hookSrc.match(/tracker\.reset\(\)/g)?.length ?? 0) +
-      (hookSrc.match(/trackerRef\.current\.reset\(\)/g)?.length ?? 0)
+    const resetCallCount = (hookSrc.match(/pressTracker\.reset\(\)/g)?.length ?? 0)
     expect(resetCallCount).toBeGreaterThanOrEqual(3)
+  })
+
+  it('drives the single shared tracker singleton, not a per-mount instance', () => {
+    expect(hookSrc).toContain("import { findPressableAncestor, pressTracker } from '../lib/pressIntent'")
   })
 
   it('is mounted once from the app shell', () => {
@@ -47,8 +50,8 @@ describe('usePressIntent: touch-only, delegated, cleaned-up wiring', () => {
   })
 })
 
-describe('delayed-activation press CSS', () => {
-  it('drives touch press feedback only from the delayed data-pressed attribute, unconditionally on pointer type', () => {
+describe('release-time tap classification CSS', () => {
+  it('drives touch press feedback only from the data-pressed attribute, unconditionally on pointer type', () => {
     const ruleStart = indexCss.indexOf(
       ".motion-press[data-pressed='true']:not(:disabled):not([aria-disabled='true']) {",
     )
@@ -67,9 +70,6 @@ describe('delayed-activation press CSS', () => {
     )
     expect(activeRuleStart).toBeGreaterThan(mediaStart)
 
-    // The :active rule must not also exist unscoped anywhere outside a
-    // (hover: hover) and (pointer: fine) (optionally reduced-motion) block —
-    // otherwise touch input would receive it too.
     const activeOccurrences = [
       ...indexCss.matchAll(/\.motion-press:active:not\(:disabled\):not\(\[aria-disabled='true'\]\) \{/g),
     ]
@@ -83,13 +83,14 @@ describe('delayed-activation press CSS', () => {
     }
   })
 
-  it('no longer contains the PR #86 cancellation-after-activation attribute or terminology', () => {
+  it('no longer contains any hold-timer activation-delay terminology from the previous architecture', () => {
+    expect(pressIntentSrc).not.toContain('PRESS_ACTIVATE_DELAY')
+    expect(pressIntentSrc).not.toContain('data-press-cancelled')
     expect(indexCss).not.toContain('data-press-cancelled')
     expect(hookSrc).not.toContain('data-press-cancelled')
-    expect(hookSrc).not.toContain('PRESS_CANCEL_ATTR')
   })
 
-  it('reduced motion neutralizes both the delayed touch attribute and the fine-pointer :active rule', () => {
+  it('reduced motion neutralizes both the touch attribute and the fine-pointer :active rule', () => {
     const reducedMotionBlock = indexCss.slice(indexCss.indexOf('@media (prefers-reduced-motion: reduce)'))
     expect(reducedMotionBlock).toContain(
       ".motion-press[data-pressed='true']:not(:disabled):not([aria-disabled='true']) {",
@@ -100,12 +101,40 @@ describe('delayed-activation press CSS', () => {
   })
 })
 
-describe('WatchingRow gesture recognizer is untouched by the new press-intent wiring', () => {
+describe('navigation-delay coordination is narrowly scoped to card/show navigation Links', () => {
+  it('wires WatchingRow, ShowDetail season rows, and Stats posters through handleTapNavigateClick', () => {
+    const showDetail = src('../routes/ShowDetail.jsx')
+    const stats = src('../routes/Stats.jsx')
+    expect(watchingRow).toContain('handleTapNavigateClick(e, navigate,')
+    expect(showDetail).toContain('handleTapNavigateClick(')
+    expect(stats).toContain('handleTapNavigateClick(')
+  })
+
+  it('never preventDefaults on the pointer/touch phase — only the resulting click of an already-classified tap', () => {
+    const trackerBody = pressIntentSrc.slice(
+      pressIntentSrc.indexOf('export function createPressTracker'),
+      pressIntentSrc.indexOf('export const pressTracker'),
+    )
+    expect(trackerBody).not.toContain('preventDefault')
+
+    const navigateFnBody = pressIntentSrc.slice(
+      pressIntentSrc.indexOf('export function handleTapNavigateClick'),
+    )
+    expect(navigateFnBody.match(/preventDefault/g)?.length ?? 0).toBe(1)
+  })
+
+  it('TabBar tab switches are left untouched by the navigation-delay coordination', () => {
+    const tabBar = src('../components/TabBar.jsx')
+    expect(tabBar).not.toContain('handleTapNavigateClick')
+    expect(tabBar).not.toContain('pressIntent')
+  })
+})
+
+describe('WatchingRow gesture recognizer is untouched by press-intent wiring', () => {
   it('still owns its own touch listeners and threshold, independent of usePressIntent', () => {
     expect(watchingRow).toContain('const DRAG_THRESHOLD = 6')
     expect(watchingRow).toContain("addEventListener('touchstart', handleTouchStart, { passive: true })")
     expect(watchingRow).toContain("addEventListener('touchmove', handleTouchMove, { passive: false })")
     expect(watchingRow).not.toContain('usePressIntent')
-    expect(watchingRow).not.toContain('pressIntent')
   })
 })

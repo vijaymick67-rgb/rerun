@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, getExternalIds, POSTER_BASE } from '../lib/tmdb'
 import { getShowReleaseMap } from '../lib/tvmaze'
 import { episodeKey, hasAired } from '../lib/watchHelpers'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { attachReleaseData } from '../lib/watchingShows'
+import { handleTapNavigateClick } from '../lib/pressIntent'
 import {
   showDetailCacheKey,
   seasonDetailCacheKey,
@@ -23,6 +24,7 @@ import { withTimeout } from '../lib/dataLoading'
 // rather than resetting state in an effect, so the cache-on-mount
 // initializers below always read the correct show's cache.
 function ShowDetailInner({ tmdbId }) {
+  const navigate = useNavigate()
   const numericTmdbId = Number(tmdbId)
   const cacheKey = showDetailCacheKey(numericTmdbId)
 
@@ -293,6 +295,9 @@ function ShowDetailInner({ tmdbId }) {
                 >
                   <Link
                     to={`/watching/${numericTmdbId}/season/${season.season_number}`}
+                    onClick={(e) => handleTapNavigateClick(
+                      e, navigate, `/watching/${numericTmdbId}/season/${season.season_number}`,
+                    )}
                     className="motion-press flex min-w-0 flex-1 items-center justify-between py-3 pr-2"
                   >
                     <span className="text-sm font-medium text-(--color-text)">
