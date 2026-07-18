@@ -2,14 +2,17 @@ import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { createPressTracker, findPressableAncestor } from '../lib/pressIntent'
 
-// Mounted once at the app shell. Delegated pointer listeners replace nothing
-// about how press feedback is *applied* (that's still plain CSS `:active`,
-// so a genuine tap has zero JS latency) — they only cancel it promptly once
-// a touch sequence moves far enough to be a scroll or swipe, which is the
-// thing raw `:active` can't do on its own during the start of an iOS scroll.
-// Only touch pointers are handled: mouse and pen keep relying on native
-// `:active` untouched, and keyboard activation never dispatches pointer
-// events at all.
+// Mounted once at the app shell. Delegated pointer listeners are the *only*
+// thing that applies visible touch press feedback: native `:active` is
+// neutralized for touch input in index.css because it fires immediately on
+// finger-down, before gesture intent (tap vs. scroll vs. swipe) is knowable,
+// which makes scroll-safe feedback impossible. Instead a touch sequence
+// only becomes visually pressed after PRESS_ACTIVATE_DELAY has passed with
+// movement staying under the threshold — ordinary scroll/swipe initiation
+// crosses the threshold well before that timer fires, so it never shows
+// feedback at all. Only touch pointers are handled: mouse/pen keep relying
+// on native `:active` via a (hover: hover) and (pointer: fine) media query,
+// and keyboard activation never dispatches pointer events at all.
 export default function usePressIntent() {
   const trackerRef = useRef(null)
   if (!trackerRef.current) trackerRef.current = createPressTracker()
