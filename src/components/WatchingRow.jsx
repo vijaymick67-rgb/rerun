@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { POSTER_BASE } from '../lib/tmdb'
 import { watchingStatusLabel } from '../lib/watchHelpers'
+import { handleTapNavigateClick } from '../lib/pressIntent'
 import ProgressiveImage from './ProgressiveImage'
 
 const REVEAL_WIDTH = 84
 const DRAG_THRESHOLD = 6
 
 export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, onRemove }) {
+  const navigate = useNavigate()
   const rowRef = useRef(null)
   const frontRef = useRef(null)
   const dragState = useRef(null)
@@ -97,7 +99,9 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
     if (isOpen) {
       e.preventDefault()
       onOpenChange(null)
+      return
     }
+    handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)
   }
 
   return (

@@ -1,20 +1,37 @@
 // Central movement threshold used to decide whether a touch sequence is
 // still a stationary press or has become a scroll/swipe. Kept in one place
-// so every surface that needs press-activation reasons about the same
+// so every surface that needs press classification reasons about the same
 // intent.
 export const PRESS_MOVE_THRESHOLD = 6
 
-// A touch sequence only becomes visually "pressed" after it has stayed
-// under the movement threshold for this long. Short enough that a genuine
-// tap still feels immediate; long enough that ordinary scroll/swipe
-// initiation crosses the movement threshold before it ever fires.
-export const PRESS_ACTIVATE_DELAY = 80
+// A touch sequence only counts as a "tap" if it's released at or before this
+// long after touching down (inclusive — see the `duration <= tapMaxDuration`
+// check in up() below). Held past this, a stationary finger is a long press
+// — which must never show shrink/dim feedback and must never affect native
+// long-press/context-menu/link-preview behavior (we never preventDefault on
+// touchstart/touchmove/pointerdown, so the browser's own long-press handling
+// is untouched regardless of this constant). Kept comfortably under a
+// deliberate hold (iOS's own long-press/context-menu gesture recognizes at
+// ~500ms) so a genuinely deliberate hold never sneaks in as a "tap".
+export const PRESS_TAP_MAX_DURATION = 350
 
-// Attribute toggled on the target `.motion-press` element once the
-// activation delay elapses without cancelling movement. This is the *only*
+// How long a classified tap's shrink feedback stays visible before it's
+// auto-cleared. Applies to every `.motion-press` element (buttons included),
+// not just navigation links.
+export const PRESS_FEEDBACK_HOLD = 120
+
+// How long a navigating tap waits, after the shrink is applied, before the
+// actual route change fires — long enough that the shrink has visibly
+// painted, short enough that navigation still feels immediate rather than
+// delayed. Kept separate from PRESS_FEEDBACK_HOLD because the two express
+// different things: how long feedback lingers vs. how long navigation waits.
+export const PRESS_NAV_DELAY = 80
+
+// Attribute toggled on the target `.motion-press` element once a touch
+// sequence is classified, at release, as a genuine tap. This is the *only*
 // thing that drives visible touch press feedback (see index.css) — native
 // `:active` is neutralized for touch input, because it fires before gesture
-// intent is knowable and can't be made scroll-safe.
+// intent (tap vs. scroll vs. swipe vs. long press) is knowable at all.
 export const PRESS_ATTR = 'data-pressed'
 
 export function exceedsPressThreshold(dx, dy, threshold = PRESS_MOVE_THRESHOLD) {
@@ -45,17 +62,21 @@ export function findPressableAncestor(el) {
   return null
 }
 
-// Tracks exactly one in-flight touch pointer sequence at a time and applies
-// PRESS_ATTR once, after `delay` has passed with movement staying under
-// `threshold` the whole time. Has no knowledge of CSS classes or DOM
-// traversal beyond setAttribute/removeAttribute — callers resolve the
-// target element (see findPressableAncestor) and hand it in.
+// Tracks exactly one in-flight touch pointer sequence at a time. Unlike an
+// activate-on-hold model, nothing visual happens until release: `up()` is
+// the single place that classifies the completed gesture and, only for a
+// genuine tap (no meaningful movement, released within PRESS_TAP_MAX_DURATION),
+// applies PRESS_ATTR. A long, stationary hold never activates anything —
+// there is nothing pending to cancel — and a scroll/swipe that crosses the
+// movement threshold is disqualified the moment it happens, before release.
 //
-// `setTimer`/`clearTimer` are injectable so callers (and tests, via
-// vi.useFakeTimers) can control activation timing deterministically.
+// `now`, `setTimer`/`clearTimer` are injectable so callers (and tests, via
+// vi.useFakeTimers or a manual clock) can control timing deterministically.
 export function createPressTracker({
   threshold = PRESS_MOVE_THRESHOLD,
-  delay = PRESS_ACTIVATE_DELAY,
+  tapMaxDuration = PRESS_TAP_MAX_DURATION,
+  feedbackHold = PRESS_FEEDBACK_HOLD,
+  now = () => Date.now(),
   setTimer = (fn, ms) => setTimeout(fn, ms),
   clearTimer = (id) => clearTimeout(id),
 } = {}) {
@@ -63,34 +84,69 @@ export function createPressTracker({
   let element = null
   let startX = 0
   let startY = 0
-  let activated = false
-  let cancelled = false
-  let timerId = null
+  let startTime = 0
+  let moved = false
 
-  function clearPendingTimer() {
-    if (timerId !== null) {
-      clearTimer(timerId)
-      timerId = null
+  let feedbackElement = null
+  let feedbackTimer = null
+
+  // A short-lived ticket recording the element a tap was just classified
+  // valid for. The click event that immediately follows a real touch tap
+  // (in the same synchronous dispatch sequence, well before any new
+  // pointerdown could occur) consumes it via consumeValidTap — that's how a
+  // navigating Link knows to delay its own navigation instead of firing
+  // immediately. Never touched by mouse or keyboard activation, since those
+  // never call down()/up() at all.
+  let pendingTap = null
+
+  // A single pending delayed-navigation timer, tracked centrally so it can
+  // be cancelled from anywhere reset() is already called (route change,
+  // blur, unmount) instead of living as an orphaned setTimeout the tracker
+  // has no way to reach. Only ever one navigation is pending at a time.
+  let cancelPendingNav = null
+
+  function clearFeedbackTimer() {
+    if (feedbackTimer !== null) {
+      clearTimer(feedbackTimer)
+      feedbackTimer = null
     }
   }
 
-  function activate() {
-    timerId = null
-    // The sequence may have been cancelled or released between scheduling
-    // this callback and it firing; only apply the attribute if it's still
-    // a live, uncancelled sequence.
-    if (cancelled || pointerId === null || !element) return
-    activated = true
-    element.setAttribute(PRESS_ATTR, 'true')
+  function cancelPendingNavigation() {
+    if (cancelPendingNav) {
+      cancelPendingNav()
+      cancelPendingNav = null
+    }
   }
 
-  function release() {
-    clearPendingTimer()
-    if (element && activated) element.removeAttribute(PRESS_ATTR)
+  function applyFeedback(target) {
+    clearFeedbackTimer()
+    if (feedbackElement && feedbackElement !== target) {
+      feedbackElement.removeAttribute(PRESS_ATTR)
+    }
+    feedbackElement = target
+    target.setAttribute(PRESS_ATTR, 'true')
+    feedbackTimer = setTimer(() => {
+      feedbackTimer = null
+      if (feedbackElement === target) {
+        target.removeAttribute(PRESS_ATTR)
+        feedbackElement = null
+      }
+    }, feedbackHold)
+  }
+
+  function clearFeedbackNow() {
+    clearFeedbackTimer()
+    if (feedbackElement) {
+      feedbackElement.removeAttribute(PRESS_ATTR)
+      feedbackElement = null
+    }
+  }
+
+  function resetTracking() {
     pointerId = null
     element = null
-    activated = false
-    cancelled = false
+    moved = false
   }
 
   return {
@@ -102,48 +158,124 @@ export function createPressTracker({
       element = target
       startX = x
       startY = y
-      activated = false
-      cancelled = false
-      timerId = setTimer(activate, delay)
+      startTime = now()
+      moved = false
+      pendingTap = null
     },
     move(id, x, y) {
-      if (id !== pointerId || cancelled || !element) return
+      if (id !== pointerId || moved) return
       if (exceedsPressThreshold(x - startX, y - startY, threshold)) {
-        // Movement beyond the threshold — whether before or after
-        // activation — permanently disqualifies this sequence from
-        // showing (or continuing to show) pressed feedback. It cannot
-        // reactivate before release.
-        cancelled = true
-        clearPendingTimer()
-        if (activated) {
-          activated = false
-          element.removeAttribute(PRESS_ATTR)
-        }
+        // Movement beyond the threshold permanently disqualifies this
+        // sequence from ever producing tap feedback, whether it's a scroll
+        // or a Watching-row swipe. Nothing has been applied yet (feedback
+        // only ever happens at release), so there is nothing to undo.
+        moved = true
       }
     },
     up(id) {
-      if (id !== pointerId) return
-      release()
+      if (id !== pointerId) return false
+      const target = element
+      const duration = now() - startTime
+      const isValidTap = !moved && !!target && duration <= tapMaxDuration
+      resetTracking()
+      if (!isValidTap) return false
+      applyFeedback(target)
+      pendingTap = target
+      return true
     },
     cancel(id) {
       if (id !== pointerId) return
-      release()
+      resetTracking()
     },
-    reset: release,
+    // Full reset for route change / blur / unmount: drops any in-progress
+    // pointer tracking, clears lingering visible feedback immediately,
+    // invalidates any unconsumed tap ticket, and cancels any navigation
+    // still waiting to fire — a route change that happens for some other
+    // reason (e.g. browser back) before our own delayed navigate() runs
+    // must not let a now-stale navigate() go off later, and a tab losing
+    // focus mid-delay must not silently navigate once it's backgrounded.
+    reset() {
+      resetTracking()
+      clearFeedbackNow()
+      pendingTap = null
+      cancelPendingNavigation()
+    },
+    // Consumed by a navigating Link's onClick to check whether this click is
+    // the direct result of a touch tap just classified valid on this exact
+    // element. Returns true at most once per tap.
+    consumeValidTap(target) {
+      if (pendingTap !== null && pendingTap === target) {
+        pendingTap = null
+        return true
+      }
+      return false
+    },
+    // Schedules `run` (a navigate() call) after `delay`, tracked centrally
+    // so it can be cancelled by reset() or superseded by a later call here.
+    // Any previously-pending navigation is cancelled first — a second
+    // confirmed tap always replaces the first rather than stacking with it,
+    // so exactly one navigation (the most recent) can ever fire.
+    scheduleNavigation(run, delay, {
+      setTimer: scheduleTimer = setTimer,
+      clearTimer: cancelTimer = clearTimer,
+    } = {}) {
+      cancelPendingNavigation()
+      const timerId = scheduleTimer(() => {
+        cancelPendingNav = null
+        run()
+      }, delay)
+      cancelPendingNav = () => cancelTimer(timerId)
+    },
+    cancelPendingNavigation,
     isTracking(id) {
       return id === pointerId
     },
-    get isActivated() {
-      return activated
+    get isMoved() {
+      return moved
     },
-    get isCancelled() {
-      return cancelled
+    get hasFeedback() {
+      return feedbackElement !== null
     },
-    get trackedElement() {
-      return element
+    get feedbackElement() {
+      return feedbackElement
     },
-    get hasPendingTimer() {
-      return timerId !== null
+    get hasPendingTap() {
+      return pendingTap !== null
+    },
+    get hasPendingNavigation() {
+      return cancelPendingNav !== null
     },
   }
+}
+
+// Single shared tracker for the whole app: mounted once by usePressIntent
+// (see src/hooks/usePressIntent.js) and read by any navigating Link's tap
+// handler (see handleTapNavigateClick below), so both sides observe the same
+// classification for the same touch sequence.
+export const pressTracker = createPressTracker()
+
+// Shared onClick handler for `.motion-press` <Link> elements whose target
+// route can hide or unmount the tapped element as soon as navigation
+// starts (e.g. WatchingRow's persistent list, hidden via display:none the
+// instant a detail route is entered). Only touch taps that pressTracker just
+// classified as valid are affected: preventDefault + a short delay so the
+// shrink feedback has time to paint before the route actually changes.
+// Mouse clicks and keyboard activation never produce a pendingTap, so they
+// fall straight through to react-router's normal, immediate Link navigation.
+//
+// The delay is scheduled through pressTracker.scheduleNavigation rather than
+// a standalone setTimeout, so it's tracked centrally and gets cleaned up the
+// same way everything else in the tracker does: pressTracker.reset() (route
+// change, window blur, app-shell unmount — all already wired in
+// usePressIntent) cancels it, and a second confirmed tap cancels/replaces
+// whatever navigation was still pending instead of stacking behind it.
+export function handleTapNavigateClick(
+  e,
+  navigate,
+  to,
+  { delay = PRESS_NAV_DELAY, setTimer, clearTimer } = {},
+) {
+  if (!pressTracker.consumeValidTap(e.currentTarget)) return
+  e.preventDefault()
+  pressTracker.scheduleNavigation(() => navigate(to), delay, { setTimer, clearTimer })
 }
