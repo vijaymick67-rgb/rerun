@@ -206,6 +206,16 @@ body {
   opacity: 0.9;
 }
 
+/* Set by src/hooks/usePressIntent.js once a touch sequence moves past the
+   intent threshold (scroll or swipe). Same-specificity override so it wins
+   over the :active rule above while the finger is still down, without
+   needing !important. Native :active still drives the initial instant tap
+   feel — this only cancels it promptly when the gesture stops being a tap. */
+.motion-press[data-press-cancelled='true']:active:not(:disabled):not([aria-disabled='true']) {
+  scale: none;
+  opacity: 1;
+}
+
 .motion-banner {
   animation: motion-banner-enter var(--motion-normal) var(--ease-standard) both;
 }

@@ -14,6 +14,7 @@ import Settings from './routes/Settings'
 import { removeStaticLoadingShell } from './pwa/appShell'
 import { getRouteLevel, getRouteShellKey } from './lib/scrollRestoration'
 import { advanceWatchingRefreshState } from './lib/watchingNavigation'
+import usePressIntent from './hooks/usePressIntent'
 
 // The Watching list is a persistent layout parent for its whole subtree (the
 // list plus the nested Show/Season detail routes). Because the single
@@ -77,6 +78,8 @@ function App() {
   useEffect(() => {
     removeStaticLoadingShell()
   }, [])
+
+  usePressIntent()
 
   return (
     <div className="app-shell">
