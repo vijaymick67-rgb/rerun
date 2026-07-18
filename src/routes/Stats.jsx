@@ -712,7 +712,7 @@ export default function Stats() {
                         setOpenActionId(toggleStatsActionSheet(openActionId, show.tmdb_id))
                       }}
                       disabled={isBusy}
-                      className="motion-press absolute right-0.5 top-0.5 flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-60"
+                      className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-60"
                     >
                       <span className="flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white">
                         <svg
