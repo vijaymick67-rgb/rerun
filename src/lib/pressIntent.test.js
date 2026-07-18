@@ -193,23 +193,49 @@ describe('createPressTracker: release-time tap classification', () => {
     expect(el.setAttribute).not.toHaveBeenCalled()
   })
 
-  it('a stationary hold released within PRESS_TAP_MAX_DURATION is a valid tap', () => {
-    const tracker = makeTracker()
-    const el = fakeElement({ classes: ['motion-press'] })
-    tracker.down(1, el, 0, 0)
-    clockNow += PRESS_TAP_MAX_DURATION
-    expect(tracker.up(1)).toBe(true)
-    expect(el.setAttribute).toHaveBeenCalledWith(PRESS_ATTR, 'true')
-  })
+  // PRESS_TAP_MAX_DURATION is the exact tap/long-press boundary: released at
+  // or before it is a tap (inclusive), released any later is a long press.
+  // Each case below drives the hold duration to a precise millisecond so the
+  // boundary itself — not just "short" vs. "long" — is pinned down.
+  describe('tap vs. long-press boundary at PRESS_TAP_MAX_DURATION', () => {
+    it('qualifies just below the cutoff', () => {
+      const tracker = makeTracker()
+      const el = fakeElement({ classes: ['motion-press'] })
+      tracker.down(1, el, 0, 0)
+      clockNow += PRESS_TAP_MAX_DURATION - 1
+      expect(tracker.up(1)).toBe(true)
+      expect(el.setAttribute).toHaveBeenCalledWith(PRESS_ATTR, 'true')
+    })
 
-  it('a long press (held past PRESS_TAP_MAX_DURATION, released stationary) never shows feedback', () => {
-    const tracker = makeTracker()
-    const el = fakeElement({ classes: ['motion-press'] })
-    tracker.down(1, el, 0, 0)
-    clockNow += PRESS_TAP_MAX_DURATION + 1
-    expect(tracker.up(1)).toBe(false)
-    expect(el.setAttribute).not.toHaveBeenCalled()
-    expect(tracker.hasFeedback).toBe(false)
+    it('qualifies exactly at the cutoff (inclusive)', () => {
+      const tracker = makeTracker()
+      const el = fakeElement({ classes: ['motion-press'] })
+      tracker.down(1, el, 0, 0)
+      clockNow += PRESS_TAP_MAX_DURATION
+      expect(tracker.up(1)).toBe(true)
+      expect(el.setAttribute).toHaveBeenCalledWith(PRESS_ATTR, 'true')
+    })
+
+    it('disqualifies just above the cutoff — this is a long press', () => {
+      const tracker = makeTracker()
+      const el = fakeElement({ classes: ['motion-press'] })
+      tracker.down(1, el, 0, 0)
+      clockNow += PRESS_TAP_MAX_DURATION + 1
+      expect(tracker.up(1)).toBe(false)
+      expect(el.setAttribute).not.toHaveBeenCalled()
+      expect(tracker.hasFeedback).toBe(false)
+    })
+
+    it('a 500ms release never qualifies as a tap, regardless of the exact cutoff value', () => {
+      const tracker = makeTracker()
+      const el = fakeElement({ classes: ['motion-press'] })
+      tracker.down(1, el, 0, 0)
+      clockNow += 500
+      expect(tracker.up(1)).toBe(false)
+      expect(el.setAttribute).not.toHaveBeenCalled()
+      expect(tracker.hasFeedback).toBe(false)
+      expect(tracker.hasPendingTap).toBe(false)
+    })
   })
 
   it('pointer cancel never applies feedback, however long or short the hold', () => {
@@ -339,6 +365,72 @@ describe('createPressTracker: release-time tap classification', () => {
       expect(tracker.consumeValidTap(el)).toBe(false)
     })
   })
+
+  describe('scheduleNavigation / cancelPendingNavigation', () => {
+    it('runs the scheduled callback after the delay, exactly once', () => {
+      const tracker = makeTracker()
+      const run = vi.fn()
+      tracker.scheduleNavigation(run, 80)
+      expect(tracker.hasPendingNavigation).toBe(true)
+      expect(run).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(79)
+      expect(run).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(1)
+      expect(run).toHaveBeenCalledTimes(1)
+      expect(tracker.hasPendingNavigation).toBe(false)
+    })
+
+    it('cancelPendingNavigation stops it from ever firing', () => {
+      const tracker = makeTracker()
+      const run = vi.fn()
+      tracker.scheduleNavigation(run, 80)
+      tracker.cancelPendingNavigation()
+      expect(tracker.hasPendingNavigation).toBe(false)
+
+      vi.advanceTimersByTime(1000)
+      expect(run).not.toHaveBeenCalled()
+    })
+
+    it('a second scheduleNavigation call cancels/replaces the first — only the latest ever fires', () => {
+      const tracker = makeTracker()
+      const first = vi.fn()
+      const second = vi.fn()
+      tracker.scheduleNavigation(first, 80)
+      tracker.scheduleNavigation(second, 80)
+
+      vi.advanceTimersByTime(80)
+      expect(first).not.toHaveBeenCalled()
+      expect(second).toHaveBeenCalledTimes(1)
+    })
+
+    it('reset() cancels a pending navigation (route change / blur / unmount all call reset())', () => {
+      const tracker = makeTracker()
+      const run = vi.fn()
+      tracker.scheduleNavigation(run, 80)
+
+      tracker.reset()
+      expect(tracker.hasPendingNavigation).toBe(false)
+
+      vi.advanceTimersByTime(1000)
+      expect(run).not.toHaveBeenCalled()
+    })
+
+    it('a completed navigation does not linger as "pending" for a later reset() to act on', () => {
+      const tracker = makeTracker()
+      const run = vi.fn()
+      tracker.scheduleNavigation(run, 80)
+      vi.advanceTimersByTime(80)
+      expect(run).toHaveBeenCalledTimes(1)
+
+      // reset() firing afterwards (e.g. the route-change effect that the
+      // navigate() call itself triggered) must be a harmless no-op here.
+      expect(() => tracker.reset()).not.toThrow()
+      vi.advanceTimersByTime(1000)
+      expect(run).toHaveBeenCalledTimes(1)
+    })
+  })
 })
 
 // handleTapNavigateClick always reads the module's shared `pressTracker`
@@ -351,7 +443,16 @@ describe('handleTapNavigateClick', () => {
   }
 
   beforeEach(() => {
+    vi.useFakeTimers()
     pressTracker.reset()
+  })
+
+  afterEach(() => {
+    // reset() also cancels any pending navigation left over from a test
+    // that intentionally never let one fire, so a stray timer can't leak
+    // into a later test.
+    pressTracker.reset()
+    vi.useRealTimers()
   })
 
   it('lets the click through untouched when no touch tap was classified (mouse/keyboard)', () => {
@@ -418,5 +519,103 @@ describe('handleTapNavigateClick', () => {
     handleTapNavigateClick(fakeClickEvent(el), navigate, '/watching/1', { delay: 50, setTimer })
 
     expect(setTimer).toHaveBeenCalledWith(expect.any(Function), 50)
+  })
+
+  it('navigates exactly once, ~80ms (PRESS_NAV_DELAY) after the tap — the paintable feedback window', () => {
+    // No injected setTimer here: this exercises the tracker's real default
+    // timer under vi.useFakeTimers(), so the delay itself is verified, not
+    // just that *some* timer function was called.
+    const el = fakeElement({ classes: ['motion-press'] })
+    pressTracker.down(1, el, 0, 0)
+    pressTracker.up(1)
+    expect(pressTracker.hasFeedback).toBe(true) // shrink is already visible
+
+    const navigate = vi.fn()
+    handleTapNavigateClick(fakeClickEvent(el), navigate, '/watching/42')
+
+    expect(navigate).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(PRESS_NAV_DELAY - 1)
+    expect(navigate).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(navigate).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenCalledWith('/watching/42')
+  })
+
+  it('a route change (pressTracker.reset()) before the delay elapses cancels the pending navigation', () => {
+    const el = fakeElement({ classes: ['motion-press'] })
+    pressTracker.down(1, el, 0, 0)
+    pressTracker.up(1)
+
+    const navigate = vi.fn()
+    handleTapNavigateClick(fakeClickEvent(el), navigate, '/watching/42')
+    expect(pressTracker.hasPendingNavigation).toBe(true)
+
+    // usePressIntent calls pressTracker.reset() on route change, window
+    // blur, and app-shell unmount alike — all three share this one path.
+    pressTracker.reset()
+    expect(pressTracker.hasPendingNavigation).toBe(false)
+
+    vi.advanceTimersByTime(PRESS_NAV_DELAY * 4)
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('window blur (also pressTracker.reset()) cancels a pending navigation the same way', () => {
+    const el = fakeElement({ classes: ['motion-press'] })
+    pressTracker.down(1, el, 0, 0)
+    pressTracker.up(1)
+
+    const navigate = vi.fn()
+    handleTapNavigateClick(fakeClickEvent(el), navigate, '/watching/42')
+
+    pressTracker.reset() // usePressIntent's onWindowBlur handler
+    vi.advanceTimersByTime(PRESS_NAV_DELAY * 4)
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('app-shell unmount (also pressTracker.reset(), via usePressIntent\'s cleanup) cancels a pending navigation', () => {
+    const el = fakeElement({ classes: ['motion-press'] })
+    pressTracker.down(1, el, 0, 0)
+    pressTracker.up(1)
+
+    const navigate = vi.fn()
+    handleTapNavigateClick(fakeClickEvent(el), navigate, '/watching/42')
+
+    pressTracker.reset() // usePressIntent's effect cleanup on unmount
+    vi.advanceTimersByTime(PRESS_NAV_DELAY * 4)
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('a second confirmed tap cancels/replaces a still-pending first navigation', () => {
+    const first = fakeElement({ classes: ['motion-press'] })
+    const second = fakeElement({ classes: ['motion-press'] })
+
+    pressTracker.down(1, first, 0, 0)
+    pressTracker.up(1)
+    const navigate = vi.fn()
+    handleTapNavigateClick(fakeClickEvent(first), navigate, '/watching/1')
+
+    // A second tap completes (e.g. the user backed out and tapped another
+    // card) before the first navigation's delay elapsed.
+    pressTracker.down(2, second, 0, 0)
+    pressTracker.up(2)
+    handleTapNavigateClick(fakeClickEvent(second), navigate, '/watching/2')
+
+    vi.advanceTimersByTime(PRESS_NAV_DELAY)
+    expect(navigate).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenCalledWith('/watching/2')
+  })
+
+  it('a normal single confirmed tap still navigates exactly once to the right target', () => {
+    const el = fakeElement({ classes: ['motion-press'] })
+    pressTracker.down(1, el, 0, 0)
+    pressTracker.up(1)
+
+    const navigate = vi.fn()
+    handleTapNavigateClick(fakeClickEvent(el), navigate, '/watching/7')
+    vi.advanceTimersByTime(PRESS_NAV_DELAY)
+
+    expect(navigate).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenCalledWith('/watching/7')
   })
 })

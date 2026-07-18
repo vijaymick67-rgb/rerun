@@ -4,13 +4,16 @@
 // intent.
 export const PRESS_MOVE_THRESHOLD = 6
 
-// A touch sequence only counts as a "tap" if it's released within this long
-// of touching down. Held past this, a stationary finger is a long press —
-// which must never show shrink/dim feedback and must never affect native
+// A touch sequence only counts as a "tap" if it's released at or before this
+// long after touching down (inclusive — see the `duration <= tapMaxDuration`
+// check in up() below). Held past this, a stationary finger is a long press
+// — which must never show shrink/dim feedback and must never affect native
 // long-press/context-menu/link-preview behavior (we never preventDefault on
 // touchstart/touchmove/pointerdown, so the browser's own long-press handling
-// is untouched regardless of this constant).
-export const PRESS_TAP_MAX_DURATION = 500
+// is untouched regardless of this constant). Kept comfortably under a
+// deliberate hold (iOS's own long-press/context-menu gesture recognizes at
+// ~500ms) so a genuinely deliberate hold never sneaks in as a "tap".
+export const PRESS_TAP_MAX_DURATION = 350
 
 // How long a classified tap's shrink feedback stays visible before it's
 // auto-cleared. Applies to every `.motion-press` element (buttons included),
@@ -96,10 +99,23 @@ export function createPressTracker({
   // never call down()/up() at all.
   let pendingTap = null
 
+  // A single pending delayed-navigation timer, tracked centrally so it can
+  // be cancelled from anywhere reset() is already called (route change,
+  // blur, unmount) instead of living as an orphaned setTimeout the tracker
+  // has no way to reach. Only ever one navigation is pending at a time.
+  let cancelPendingNav = null
+
   function clearFeedbackTimer() {
     if (feedbackTimer !== null) {
       clearTimer(feedbackTimer)
       feedbackTimer = null
+    }
+  }
+
+  function cancelPendingNavigation() {
+    if (cancelPendingNav) {
+      cancelPendingNav()
+      cancelPendingNav = null
     }
   }
 
@@ -172,12 +188,17 @@ export function createPressTracker({
       resetTracking()
     },
     // Full reset for route change / blur / unmount: drops any in-progress
-    // pointer tracking, clears lingering visible feedback immediately, and
-    // invalidates any unconsumed tap ticket.
+    // pointer tracking, clears lingering visible feedback immediately,
+    // invalidates any unconsumed tap ticket, and cancels any navigation
+    // still waiting to fire — a route change that happens for some other
+    // reason (e.g. browser back) before our own delayed navigate() runs
+    // must not let a now-stale navigate() go off later, and a tab losing
+    // focus mid-delay must not silently navigate once it's backgrounded.
     reset() {
       resetTracking()
       clearFeedbackNow()
       pendingTap = null
+      cancelPendingNavigation()
     },
     // Consumed by a navigating Link's onClick to check whether this click is
     // the direct result of a touch tap just classified valid on this exact
@@ -189,6 +210,23 @@ export function createPressTracker({
       }
       return false
     },
+    // Schedules `run` (a navigate() call) after `delay`, tracked centrally
+    // so it can be cancelled by reset() or superseded by a later call here.
+    // Any previously-pending navigation is cancelled first — a second
+    // confirmed tap always replaces the first rather than stacking with it,
+    // so exactly one navigation (the most recent) can ever fire.
+    scheduleNavigation(run, delay, {
+      setTimer: scheduleTimer = setTimer,
+      clearTimer: cancelTimer = clearTimer,
+    } = {}) {
+      cancelPendingNavigation()
+      const timerId = scheduleTimer(() => {
+        cancelPendingNav = null
+        run()
+      }, delay)
+      cancelPendingNav = () => cancelTimer(timerId)
+    },
+    cancelPendingNavigation,
     isTracking(id) {
       return id === pointerId
     },
@@ -203,6 +241,9 @@ export function createPressTracker({
     },
     get hasPendingTap() {
       return pendingTap !== null
+    },
+    get hasPendingNavigation() {
+      return cancelPendingNav !== null
     },
   }
 }
@@ -221,13 +262,20 @@ export const pressTracker = createPressTracker()
 // shrink feedback has time to paint before the route actually changes.
 // Mouse clicks and keyboard activation never produce a pendingTap, so they
 // fall straight through to react-router's normal, immediate Link navigation.
+//
+// The delay is scheduled through pressTracker.scheduleNavigation rather than
+// a standalone setTimeout, so it's tracked centrally and gets cleaned up the
+// same way everything else in the tracker does: pressTracker.reset() (route
+// change, window blur, app-shell unmount — all already wired in
+// usePressIntent) cancels it, and a second confirmed tap cancels/replaces
+// whatever navigation was still pending instead of stacking behind it.
 export function handleTapNavigateClick(
   e,
   navigate,
   to,
-  { delay = PRESS_NAV_DELAY, setTimer = (fn, ms) => setTimeout(fn, ms) } = {},
+  { delay = PRESS_NAV_DELAY, setTimer, clearTimer } = {},
 ) {
   if (!pressTracker.consumeValidTap(e.currentTarget)) return
   e.preventDefault()
-  setTimer(() => navigate(to), delay)
+  pressTracker.scheduleNavigation(() => navigate(to), delay, { setTimer, clearTimer })
 }
