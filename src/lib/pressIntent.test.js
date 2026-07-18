@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  PRESS_CANCEL_ATTR,
+  PRESS_ACTIVATE_DELAY,
+  PRESS_ATTR,
   PRESS_MOVE_THRESHOLD,
   createPressTracker,
   exceedsPressThreshold,
@@ -67,7 +68,7 @@ describe('isPressable / findPressableAncestor', () => {
   it('an overlay control never resolves to a sibling card underneath it', () => {
     // Overlay button and card Link are siblings under a shared wrapper, not
     // ancestor/descendant, so a tap on the overlay's icon must resolve only
-    // to the overlay button itself.
+    // to the overlay button itself (e.g. the Stats poster three-dot menu).
     const cardLink = fakeElement({ classes: ['motion-press'] })
     const wrapper = fakeElement({ parentElement: null })
     const overlayButton = fakeElement({ classes: ['motion-press'], parentElement: wrapper })
@@ -84,86 +85,177 @@ describe('isPressable / findPressableAncestor', () => {
   })
 })
 
-describe('createPressTracker', () => {
-  it('pointer down starts tracking without cancelling', () => {
+// The tracker's activation timer uses the platform setTimeout/clearTimeout by
+// default, so fake timers give deterministic control over PRESS_ACTIVATE_DELAY
+// without needing to inject a custom clock into every test.
+describe('createPressTracker: delayed-activation state machine', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('pointer down starts a pending activation without setting the pressed attribute', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 0, 0)
     expect(tracker.isTracking(1)).toBe(true)
-    expect(tracker.isCancelled).toBe(false)
+    expect(tracker.hasPendingTimer).toBe(true)
+    expect(tracker.isActivated).toBe(false)
     expect(el.setAttribute).not.toHaveBeenCalled()
   })
 
-  it('movement below the threshold preserves tap intent', () => {
+  it('activates only once the configured delay has fully elapsed', () => {
+    const tracker = createPressTracker()
+    const el = fakeElement({ classes: ['motion-press'] })
+    tracker.down(1, el, 0, 0)
+
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY - 1)
+    expect(tracker.isActivated).toBe(false)
+    expect(el.setAttribute).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(tracker.isActivated).toBe(true)
+    expect(el.setAttribute).toHaveBeenCalledWith(PRESS_ATTR, 'true')
+  })
+
+  it('sub-threshold jitter before the delay does not prevent activation', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 100, 100)
     tracker.move(1, 102, 101)
-    expect(tracker.isCancelled).toBe(false)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
+    expect(tracker.isActivated).toBe(true)
+    expect(el.setAttribute).toHaveBeenCalledWith(PRESS_ATTR, 'true')
+  })
+
+  it('movement beyond the threshold before the delay elapses cancels the pending timer and prevents activation entirely', () => {
+    const tracker = createPressTracker()
+    const el = fakeElement({ classes: ['motion-press'] })
+    tracker.down(1, el, 100, 100)
+    tracker.move(1, 100, 100 + PRESS_MOVE_THRESHOLD + 5)
+    expect(tracker.hasPendingTimer).toBe(false)
+    expect(tracker.isCancelled).toBe(true)
+
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY * 4)
+    expect(tracker.isActivated).toBe(false)
     expect(el.setAttribute).not.toHaveBeenCalled()
   })
 
-  it('vertical movement beyond the threshold cancels the press', () => {
+  it('vertical movement beyond the threshold cancels the sequence', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 100, 100)
     tracker.move(1, 100, 100 + PRESS_MOVE_THRESHOLD + 5)
     expect(tracker.isCancelled).toBe(true)
-    expect(el.setAttribute).toHaveBeenCalledWith(PRESS_CANCEL_ATTR, 'true')
   })
 
-  it('horizontal movement beyond the threshold cancels an ordinary control (and a Watching-row nested Link the same way)', () => {
+  it('horizontal movement beyond the threshold cancels the sequence (e.g. a Watching-row swipe)', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 100, 100)
     tracker.move(1, 100 + PRESS_MOVE_THRESHOLD + 5, 100)
     expect(tracker.isCancelled).toBe(true)
-    expect(el.setAttribute).toHaveBeenCalledWith(PRESS_CANCEL_ATTR, 'true')
   })
 
-  it('a cancelled press cannot reactivate within the same pointer sequence', () => {
+  it('movement beyond the threshold after activation removes the pressed state immediately', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 0, 0)
-    tracker.move(1, 0, 20)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
+    expect(tracker.isActivated).toBe(true)
+
+    tracker.move(1, 0, PRESS_MOVE_THRESHOLD + 5)
+    expect(tracker.isActivated).toBe(false)
+    expect(tracker.isCancelled).toBe(true)
+    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_ATTR)
+  })
+
+  it('a cancelled sequence cannot reactivate before release, even if the finger drifts back near the start', () => {
+    const tracker = createPressTracker()
+    const el = fakeElement({ classes: ['motion-press'] })
+    tracker.down(1, el, 0, 0)
+    tracker.move(1, 0, PRESS_MOVE_THRESHOLD + 5)
     expect(tracker.isCancelled).toBe(true)
     el.setAttribute.mockClear()
-    tracker.move(1, 0, 0) // finger drifts back near the start
+
+    tracker.move(1, 0, 0)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY * 4)
     expect(tracker.isCancelled).toBe(true)
+    expect(tracker.isActivated).toBe(false)
     expect(el.setAttribute).not.toHaveBeenCalled()
   })
 
-  it('release on pointerup clears the cancelled attribute and tracking state', () => {
+  it('a stationary long press activates exactly once and stays stable, never re-toggling', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 0, 0)
-    tracker.move(1, 0, 20)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
+    expect(el.setAttribute).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY * 10)
+    tracker.move(1, 1, -1) // stays within threshold the whole time
+    expect(el.setAttribute).toHaveBeenCalledTimes(1)
+    expect(el.removeAttribute).not.toHaveBeenCalled()
+    expect(tracker.isActivated).toBe(true)
+  })
+
+  it('pointer up before activation clears the pending timer and never sets the pressed attribute', () => {
+    const tracker = createPressTracker()
+    const el = fakeElement({ classes: ['motion-press'] })
+    tracker.down(1, el, 0, 0)
     tracker.up(1)
-    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_CANCEL_ATTR)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY * 4)
+    expect(el.setAttribute).not.toHaveBeenCalled()
+    expect(tracker.isTracking(1)).toBe(false)
+  })
+
+  it('pointer up after activation removes the pressed attribute', () => {
+    const tracker = createPressTracker()
+    const el = fakeElement({ classes: ['motion-press'] })
+    tracker.down(1, el, 0, 0)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
+    tracker.up(1)
+    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_ATTR)
     expect(tracker.isTracking(1)).toBe(false)
     expect(tracker.trackedElement).toBe(null)
   })
 
-  it('release on pointercancel clears the cancelled attribute and tracking state', () => {
+  it('pointer cancel resets everything, whether pending or already activated', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 0, 0)
-    tracker.move(1, 0, 20)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
     tracker.cancel(1)
-    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_CANCEL_ATTR)
+    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_ATTR)
     expect(tracker.isTracking(1)).toBe(false)
+    expect(tracker.hasPendingTimer).toBe(false)
   })
 
-  it('releasing a genuine (uncancelled) tap still clears tracking without ever setting the cancel attribute', () => {
+  it('reset() clears a pending timer and leaves no attribute (used on route change / blur / unmount)', () => {
     const tracker = createPressTracker()
     const el = fakeElement({ classes: ['motion-press'] })
     tracker.down(1, el, 0, 0)
-    tracker.up(1)
+    tracker.reset()
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY * 4)
     expect(el.setAttribute).not.toHaveBeenCalled()
     expect(tracker.isTracking(1)).toBe(false)
+    expect(tracker.hasPendingTimer).toBe(false)
   })
 
-  it('a second concurrent pointer cannot corrupt the first pointer\'s tracked state', () => {
+  it('reset() clears an already-activated state and removes the attribute (used on route change / blur / unmount)', () => {
+    const tracker = createPressTracker()
+    const el = fakeElement({ classes: ['motion-press'] })
+    tracker.down(1, el, 0, 0)
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
+    tracker.reset()
+    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_ATTR)
+    expect(tracker.isTracking(1)).toBe(false)
+  })
+
+  it('a second concurrent pointer cannot steal or corrupt the first pointer\'s active sequence', () => {
     const tracker = createPressTracker()
     const elA = fakeElement({ classes: ['motion-press'] })
     const elB = fakeElement({ classes: ['motion-press'] })
@@ -173,20 +265,19 @@ describe('createPressTracker', () => {
     expect(tracker.trackedElement).toBe(elA)
 
     tracker.move(2, 0, 50) // pointer B was never tracked, so this is a no-op
-    expect(elA.setAttribute).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(PRESS_ACTIVATE_DELAY)
+    expect(elB.setAttribute).not.toHaveBeenCalled()
+    expect(elA.setAttribute).toHaveBeenCalledWith(PRESS_ATTR, 'true')
 
     tracker.up(2) // pointer B releasing must not touch pointer A's state
     expect(tracker.isTracking(1)).toBe(true)
     expect(tracker.trackedElement).toBe(elA)
   })
 
-  it('reset() clears any in-flight tracking (used on route change / unmount / blur)', () => {
-    const tracker = createPressTracker()
-    const el = fakeElement({ classes: ['motion-press'] })
-    tracker.down(1, el, 0, 0)
-    tracker.move(1, 0, 20)
-    tracker.reset()
-    expect(el.removeAttribute).toHaveBeenCalledWith(PRESS_CANCEL_ATTR)
-    expect(tracker.isTracking(1)).toBe(false)
+  it('never applies feedback to a disabled or aria-disabled target resolved via findPressableAncestor', () => {
+    const disabledEl = fakeElement({ classes: ['motion-press'], disabled: true })
+    const ariaDisabledEl = fakeElement({ classes: ['motion-press'], ariaDisabled: 'true' })
+    expect(findPressableAncestor(disabledEl)).toBe(null)
+    expect(findPressableAncestor(ariaDisabledEl)).toBe(null)
   })
 })

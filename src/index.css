@@ -201,19 +201,26 @@ body {
   transition-timing-function: var(--ease-standard);
 }
 
-.motion-press:active:not(:disabled):not([aria-disabled='true']) {
+/* Touch press feedback is driven only by this attribute, set by
+   src/hooks/usePressIntent.js after a touch sequence has stayed stationary
+   (under the movement threshold) for PRESS_ACTIVATE_DELAY. Native :active
+   is intentionally NOT used to drive touch feedback below — it fires the
+   instant a finger touches down, before scroll/swipe/tap intent is knowable,
+   which makes scroll-safe feedback impossible. Delaying activation instead
+   means scrolling/swiping never shows feedback at all. */
+.motion-press[data-pressed='true']:not(:disabled):not([aria-disabled='true']) {
   scale: 0.98;
   opacity: 0.9;
 }
 
-/* Set by src/hooks/usePressIntent.js once a touch sequence moves past the
-   intent threshold (scroll or swipe). Same-specificity override so it wins
-   over the :active rule above while the finger is still down, without
-   needing !important. Native :active still drives the initial instant tap
-   feel — this only cancels it promptly when the gesture stops being a tap. */
-.motion-press[data-press-cancelled='true']:active:not(:disabled):not([aria-disabled='true']) {
-  scale: none;
-  opacity: 1;
+/* Mouse/trackpad input has no scroll-vs-tap ambiguity, so it keeps the
+   native, zero-latency :active feedback instead of the touch activation
+   delay above. */
+@media (hover: hover) and (pointer: fine) {
+  .motion-press:active:not(:disabled):not([aria-disabled='true']) {
+    scale: 0.98;
+    opacity: 0.9;
+  }
 }
 
 .motion-banner {
@@ -272,7 +279,7 @@ body {
     transition-duration: 1ms !important;
   }
 
-  .motion-press:active:not(:disabled):not([aria-disabled='true']) {
+  .motion-press[data-pressed='true']:not(:disabled):not([aria-disabled='true']) {
     scale: none;
     opacity: 1;
   }
@@ -284,5 +291,12 @@ body {
 
   .progressive-image__img {
     transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) and (hover: hover) and (pointer: fine) {
+  .motion-press:active:not(:disabled):not([aria-disabled='true']) {
+    scale: none;
+    opacity: 1;
   }
 }
