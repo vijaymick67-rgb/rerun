@@ -46,7 +46,8 @@ body {
 }
 
 .app-shell {
-  min-height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
   padding-bottom: calc(4rem + var(--safe-area-inset-bottom));
 }
 
