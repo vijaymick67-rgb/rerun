@@ -36,11 +36,17 @@ vi.mock('../lib/push/managementToken', () => ({
   clearStoredManagementToken: vi.fn(),
 }))
 
+vi.mock('../lib/push/automaticActivation', () => ({
+  getAutomaticNotificationsActivated: vi.fn(),
+  setAutomaticNotificationsActivated: vi.fn(),
+}))
+
 import * as backupMock from '../lib/backup'
 import * as pushSupportMock from '../lib/push/pushSupport'
 import * as pushClientMock from '../lib/push/pushClient'
 import * as pushApiMock from '../lib/push/pushApi'
 import * as managementTokenMock from '../lib/push/managementToken'
+import * as automaticActivationMock from '../lib/push/automaticActivation'
 import Settings from './Settings'
 
 let container = null
@@ -114,6 +120,12 @@ beforeEach(() => {
   managementTokenMock.getStoredManagementToken.mockReset().mockReturnValue('stored-management-token')
   managementTokenMock.setStoredManagementToken.mockReset()
   managementTokenMock.clearStoredManagementToken.mockReset()
+  // Defaults to "already activated" so existing/Phase 1 assertions about
+  // subscribePush call counts are unaffected by the Phase 2 mount-time
+  // activation call — tests that specifically exercise that call override
+  // this to `false`.
+  automaticActivationMock.getAutomaticNotificationsActivated.mockReset().mockReturnValue(true)
+  automaticActivationMock.setAutomaticNotificationsActivated.mockReset()
   delete globalThis.Notification
 })
 
@@ -496,5 +508,88 @@ describe('Settings: Notifications section', () => {
     expect(pushApiMock.unsubscribePush).not.toHaveBeenCalled()
     expect(managementTokenMock.clearStoredManagementToken).toHaveBeenCalledOnce()
     expect(getByText('Enable notifications')).not.toBeNull()
+  })
+
+  it('shows the automatic episode alerts status line once enabled', async () => {
+    globalThis.Notification = { permission: 'granted' }
+    pushClientMock.getExistingPushSubscription.mockResolvedValue({ endpoint: 'https://web.push.apple.com/existing' })
+    await mountSettings()
+    await flush()
+    expect(container.textContent).toContain('Automatic episode alerts')
+    expect(container.textContent).toContain('Active')
+  })
+
+  describe('Phase 2 automatic-notification activation', () => {
+    it('re-subscribes once on mount to activate automatic notifications for a pre-existing subscription', async () => {
+      globalThis.Notification = { permission: 'granted' }
+      const existing = { endpoint: 'https://web.push.apple.com/existing' }
+      pushClientMock.getExistingPushSubscription.mockResolvedValue(existing)
+      automaticActivationMock.getAutomaticNotificationsActivated.mockReturnValue(false)
+      pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'rotated-token' })
+
+      await mountSettings()
+      await flush()
+
+      expect(pushApiMock.subscribePush).toHaveBeenCalledWith(existing)
+      expect(managementTokenMock.setStoredManagementToken).toHaveBeenCalledWith('rotated-token')
+      expect(automaticActivationMock.setAutomaticNotificationsActivated).toHaveBeenCalledWith(true)
+      // Never disrupts the status the mount effect already resolved.
+      expect(container.textContent).toContain('Notifications enabled')
+    })
+
+    it('does not re-subscribe on mount once already activated', async () => {
+      globalThis.Notification = { permission: 'granted' }
+      pushClientMock.getExistingPushSubscription.mockResolvedValue({ endpoint: 'https://web.push.apple.com/existing' })
+      automaticActivationMock.getAutomaticNotificationsActivated.mockReturnValue(true)
+
+      await mountSettings()
+      await flush()
+
+      expect(pushApiMock.subscribePush).not.toHaveBeenCalled()
+    })
+
+    it('a failed mount-time activation attempt is silent and does not disturb the enabled status', async () => {
+      globalThis.Notification = { permission: 'granted' }
+      pushClientMock.getExistingPushSubscription.mockResolvedValue({ endpoint: 'https://web.push.apple.com/existing' })
+      automaticActivationMock.getAutomaticNotificationsActivated.mockReturnValue(false)
+      pushApiMock.subscribePush.mockRejectedValue(new Error('network down'))
+
+      await mountSettings()
+      await flush()
+
+      expect(container.textContent).toContain('Notifications enabled')
+      expect(container.textContent).not.toContain('network down')
+      expect(automaticActivationMock.setAutomaticNotificationsActivated).not.toHaveBeenCalledWith(true)
+    })
+
+    it('marks activation on explicit Enable as well (a fresh subscription is activated immediately)', async () => {
+      automaticActivationMock.getAutomaticNotificationsActivated.mockReturnValue(false)
+      pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
+      const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
+      pushClientMock.subscribeToPush.mockResolvedValue(subscription)
+      pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
+
+      await mountSettings()
+      await flush()
+      await act(async () => { getByText('Enable notifications').closest('button').click() })
+
+      expect(automaticActivationMock.setAutomaticNotificationsActivated).toHaveBeenCalledWith(true)
+    })
+
+    it('clears the local activation flag on disable, so a future re-enable re-activates', async () => {
+      pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
+      const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
+      pushClientMock.subscribeToPush.mockResolvedValue(subscription)
+      pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
+
+      await mountSettings()
+      await flush()
+      await act(async () => { getByText('Enable notifications').closest('button').click() })
+
+      pushClientMock.getExistingPushSubscription.mockResolvedValue(subscription)
+      await act(async () => { getByText('Disable notifications').closest('button').click() })
+
+      expect(automaticActivationMock.setAutomaticNotificationsActivated).toHaveBeenCalledWith(false)
+    })
   })
 })

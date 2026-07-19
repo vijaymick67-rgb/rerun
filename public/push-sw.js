@@ -30,15 +30,16 @@ self.addEventListener('push', (event) => {
   const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title : PUSH_FALLBACK_TITLE
   const body = typeof payload.body === 'string' && payload.body.trim() ? payload.body : PUSH_FALLBACK_BODY
   const url = typeof payload.url === 'string' && payload.url.trim() ? payload.url : PUSH_DEFAULT_URL
+  // Automatic episode notifications (Phase 2) carry a stable per-show/episode
+  // tag (see src/lib/notifications/episodeEligibility.js) so a redelivered
+  // push for the same logical event replaces the existing OS notification
+  // instead of stacking a visual duplicate. The Phase 1 manual test push
+  // carries no tag and falls back to the browser's default (untagged)
+  // behavior, unchanged from before.
+  const options = { body, icon: PUSH_ICON, badge: PUSH_BADGE, data: { url } }
+  if (typeof payload.tag === 'string' && payload.tag.trim()) options.tag = payload.tag
 
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      icon: PUSH_ICON,
-      badge: PUSH_BADGE,
-      data: { url },
-    }),
-  )
+  event.waitUntil(self.registration.showNotification(title, options))
 })
 
 self.addEventListener('notificationclick', (event) => {

@@ -10,6 +10,13 @@ export const config = { runtime: 'nodejs' }
 // not as a real per-user quota.
 const MAX_PUSH_SUBSCRIPTIONS = 20
 
+// First-run flood protection for Phase 2 (automatic episode notifications):
+// activation is backdated by this much so an episode that became available
+// moments before a subscribe call isn't missed purely due to request timing
+// during setup/deployment, while still being far too small to backfill any
+// real backlog.
+const ACTIVATION_GRACE_WINDOW_MS = 30 * 60 * 1000
+
 function json(res, status, body) {
   res.status(status)
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -40,7 +47,7 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
 
     const { data: existingRow, error: lookupError } = await client
       .from('push_subscriptions')
-      .select('id')
+      .select('id, automatic_notifications_enabled_at')
       .eq('endpoint', result.endpoint)
       .maybeSingle()
     if (lookupError) {
@@ -75,6 +82,16 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
     const managementToken = generateManagementToken()
     const managementTokenHash = hashManagementToken(managementToken)
 
+    // Set once per subscription, never overwritten on a later re-subscribe —
+    // this is the Phase 2 activation watermark (see
+    // supabase/migrations/20260719140000_add_automatic_episode_notifications.sql).
+    // A brand-new row, or an existing Phase 1-only row that has never
+    // activated automatic notifications, gets backdated by the grace window;
+    // an already-activated row keeps its original timestamp exactly.
+    const automaticNotificationsEnabledAt =
+      existingRow?.automatic_notifications_enabled_at ??
+      new Date(Date.now() - ACTIVATION_GRACE_WINDOW_MS).toISOString()
+
     const { error } = await client.from('push_subscriptions').upsert(
       {
         endpoint: result.endpoint,
@@ -82,6 +99,7 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
         auth: result.auth,
         user_agent: userAgent,
         management_token_hash: managementTokenHash,
+        automatic_notifications_enabled_at: automaticNotificationsEnabledAt,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'endpoint' },

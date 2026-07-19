@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getShowAirstamps, getTvmazeShowId } from './tvmaze'
+import {
+  buildEpisodeReleaseMap,
+  fetchTvmazeEpisodes,
+  fetchTvmazeShowIdByImdb,
+  getShowAirstamps,
+  getTvmazeShowId,
+} from './tvmaze'
 
 // tvmaze.js caches in localStorage (best-effort, wrapped in try/catch). Node has
 // no localStorage, so provide a minimal in-memory stub to exercise the caching
@@ -121,5 +127,57 @@ describe('getShowAirstamps — graceful degradation', () => {
     global.fetch = vi.fn(async () => ({ ok: false, status: 404, json: async () => null }))
 
     await expect(getTvmazeShowId(1, { getExternalIds })).resolves.toBeNull()
+  })
+})
+
+// These are the cache-free primitives the server notification worker calls
+// directly (no localStorage in Node) — the same functions the cached client
+// path above wraps, so both runtimes are provably resolving releases the
+// same way.
+describe('cache-free primitives (server worker reuse)', () => {
+  it('fetchTvmazeShowIdByImdb resolves an id from a plain injected fetch', async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe('https://api.tvmaze.com/lookup/shows?imdb=tt1234567')
+      return { ok: true, json: async () => ({ id: 42 }) }
+    })
+    await expect(fetchTvmazeShowIdByImdb('tt1234567', fetchImpl)).resolves.toBe(42)
+  })
+
+  it('fetchTvmazeShowIdByImdb returns null with no imdbId, without calling fetch', async () => {
+    const fetchImpl = vi.fn()
+    await expect(fetchTvmazeShowIdByImdb(null, fetchImpl)).resolves.toBeNull()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('fetchTvmazeShowIdByImdb returns null on a non-OK response', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 404 }))
+    await expect(fetchTvmazeShowIdByImdb('tt0000000', fetchImpl)).resolves.toBeNull()
+  })
+
+  it('fetchTvmazeEpisodes returns the raw payload array', async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe('https://api.tvmaze.com/shows/42/episodes')
+      return { ok: true, json: async () => TVMAZE_EPISODES }
+    })
+    await expect(fetchTvmazeEpisodes(42, fetchImpl)).resolves.toEqual(TVMAZE_EPISODES)
+  })
+
+  it('fetchTvmazeEpisodes returns null for a non-numeric id, without calling fetch', async () => {
+    const fetchImpl = vi.fn()
+    await expect(fetchTvmazeEpisodes(null, fetchImpl)).resolves.toBeNull()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('buildEpisodeReleaseMap matches the cached client map for the same payload', () => {
+    expect(buildEpisodeReleaseMap(TVMAZE_EPISODES)).toEqual({
+      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101 },
+      '1:2': { airstamp: '2026-07-26T21:00:00-04:00', airdate: '2026-07-26', airtime: '21:00', tvmazeEpisodeId: 102 },
+      '2:1': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: null },
+    })
+  })
+
+  it('buildEpisodeReleaseMap tolerates a non-array input', () => {
+    expect(buildEpisodeReleaseMap(null)).toEqual({})
+    expect(buildEpisodeReleaseMap(undefined)).toEqual({})
   })
 })
