@@ -103,6 +103,25 @@ describe('push-sw.js: push event', () => {
 
     expect(showNotification).toHaveBeenCalledWith('Rerun', expect.objectContaining({ body: 'You have a new notification.' }))
   })
+
+  it('passes through a stable tag when the payload provides one (automatic episode notifications)', async () => {
+    const { listeners, showNotification } = loadPushSw()
+    const event = pushEvent({ title: 'The Bear', body: 'S3E1 · Up next', url: '/watching/123', tag: 'rerun-episode-123-s3e1' })
+    listeners.get('push')(event)
+    await event.waitUntil.mock.calls[0][0]
+
+    expect(showNotification).toHaveBeenCalledWith('The Bear', expect.objectContaining({ tag: 'rerun-episode-123-s3e1' }))
+  })
+
+  it('omits the tag option entirely when the payload has none (Phase 1 manual test push)', async () => {
+    const { listeners, showNotification } = loadPushSw()
+    const event = pushEvent({ title: 'Rerun notifications are working', body: 'Test push' })
+    listeners.get('push')(event)
+    await event.waitUntil.mock.calls[0][0]
+
+    const options = showNotification.mock.calls[0][1]
+    expect('tag' in options).toBe(false)
+  })
 })
 
 describe('push-sw.js: notificationclick', () => {

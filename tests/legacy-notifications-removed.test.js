@@ -8,7 +8,19 @@ const REMOVED_PATHS = [
   '.github/workflows/episode-notifications.yml',
   'api/notification-cron.js',
   'tests/notification-cron.test.js',
-  'src/lib/notifications',
+  // The old ntfy-era files under src/lib/notifications/ — not the directory
+  // itself, which Phase 2 (automatic Web Push episode notifications, PR
+  // "Add automatic episode notifications") legitimately reuses for
+  // src/lib/notifications/episodeEligibility.js, an unrelated, purely
+  // pure/synchronous module with no ntfy/scheduling code in it.
+  'src/lib/notifications/execute.js',
+  'src/lib/notifications/ntfy.js',
+  'src/lib/notifications/ntfy.test.js',
+  'src/lib/notifications/plan.js',
+  'src/lib/notifications/plan.test.js',
+  'src/lib/notifications/reminder.test.js',
+  'src/lib/notifications/structure.test.js',
+  'src/lib/notifications/worker.test.js',
   'scripts/notifications',
   'docs/episode-notifications.md',
   'supabase/migrations/20260715100000_schedule_notification_cron.sql',

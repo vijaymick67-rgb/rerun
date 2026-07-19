@@ -50,9 +50,11 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
 - **Phase 1 (done):** permission + subscription plumbing, Settings → Notifications is fully
   interactive (enable/disable/send test), one manually triggered test notification. No
   automatic episode notifications yet.
-- **Phase 2 (not built):** automatic "episode available" notifications on a schedule. When
-  built, reuse `notification_deliveries` (left in place, unused) or its identity/claim shape
-  — don't reinvent idempotent delivery tracking from scratch.
+- **Phase 2 (built, PR open — not yet merged):** automatic "episode available" notifications
+  via Supabase Cron (`rerun-episode-notification-worker`, every 15 min) → `/api/notifications/run`.
+  Activation-watermarked (no backfill on rollout), subscription-scoped dedup on
+  `notification_deliveries`. See `docs/automatic-episode-notifications.md` for the full design,
+  setup, and physical-verification steps. Update this line to "done" once merged.
 
 ## Key Technical Decisions
 - **Cache TMDB responses locally from day one.** Lesson learned from Marquee — don't skip this.

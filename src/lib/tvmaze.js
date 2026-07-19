@@ -61,10 +61,55 @@ function readTime(key) {
 
 // GET → parsed JSON, or null on any non-OK status (404 no-match, 429 rate
 // limit, 5xx) or transport/parse error. Callers treat null as "no data".
-async function fetchJson(url) {
-  const res = await fetch(url)
+async function fetchJson(url, fetchImpl = fetch) {
+  const res = await fetchImpl(url)
   if (!res.ok) return null
   return res.json()
+}
+
+// Cache-free network call: TMDB show id → TVmaze show id, via IMDb lookup.
+// Exported so the server worker (which has no localStorage) can perform the
+// exact same lookup as the cached client version below, instead of a
+// separately-written variant that could silently drift from it. `fetchImpl`
+// is injected for testability; defaults to the global fetch.
+export async function fetchTvmazeShowIdByImdb(imdbId, fetchImpl = fetch) {
+  if (!imdbId) return null
+  const show = await fetchJson(
+    `${TVMAZE_BASE}/lookup/shows?imdb=${encodeURIComponent(imdbId)}`,
+    fetchImpl,
+  )
+  return typeof show?.id === 'number' ? show.id : null
+}
+
+// Cache-free network call: TVmaze show id → raw /episodes payload (or null on
+// any failure). Exported for server reuse — see fetchTvmazeShowIdByImdb.
+export async function fetchTvmazeEpisodes(tvmazeId, fetchImpl = fetch) {
+  if (typeof tvmazeId !== 'number') return null
+  return fetchJson(`${TVMAZE_BASE}/shows/${tvmazeId}/episodes`, fetchImpl)
+}
+
+// Pure transform: raw TVmaze /episodes array → season:episode → release-record
+// map, keyed with Rerun's shared episodeKey scheme. The single place this
+// shape is built, so the client's cached lookup and the server worker's
+// uncached lookup can never subtly disagree on what a "release record" is.
+export function buildEpisodeReleaseMap(episodes) {
+  const map = {}
+  if (!Array.isArray(episodes)) return map
+  for (const ep of episodes) {
+    if (
+      ep &&
+      Number.isInteger(ep.season) &&
+      Number.isInteger(ep.number)
+    ) {
+      map[episodeKey(ep.season, ep.number)] = {
+        airstamp: typeof ep.airstamp === 'string' ? ep.airstamp : null,
+        airdate: typeof ep.airdate === 'string' ? ep.airdate : null,
+        airtime: typeof ep.airtime === 'string' ? ep.airtime : null,
+        tvmazeEpisodeId: typeof ep.id === 'number' ? ep.id : null,
+      }
+    }
+  }
+  return map
 }
 
 // Resolve (and cache) the TVmaze show id for a TMDB show, bridging via IMDb.
@@ -86,10 +131,7 @@ export async function getTvmazeShowId(tmdbId, { getExternalIds }) {
       writeJson(SHOW_ID_PREFIX + tmdbId, { id: null, at: Date.now() })
       return null
     }
-    const show = await fetchJson(
-      `${TVMAZE_BASE}/lookup/shows?imdb=${encodeURIComponent(imdbId)}`,
-    )
-    const id = typeof show?.id === 'number' ? show.id : null
+    const id = await fetchTvmazeShowIdByImdb(imdbId)
     writeJson(SHOW_ID_PREFIX + tmdbId, { id, at: Date.now() })
     return id
   } catch {
@@ -110,23 +152,9 @@ export async function getEpisodeReleaseMap(tvmazeId) {
   if (cached && cachedAt && Date.now() - cachedAt < EPISODES_MAX_AGE_MS) return cached
 
   try {
-    const episodes = await fetchJson(`${TVMAZE_BASE}/shows/${tvmazeId}/episodes`)
+    const episodes = await fetchTvmazeEpisodes(tvmazeId)
     if (!Array.isArray(episodes)) return cached ?? {}
-    const map = {}
-    for (const ep of episodes) {
-      if (
-        ep &&
-        Number.isInteger(ep.season) &&
-        Number.isInteger(ep.number)
-      ) {
-        map[episodeKey(ep.season, ep.number)] = {
-          airstamp: typeof ep.airstamp === 'string' ? ep.airstamp : null,
-          airdate: typeof ep.airdate === 'string' ? ep.airdate : null,
-          airtime: typeof ep.airtime === 'string' ? ep.airtime : null,
-          tvmazeEpisodeId: typeof ep.id === 'number' ? ep.id : null,
-        }
-      }
-    }
+    const map = buildEpisodeReleaseMap(episodes)
     writeJson(cacheKey, map)
     writeJson(EPISODES_TIME_PREFIX + tvmazeId, Date.now())
     return map

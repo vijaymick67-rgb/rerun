@@ -208,6 +208,45 @@ describe('POST /api/push/subscribe', () => {
     await handler(request({ body: validSubscriptionBody() }), res)
     expect(res.statusCode).toBe(500)
   })
+
+  describe('Phase 2 activation watermark', () => {
+    it('backdates a brand-new subscription by the grace window (no backfill of old episodes)', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime('2026-07-19T12:00:00.000Z')
+      const supabase = makeSupabaseStub({ rowResult: { data: null, error: null } })
+      const handler = createSubscribeHandler({ supabase })
+      const res = response()
+      await handler(request({ body: validSubscriptionBody() }), res)
+      const [row] = supabase.calls.upsertArgs
+      expect(row.automatic_notifications_enabled_at).toBe('2026-07-19T11:30:00.000Z')
+      vi.useRealTimers()
+    })
+
+    it('sets the watermark for an existing Phase 1-only subscription that has never activated', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime('2026-07-19T12:00:00.000Z')
+      const supabase = makeSupabaseStub({
+        rowResult: { data: { id: 1, automatic_notifications_enabled_at: null }, error: null },
+      })
+      const handler = createSubscribeHandler({ supabase })
+      const res = response()
+      await handler(request({ body: validSubscriptionBody() }), res)
+      const [row] = supabase.calls.upsertArgs
+      expect(row.automatic_notifications_enabled_at).toBe('2026-07-19T11:30:00.000Z')
+      vi.useRealTimers()
+    })
+
+    it('never overwrites an already-set watermark on a later re-subscribe', async () => {
+      const supabase = makeSupabaseStub({
+        rowResult: { data: { id: 1, automatic_notifications_enabled_at: '2026-01-01T00:00:00.000Z' }, error: null },
+      })
+      const handler = createSubscribeHandler({ supabase })
+      const res = response()
+      await handler(request({ body: validSubscriptionBody() }), res)
+      const [row] = supabase.calls.upsertArgs
+      expect(row.automatic_notifications_enabled_at).toBe('2026-01-01T00:00:00.000Z')
+    })
+  })
 })
 
 describe('POST /api/push/unsubscribe', () => {

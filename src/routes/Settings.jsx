@@ -15,6 +15,7 @@ import {
 } from '../lib/push/pushClient'
 import { sendTestPush, subscribePush, unsubscribePush } from '../lib/push/pushApi'
 import { clearStoredManagementToken, getStoredManagementToken, setStoredManagementToken } from '../lib/push/managementToken'
+import { getAutomaticNotificationsActivated, setAutomaticNotificationsActivated } from '../lib/push/automaticActivation'
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY
 
@@ -363,7 +364,31 @@ function NotificationsSection() {
         const registration = await getServiceWorkerRegistration()
         const existing = await getExistingPushSubscription(registration)
         if (cancelled) return
-        setStatus(existing && Notification.permission === 'granted' ? 'enabled' : 'idle')
+        const enabled = Boolean(existing) && Notification.permission === 'granted'
+        setStatus(enabled ? 'enabled' : 'idle')
+        // Phase 2: a subscription created under Phase 1 has never activated
+        // automatic episode notifications (the server-side watermark stays
+        // null until this runs). Re-posting the existing subscription is
+        // the same idempotent upsert Enable uses, so it's safe to fire
+        // automatically here, once per installation — see
+        // api/push/subscribe.js and src/lib/push/automaticActivation.js.
+        // Deliberately isolated behind Promise.resolve().then(...): this is
+        // best-effort background wiring and must never affect (or throw
+        // into) the status this effect just set above.
+        if (enabled && !getAutomaticNotificationsActivated()) {
+          Promise.resolve()
+            .then(() => subscribePush(existing))
+            .then((result) => {
+              if (cancelled) return
+              setStoredManagementToken(result?.managementToken ?? null)
+              setAutomaticNotificationsActivated(true)
+            })
+            .catch(() => {
+              // Best-effort: leave the flag unset so the next mount retries.
+              // Never surfaces as a user-facing error — notifications are
+              // already working from this device's point of view.
+            })
+        }
       } catch {
         if (!cancelled) setStatus('idle')
       }
@@ -397,6 +422,7 @@ function NotificationsSection() {
       const subscription = await subscribeToPush(registration, VAPID_PUBLIC_KEY)
       const subscribeResult = await subscribePush(subscription)
       setStoredManagementToken(subscribeResult?.managementToken ?? null)
+      setAutomaticNotificationsActivated(true)
       setStatus('enabled')
     } catch (err) {
       setSubscriptionError(err.message || 'Could not enable notifications.')
@@ -434,6 +460,7 @@ function NotificationsSection() {
       const managementToken = getStoredManagementToken()
       await unsubscribeFromPush(subscription)
       clearStoredManagementToken()
+      setAutomaticNotificationsActivated(false)
       setStatus('idle')
       setTestState('idle')
       setTestError(null)
@@ -480,6 +507,7 @@ function NotificationsSection() {
         {status === 'enabled' && (
           <>
             <SettingsInfoRow label="Status" status="Notifications enabled" />
+            <SettingsInfoRow label="Automatic episode alerts" status="Active" />
             <SettingsActionRow
               label="Send test notification"
               onPress={handleSendTest}
