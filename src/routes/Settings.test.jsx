@@ -29,12 +29,18 @@ vi.mock('../lib/push/pushApi', () => ({
   unsubscribePush: vi.fn(),
   sendTestPush: vi.fn(),
   verifyAutomaticEpisodePush: vi.fn(),
+  updateNotificationPreference: vi.fn(),
 }))
 
 vi.mock('../lib/push/managementToken', () => ({
   getStoredManagementToken: vi.fn(),
   setStoredManagementToken: vi.fn(),
   clearStoredManagementToken: vi.fn(),
+}))
+
+vi.mock('../lib/push/notificationPreference', () => ({
+  getStoredPreferredHour: vi.fn(),
+  setStoredPreferredHour: vi.fn(),
 }))
 
 vi.mock('../lib/push/automaticActivation', () => ({
@@ -47,6 +53,7 @@ import * as pushSupportMock from '../lib/push/pushSupport'
 import * as pushClientMock from '../lib/push/pushClient'
 import * as pushApiMock from '../lib/push/pushApi'
 import * as managementTokenMock from '../lib/push/managementToken'
+import * as notificationPreferenceMock from '../lib/push/notificationPreference'
 import * as automaticActivationMock from '../lib/push/automaticActivation'
 import Settings from './Settings'
 
@@ -119,9 +126,12 @@ beforeEach(() => {
   pushApiMock.unsubscribePush.mockReset()
   pushApiMock.sendTestPush.mockReset()
   pushApiMock.verifyAutomaticEpisodePush.mockReset()
+  pushApiMock.updateNotificationPreference.mockReset()
   managementTokenMock.getStoredManagementToken.mockReset().mockReturnValue('stored-management-token')
   managementTokenMock.setStoredManagementToken.mockReset()
   managementTokenMock.clearStoredManagementToken.mockReset()
+  notificationPreferenceMock.getStoredPreferredHour.mockReset().mockReturnValue(20)
+  notificationPreferenceMock.setStoredPreferredHour.mockReset()
   // Defaults to "already activated" so existing/Phase 1 assertions about
   // subscribePush call counts are unaffected by the Phase 2 mount-time
   // activation call — tests that specifically exercise that call override
@@ -639,6 +649,100 @@ describe('Settings: Notifications section', () => {
       expect(pushClientMock.requestNotificationPermission).not.toHaveBeenCalled()
       expect(managementTokenMock.setStoredManagementToken).not.toHaveBeenCalled()
       expect(managementTokenMock.clearStoredManagementToken).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Notification time', () => {
+    async function enableNotifications() {
+      pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
+      const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
+      pushClientMock.subscribeToPush.mockResolvedValue(subscription)
+      pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token', preferredNotificationHourIst: 20 })
+
+      await mountSettings()
+      await flush()
+      await act(async () => { getByText('Enable notifications').closest('button').click() })
+    }
+
+    function selectEl() {
+      return container.querySelector('#notification-time-select')
+    }
+
+    it('defaults to displaying 8:00 PM', async () => {
+      await enableNotifications()
+      expect(selectEl().value).toBe('20')
+      expect(container.textContent).toContain('Notification time')
+    })
+
+    it('the selector offers exactly the six allowed options, 6 PM through 11 PM', async () => {
+      await enableNotifications()
+      const options = [...selectEl().querySelectorAll('option')].map((opt) => opt.value)
+      expect(options).toEqual(['18', '19', '20', '21', '22', '23'])
+      const labels = [...selectEl().querySelectorAll('option')].map((opt) => opt.textContent)
+      expect(labels).toEqual(['6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM'])
+    })
+
+    it('changing the selection calls the secure preferences endpoint with the stored management token', async () => {
+      pushApiMock.updateNotificationPreference.mockResolvedValue({ success: true, preferredNotificationHourIst: 22 })
+      await enableNotifications()
+
+      await act(async () => {
+        selectEl().value = '22'
+        selectEl().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+
+      expect(pushApiMock.updateNotificationPreference).toHaveBeenCalledWith('stored-management-token', 22)
+      expect(selectEl().value).toBe('22')
+    })
+
+    it('a pending save disables the selector and prevents a second save until it resolves', async () => {
+      const gate = deferred()
+      pushApiMock.updateNotificationPreference.mockReturnValue(gate.promise)
+      await enableNotifications()
+
+      await act(async () => {
+        selectEl().value = '22'
+        selectEl().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      expect(selectEl().disabled).toBe(true)
+      expect(getByText('Saving…')).not.toBeNull()
+
+      await act(async () => {
+        gate.resolve({ success: true, preferredNotificationHourIst: 22 })
+        await gate.promise
+      })
+      expect(pushApiMock.updateNotificationPreference).toHaveBeenCalledTimes(1)
+      expect(selectEl().disabled).toBe(false)
+    })
+
+    it('a failed save reverts the selector to the previous value and shows a compact error', async () => {
+      pushApiMock.updateNotificationPreference.mockRejectedValue(new Error('Could not save notification time.'))
+      await enableNotifications()
+
+      await act(async () => {
+        selectEl().value = '23'
+        selectEl().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+
+      expect(selectEl().value).toBe('20')
+      expect(container.textContent).toContain('Could not save notification time.')
+    })
+
+    it('leaves the existing enable/disable/test/verify flows unchanged', async () => {
+      pushApiMock.sendTestPush.mockResolvedValue({ success: true })
+      pushApiMock.verifyAutomaticEpisodePush.mockResolvedValue({ success: true, synthetic: true })
+      await enableNotifications()
+
+      await act(async () => { getByText('Send test notification').closest('button').click() })
+      expect(pushApiMock.sendTestPush).toHaveBeenCalledWith('stored-management-token')
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+      expect(pushApiMock.verifyAutomaticEpisodePush).toHaveBeenCalledWith('stored-management-token')
+
+      pushClientMock.getExistingPushSubscription.mockResolvedValue({ endpoint: 'https://web.push.apple.com/abc' })
+      await act(async () => { getByText('Disable notifications').closest('button').click() })
+      expect(managementTokenMock.clearStoredManagementToken).toHaveBeenCalledOnce()
+      expect(pushApiMock.updateNotificationPreference).not.toHaveBeenCalled()
     })
   })
 

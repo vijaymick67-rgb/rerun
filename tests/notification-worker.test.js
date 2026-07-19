@@ -118,6 +118,7 @@ function subscriptionRow(overrides = {}) {
     p256dh: 'p256dh-key',
     auth: 'auth-key',
     automatic_notifications_enabled_at: '2026-07-17T00:00:00.000Z',
+    preferred_notification_hour_ist: 20,
     ...overrides,
   }
 }
@@ -249,8 +250,8 @@ describe('notification worker: happy path', () => {
     expect(target).toEqual({ endpoint: subscriptionRow().endpoint, keys: { p256dh: 'p256dh-key', auth: 'auth-key' } })
     const parsed = JSON.parse(payload)
     expect(parsed).toEqual({
-      title: 'Test Show — New episode available',
-      body: 'S1E1 · Pilot',
+      title: 'Test Show',
+      body: 'New Episode',
       url: '/watching/1',
       tag: 'rerun-episode-1-s1e1',
     })
@@ -301,9 +302,258 @@ describe('notification worker: happy path', () => {
     expect(res.body.sent).toBe(1)
     expect(res.body.eligibleEpisodes).toBe(2)
     const parsed = JSON.parse(sendNotification.mock.calls[0][1])
-    expect(parsed.title).toBe('Test Show — 2 new episodes available')
-    expect(parsed.body).toBe('Season 1 is ready')
+    expect(parsed.title).toBe('Test Show')
+    expect(parsed.body).toBe('New Episode')
     expect(parsed.tag).toBe('rerun-episode-1-batch')
+  })
+
+  it('eight episodes released together for one show still send exactly one notification', async () => {
+    const episodes = Array.from({ length: 8 }, (_, i) => ({
+      episode_number: i + 1, name: `Ep ${i + 1}`, air_date: '2026-07-18', runtime: 30,
+    }))
+    const showsById = { 1: { name: 'The Bear', episodes } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow({ name: 'The Bear' })],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    expect(res.body.eligibleEpisodes).toBe(8)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.title).toBe('The Bear')
+    expect(parsed.body).toBe('New Episode')
+    // Every one of the 8 grouped episode identities was claimed and
+    // finalized, even though only one push was sent.
+    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCall[1].p_identities).toHaveLength(8)
+  })
+
+  it('three different shows with new episodes in the same window send three separate notifications', async () => {
+    const showsById = {
+      1: { name: 'House of the Dragon', episodes: [AIRED_EPISODE] },
+      2: { name: 'Sugar', episodes: [AIRED_EPISODE] },
+      3: { name: 'The Bear', episodes: [AIRED_EPISODE] },
+    }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [
+        trackedShow({ tmdb_id: 1, name: 'House of the Dragon' }),
+        trackedShow({ tmdb_id: 2, name: 'Sugar' }),
+        trackedShow({ tmdb_id: 3, name: 'The Bear' }),
+      ],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(3)
+    expect(sendNotification).toHaveBeenCalledTimes(3)
+    const titles = sendNotification.mock.calls.map(([, payload]) => JSON.parse(payload).title).sort()
+    expect(titles).toEqual(['House of the Dragon', 'Sugar', 'The Bear'])
+  })
+
+  it('a transient send failure for a multi-episode batch finalizes none of the grouped episodes', async () => {
+    const episodes = [AIRED_EPISODE, { episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 }]
+    const showsById = { 1: { name: 'Test Show', episodes } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => { throw new Error('temporary network blip') })
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(0)
+    expect(res.body.failed).toBe(1)
+    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCall).toBeUndefined()
+  })
+})
+
+describe('notification worker: preferred delivery hour', () => {
+  // AIRED_EPISODE resolves to 2026-07-18T12:30:00Z (18:00 IST, the default
+  // 'unknown' platform threshold) — well before EVALUATION_TIME
+  // (2026-07-20T00:00:00Z), so these fixtures isolate the *scheduling* gate
+  // from ordinary release-instant eligibility.
+  it('holds an episode released before the preferred hour until the worker run at or after it', async () => {
+    // 11 PM IST preferred: release resolves to 2026-07-18T12:30:00Z (18:00
+    // IST) -> scheduled for 2026-07-18T17:30:00Z (23:00 IST same day).
+    // Evaluate partway between the two to prove the hold.
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 23 })],
+      trackedShows: [trackedShow()],
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = createNotificationWorkerHandler({
+      env: baseEnv(),
+      supabase,
+      now: () => new Date('2026-07-18T13:00:00.000Z'), // 18:30 IST — after release, before 23:00 IST cutoff
+      createTmdbClient: () => tmdbStubClient({ showsById }),
+      createTvmazeClient: () => tvmazeStubClient(),
+      sendNotification,
+      setVapidDetails: vi.fn(),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.eligibleEpisodes).toBe(0)
+    expect(sendNotification).not.toHaveBeenCalled()
+  })
+
+  it('sends on the first worker run at or after the preferred hour', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 23 })],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = createNotificationWorkerHandler({
+      env: baseEnv(),
+      supabase,
+      now: () => new Date('2026-07-18T17:30:00.000Z'), // exactly 23:00 IST
+      createTmdbClient: () => tmdbStubClient({ showsById }),
+      createTvmazeClient: () => tvmazeStubClient(),
+      sendNotification,
+      setVapidDetails: vi.fn(),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends immediately for a release after the preferred hour, without waiting for the next day', async () => {
+    // Episode releases at 21:15 IST (after an 8 PM preferred hour) —
+    // scheduledDeliveryInstant is the release instant itself.
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 } // 21:15 IST
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 20 })],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = createNotificationWorkerHandler({
+      env: baseEnv(),
+      supabase,
+      now: () => new Date('2026-07-18T15:50:00.000Z'), // 5 minutes after release, well before 8 PM IST
+      createTmdbClient: () => tmdbStubClient({ showsById }),
+      createTvmazeClient: () => tvmazeStubClient(),
+      sendNotification,
+      setVapidDetails: vi.fn(),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('the activation watermark still filters on the raw release instant, not the delayed scheduled instant', async () => {
+    // Episode released before the subscription's watermark — even with a
+    // preferred hour that would make "now" a valid scheduled-delivery time,
+    // it must never become eligible (no backfill).
+    const showsById = { 1: { name: 'Test Show', episodes: [{ ...AIRED_EPISODE, air_date: '2026-01-01' }] } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow({
+        automatic_notifications_enabled_at: '2026-07-19T00:00:00.000Z',
+        preferred_notification_hour_ist: 18,
+      })],
+      trackedShows: [trackedShow()],
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.eligibleEpisodes).toBe(0)
+    expect(sendNotification).not.toHaveBeenCalled()
+  })
+
+  it('a subscription row missing the preferred-hour column falls back to the 8 PM default', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const { preferred_notification_hour_ist: _unused, ...rowWithoutHour } = subscriptionRow()
+    const supabase = makeSupabaseStub({
+      subscriptions: [rowWithoutHour],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    // EVALUATION_TIME (2026-07-20) is well after an 8 PM IST cutoff on
+    // 2026-07-18, so the default-hour fallback still sends.
+    expect(res.body.sent).toBe(1)
+  })
+})
+
+describe('notification worker: later episode from an already-notified show', () => {
+  it('a newly available episode from a show that already notified earlier can still notify separately', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+
+    // First run: episode 1 is claimed and delivered.
+    const first = response()
+    await handler(request(), first)
+    expect(first.body.sent).toBe(1)
+
+    // A second episode of the same show becomes available later — a fresh
+    // worker invocation (same evaluation time, new episode in the pool)
+    // must send a new notification for it, not suppress it merely because
+    // the show already notified earlier.
+    showsById[1].episodes.push({ episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 })
+    const second = response()
+    await handler(request(), second)
+    expect(second.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -575,7 +825,7 @@ describe('notification worker: dry run', () => {
     expect(res.body.sent).toBe(0)
     expect(res.body.eligibleEpisodes).toBe(1)
     expect(res.body.preview).toEqual([
-      { tmdbShowId: 1, title: 'Test Show — New episode available', body: 'S1E1 · Pilot', episodeCount: 1 },
+      { tmdbShowId: 1, title: 'Test Show', body: 'New Episode', episodeCount: 1 },
     ])
     expect(sendNotification).not.toHaveBeenCalled()
     expect(supabase.record.rpcCalls).toHaveLength(0)

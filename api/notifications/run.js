@@ -13,6 +13,7 @@ import {
   episodesSinceWatermark,
   EPISODE_NOTIFICATION_TYPE,
 } from '../../src/lib/notifications/episodeEligibility.js'
+import { DEFAULT_PREFERRED_HOUR_IST, isSendableNow } from '../../src/lib/notifications/deliverySchedule.js'
 
 export const config = { runtime: 'nodejs' }
 
@@ -128,7 +129,7 @@ export function createNotificationWorkerHandler({
     try {
       const { data: subscriptionRows, error: subsError } = await client
         .from('push_subscriptions')
-        .select('id, endpoint, p256dh, auth, automatic_notifications_enabled_at')
+        .select('id, endpoint, p256dh, auth, automatic_notifications_enabled_at, preferred_notification_hour_ist')
         .not('automatic_notifications_enabled_at', 'is', null)
       if (subsError) throw subsError
 
@@ -199,16 +200,35 @@ export function createNotificationWorkerHandler({
       for (const subscription of subscriptions) {
         try {
           const watermarkMs = new Date(subscription.automatic_notifications_enabled_at).getTime()
+          // Falls back to the product default for a row the DB migration
+          // hasn't backfilled yet (or a test double that omits the column) —
+          // the column itself is `not null default 20`, so this is only ever
+          // a defensive fallback, never the primary source of the value.
+          const preferredHourIst = Number.isInteger(subscription.preferred_notification_hour_ist)
+            ? subscription.preferred_notification_hour_ist
+            : DEFAULT_PREFERRED_HOUR_IST
 
           const claims = []
           for (const [tmdbShowId, entry] of showPool) {
             const sinceWatermark = episodesSinceWatermark(entry.episodes, watermarkMs)
             if (sinceWatermark.length === 0) continue
-            summary.eligibleEpisodes += sinceWatermark.length
+
+            // Activation watermark and every eligibility rule above already
+            // apply to each episode's raw release instant, not this
+            // schedule — this filter only ever delays *when* an
+            // already-eligible episode is sent, never turns a
+            // pre-activation episode eligible. An episode whose scheduled
+            // instant hasn't arrived yet simply isn't claimed this run; it
+            // stays in showPool/sinceWatermark for a later run once its
+            // scheduled instant passes.
+            const sendable = sinceWatermark.filter((episode) =>
+              isSendableNow(episode.releaseTimestamp, preferredHourIst, evaluationMs))
+            if (sendable.length === 0) continue
+            summary.eligibleEpisodes += sendable.length
 
             if (dryRun) {
-              const payload = buildEpisodeNotificationPayload(tmdbShowId, entry.showName, sinceWatermark)
-              preview.push({ tmdbShowId, title: payload.title, body: payload.body, episodeCount: sinceWatermark.length })
+              const payload = buildEpisodeNotificationPayload(tmdbShowId, entry.showName, sendable)
+              preview.push({ tmdbShowId, title: payload.title, body: payload.body, episodeCount: sendable.length })
               continue
             }
 
@@ -218,7 +238,7 @@ export function createNotificationWorkerHandler({
               {
                 p_push_subscription_id: subscription.id,
                 p_tmdb_show_id: tmdbShowId,
-                p_episodes: sinceWatermark.map((episode) => ({
+                p_episodes: sendable.map((episode) => ({
                   season_number: episode.seasonNumber,
                   episode_number: episode.episodeNumber,
                   notification_type: EPISODE_NOTIFICATION_TYPE,
@@ -236,10 +256,10 @@ export function createNotificationWorkerHandler({
             const claimedKeys = new Set(
               (claimedRows ?? []).map((row) => episodeKey(row.season_number, row.episode_number)),
             )
-            const claimedEpisodes = sinceWatermark.filter(
+            const claimedEpisodes = sendable.filter(
               (episode) => claimedKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
             )
-            summary.skipped += sinceWatermark.length - claimedEpisodes.length
+            summary.skipped += sendable.length - claimedEpisodes.length
             if (claimedEpisodes.length > 0) {
               claims.push({ tmdbShowId, showName: entry.showName, episodes: claimedEpisodes, claimToken })
             }

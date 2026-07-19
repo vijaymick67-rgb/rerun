@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { sendTestPush, subscribePush, unsubscribePush, verifyAutomaticEpisodePush } from './pushApi.js'
+import { sendTestPush, subscribePush, unsubscribePush, updateNotificationPreference, verifyAutomaticEpisodePush } from './pushApi.js'
 
 function fakeFetch(status, body) {
   return vi.fn().mockResolvedValue({
@@ -110,5 +110,28 @@ describe('verifyAutomaticEpisodePush', () => {
     expect(loggedText).not.toContain('a-secret-management-token')
     consoleSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+})
+
+describe('updateNotificationPreference', () => {
+  it('POSTs the management token and hour to /api/push/preferences', async () => {
+    const fetchImpl = fakeFetch(200, { success: true, preferredNotificationHourIst: 21 })
+    const result = await updateNotificationPreference('a-management-token', 21, fetchImpl)
+    expect(result).toEqual({ success: true, preferredNotificationHourIst: 21 })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/push/preferences',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ managementToken: 'a-management-token', preferredNotificationHourIst: 21 }),
+      }),
+    )
+  })
+
+  it('throws the server error message on failure', async () => {
+    const fetchImpl = fakeFetch(400, { error: 'Notification hour must be an integer from 18 through 23' })
+    await expect(updateNotificationPreference('a-management-token', 17, fetchImpl)).rejects.toThrow(
+      'Notification hour must be an integer from 18 through 23',
+    )
   })
 })

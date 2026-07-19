@@ -99,8 +99,12 @@ describe('notification verify endpoint', () => {
     const [target, payloadJson] = sendNotification.mock.calls[0]
     expect(target).toEqual({ endpoint: row.endpoint, keys: { p256dh: 'p256dh-key', auth: 'auth-key' } })
     const payload = JSON.parse(payloadJson)
-    expect(payload.title).toBe(`${SYNTHETIC_SHOW_NAME} — New episode available`)
-    expect(payload.body).toBe(`S${SYNTHETIC_EPISODE.seasonNumber}E${SYNTHETIC_EPISODE.episodeNumber} · ${SYNTHETIC_EPISODE.name}`)
+    // Same minimal content shape a real episode notification uses, but the
+    // title stays visibly "Rerun Verification" — never a real show name —
+    // so a synthetic push can never be mistaken for a real one.
+    expect(payload.title).toBe(SYNTHETIC_SHOW_NAME)
+    expect(payload.body).toBe('New Episode')
+    expect(SYNTHETIC_EPISODE.name).toBe('Verification episode') // still distinguishable in logs/fixtures, just not in the payload
     // A synthetic, never-real show falls back to /watching, not a dead detail route.
     expect(payload.url).toBe('/watching')
     expect(payload.tag).toBe(`rerun-episode-${SYNTHETIC_TMDB_SHOW_ID}-s1e1`)

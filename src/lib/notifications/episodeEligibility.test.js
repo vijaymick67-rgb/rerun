@@ -184,40 +184,47 @@ describe('episodesSinceWatermark', () => {
 })
 
 describe('buildEpisodeNotificationPayload', () => {
-  it('single episode with a title', () => {
+  it('single episode: title is the show name alone, body is exactly "New Episode"', () => {
     const payload = buildEpisodeNotificationPayload(42, 'Test Show', [
       { seasonNumber: 2, episodeNumber: 5, name: 'The Return' },
     ])
-    expect(payload.title).toBe('Test Show — New episode available')
-    expect(payload.body).toBe('S2E5 · The Return')
+    expect(payload.title).toBe('Test Show')
+    expect(payload.body).toBe('New Episode')
     expect(payload.url).toBe('/watching/42')
     expect(payload.tag).toBe('rerun-episode-42-s2e5')
   })
 
-  it('single episode with a missing title falls back to Season/Episode wording', () => {
+  it('carries no episode metadata (season/episode/title) regardless of episode name', () => {
     const payload = buildEpisodeNotificationPayload(42, 'Test Show', [
-      { seasonNumber: 2, episodeNumber: 5, name: null },
+      { seasonNumber: 2, episodeNumber: 5, name: 'The Return' },
     ])
-    expect(payload.body).toBe('Season 2, Episode 5')
+    expect(payload.body).toBe('New Episode')
+    expect(payload.body).not.toMatch(/S2E5|season 2|episode 5|the return/i)
   })
 
-  it('multiple episodes of the same season group into one "season is ready" body', () => {
+  it('multiple episodes of the same show still produce one show-name title and "New Episode" body', () => {
     const payload = buildEpisodeNotificationPayload(42, 'Test Show', [
       { seasonNumber: 3, episodeNumber: 1, name: 'A' },
       { seasonNumber: 3, episodeNumber: 2, name: 'B' },
     ])
-    expect(payload.title).toBe('Test Show — 2 new episodes available')
-    expect(payload.body).toBe('Season 3 is ready')
+    expect(payload.title).toBe('Test Show')
+    expect(payload.body).toBe('New Episode')
     expect(payload.tag).toBe('rerun-episode-42-batch')
   })
 
-  it('multiple episodes spanning seasons use the truthful generic body', () => {
-    const payload = buildEpisodeNotificationPayload(42, 'Test Show', [
-      { seasonNumber: 1, episodeNumber: 9, name: 'A' },
-      { seasonNumber: 2, episodeNumber: 1, name: 'B' },
+  it('eight episodes of the same show still collapse to the same minimal content', () => {
+    const episodes = Array.from({ length: 8 }, (_, i) => ({ seasonNumber: 1, episodeNumber: i + 1, name: `Ep ${i + 1}` }))
+    const payload = buildEpisodeNotificationPayload(42, 'The Bear', episodes)
+    expect(payload.title).toBe('The Bear')
+    expect(payload.body).toBe('New Episode')
+  })
+
+  it('never includes the show name inside the body, or "Rerun" inside the title', () => {
+    const payload = buildEpisodeNotificationPayload(42, 'House of the Dragon', [
+      { seasonNumber: 1, episodeNumber: 1, name: 'A' },
     ])
-    expect(payload.title).toBe('Test Show — 2 new episodes available')
-    expect(payload.body).toBe('New episodes are ready to watch')
+    expect(payload.body).not.toContain('House of the Dragon')
+    expect(payload.title).not.toContain('Rerun')
   })
 })
 

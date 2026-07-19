@@ -13,9 +13,17 @@ import {
   subscribeToPush,
   unsubscribeFromPush,
 } from '../lib/push/pushClient'
-import { sendTestPush, subscribePush, unsubscribePush, verifyAutomaticEpisodePush } from '../lib/push/pushApi'
+import {
+  sendTestPush,
+  subscribePush,
+  unsubscribePush,
+  updateNotificationPreference,
+  verifyAutomaticEpisodePush,
+} from '../lib/push/pushApi'
 import { clearStoredManagementToken, getStoredManagementToken, setStoredManagementToken } from '../lib/push/managementToken'
+import { getStoredPreferredHour, setStoredPreferredHour } from '../lib/push/notificationPreference'
 import { getAutomaticNotificationsActivated, setAutomaticNotificationsActivated } from '../lib/push/automaticActivation'
+import { isValidPreferredHour, MAX_PREFERRED_HOUR_IST, MIN_PREFERRED_HOUR_IST } from '../lib/notifications/deliverySchedule'
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY
 
@@ -82,6 +90,47 @@ function SettingsSecondaryActionRow({ label, onPress, disabled, ariaLabel }) {
     >
       <span>{label}</span>
     </button>
+  )
+}
+
+// Domain is fixed at 18-23 (6 PM-11 PM) — every allowed hour is PM, so this
+// stays a plain subtraction rather than a general 24-hour formatter.
+function formatPreferredHourLabel(hour) {
+  return `${hour - 12}:00 PM`
+}
+
+const PREFERRED_HOUR_OPTIONS = Array.from(
+  { length: MAX_PREFERRED_HOUR_IST - MIN_PREFERRED_HOUR_IST + 1 },
+  (_, i) => {
+    const hour = MIN_PREFERRED_HOUR_IST + i
+    return { value: hour, label: formatPreferredHourLabel(hour) }
+  },
+)
+
+// A native <select> — not a custom dropdown — so it gets the platform's own
+// keyboard support and, on the installed iPhone PWA, the native wheel
+// picker UI for free. Restricted to the six allowed hours only.
+function SettingsSelectRow({ label, value, options, onChange, disabled, busyLabel }) {
+  return (
+    <div className="flex min-h-11 items-center justify-between gap-3 px-4 py-2.5">
+      <label htmlFor="notification-time-select" className="text-sm font-medium text-(--color-text)">
+        {label}
+      </label>
+      <div className="flex items-center gap-2">
+        {busyLabel && <span className="text-xs font-normal text-(--color-text-muted)">{busyLabel}</span>}
+        <select
+          id="notification-time-select"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          className="min-h-11 rounded-lg border border-(--color-border) bg-(--color-surface-raised) px-2.5 py-1.5 text-sm font-medium text-(--color-text) disabled:opacity-60"
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </div>
+    </div>
   )
 }
 
@@ -367,6 +416,12 @@ function NotificationsSection() {
   const [testError, setTestError] = useState(null)
   const [verifyState, setVerifyState] = useState('idle') // idle | verifying | verified | error
   const [verifyError, setVerifyError] = useState(null)
+  // Cached from the last server-confirmed value (subscribe or preferences
+  // response) — see src/lib/push/notificationPreference.js. Never
+  // fabricated: it only ever changes after a real server response.
+  const [preferredHour, setPreferredHour] = useState(() => getStoredPreferredHour())
+  const [preferenceState, setPreferenceState] = useState('idle') // idle | saving | error
+  const [preferenceError, setPreferenceError] = useState(null)
 
   useEffect(() => {
     if (supportState !== 'supported') return
@@ -403,6 +458,10 @@ function NotificationsSection() {
               if (cancelled) return
               setStoredManagementToken(result?.managementToken ?? null)
               setAutomaticNotificationsActivated(true)
+              if (isValidPreferredHour(result?.preferredNotificationHourIst)) {
+                setStoredPreferredHour(result.preferredNotificationHourIst)
+                setPreferredHour(result.preferredNotificationHourIst)
+              }
             })
             .catch(() => {
               // Best-effort: leave the flag unset so the next mount retries.
@@ -444,6 +503,10 @@ function NotificationsSection() {
       const subscribeResult = await subscribePush(subscription)
       setStoredManagementToken(subscribeResult?.managementToken ?? null)
       setAutomaticNotificationsActivated(true)
+      if (isValidPreferredHour(subscribeResult?.preferredNotificationHourIst)) {
+        setStoredPreferredHour(subscribeResult.preferredNotificationHourIst)
+        setPreferredHour(subscribeResult.preferredNotificationHourIst)
+      }
       setStatus('enabled')
     } catch (err) {
       setSubscriptionError(err.message || 'Could not enable notifications.')
@@ -494,6 +557,41 @@ function NotificationsSection() {
     }
   }
 
+  // Saves immediately on selection — no separate Save button, matching the
+  // rest of this section's tap-and-go pattern. Optimistically reflects the
+  // tapped value right away so the select never visibly snaps back while the
+  // request is in flight, then reverts to the previous value only if the
+  // save actually fails.
+  async function handlePreferredHourChange(e) {
+    if (preferenceState === 'saving') return
+    const nextHour = Number(e.target.value)
+    const previousHour = preferredHour
+    setPreferredHour(nextHour)
+    setPreferenceState('saving')
+    setPreferenceError(null)
+
+    const managementToken = getStoredManagementToken()
+    if (!managementToken) {
+      setPreferredHour(previousHour)
+      setPreferenceState('error')
+      setPreferenceError('No stored subscription — enable notifications again.')
+      return
+    }
+    try {
+      const result = await updateNotificationPreference(managementToken, nextHour)
+      const confirmedHour = isValidPreferredHour(result?.preferredNotificationHourIst)
+        ? result.preferredNotificationHourIst
+        : nextHour
+      setStoredPreferredHour(confirmedHour)
+      setPreferredHour(confirmedHour)
+      setPreferenceState('idle')
+    } catch (err) {
+      setPreferredHour(previousHour)
+      setPreferenceState('error')
+      setPreferenceError(err.message || 'Could not save notification time.')
+    }
+  }
+
   async function handleDisable() {
     if (disabling) return
     setDisabling(true)
@@ -511,6 +609,8 @@ function NotificationsSection() {
       setTestError(null)
       setVerifyState('idle')
       setVerifyError(null)
+      setPreferenceState('idle')
+      setPreferenceError(null)
       if (endpoint && managementToken) await unsubscribePush(endpoint, managementToken)
     } catch (err) {
       setSubscriptionError(err.message || 'Could not disable notifications.')
@@ -555,6 +655,14 @@ function NotificationsSection() {
           <>
             <SettingsInfoRow label="Status" status="Notifications enabled" />
             <SettingsInfoRow label="Automatic episode alerts" status="Active" />
+            <SettingsSelectRow
+              label="Notification time"
+              value={preferredHour}
+              options={PREFERRED_HOUR_OPTIONS}
+              onChange={handlePreferredHourChange}
+              disabled={preferenceState === 'saving'}
+              busyLabel={preferenceState === 'saving' ? 'Saving…' : null}
+            />
             <SettingsActionRow
               label="Send test notification"
               onPress={handleSendTest}
@@ -584,6 +692,9 @@ function NotificationsSection() {
       )}
       {verifyState === 'error' && (
         <Banner tone="error" live>{verifyError}</Banner>
+      )}
+      {preferenceState === 'error' && (
+        <Banner tone="error" live>{preferenceError}</Banner>
       )}
       {subscriptionError && <Banner tone="error">Subscription error: {subscriptionError}</Banner>}
     </>

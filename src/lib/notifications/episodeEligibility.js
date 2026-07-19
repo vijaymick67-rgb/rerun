@@ -76,19 +76,6 @@ export function episodesSinceWatermark(episodes, watermarkTimestamp) {
   return (episodes ?? []).filter((episode) => episode.releaseTimestamp > watermarkTimestamp)
 }
 
-function singleEpisodeBody(episode) {
-  return episode.name
-    ? `S${episode.seasonNumber}E${episode.episodeNumber} · ${episode.name}`
-    : `Season ${episode.seasonNumber}, Episode ${episode.episodeNumber}`
-}
-
-function batchBody(episodes) {
-  const seasons = new Set(episodes.map((episode) => episode.seasonNumber))
-  return seasons.size === 1
-    ? `Season ${episodes[0].seasonNumber} is ready`
-    : 'New episodes are ready to watch'
-}
-
 // Route the notification tap should open. Always /watching/:tmdbId, since a
 // numeric tmdbShowId is always available here — the "fall back to /watching"
 // case is a defensive guard, not an expected path.
@@ -108,16 +95,16 @@ export function episodeNotificationTag(tmdbShowId, episodes) {
 
 // One show's eligible (and already-claimed, by the caller) episodes → one
 // notification payload. `episodes` must be non-empty and sorted (as returned
-// by collectAiredUnwatchedEpisodes / episodesSinceWatermark).
+// by collectAiredUnwatchedEpisodes / episodesSinceWatermark). Content is
+// deliberately minimal: the iOS/app heading ("Rerun") is supplied by the
+// installed app identity, not this payload, so the title is the show name
+// alone and the body carries no episode metadata (season/episode/title/
+// count/release time) regardless of how many episodes are grouped together —
+// one notification always means "go check the show", not a status report.
 export function buildEpisodeNotificationPayload(tmdbShowId, showName, episodes) {
-  const title = episodes.length === 1
-    ? `${showName} — New episode available`
-    : `${showName} — ${episodes.length} new episodes available`
-  const body = episodes.length === 1 ? singleEpisodeBody(episodes[0]) : batchBody(episodes)
-
   return {
-    title,
-    body,
+    title: showName,
+    body: 'New Episode',
     url: episodeNotificationUrl(tmdbShowId),
     tag: episodeNotificationTag(tmdbShowId, episodes),
     episodes,

@@ -7,11 +7,12 @@ Phase 2 adds a scheduled worker that finds newly-available episodes of
 tracked shows and pushes to every activated subscription.
 
 **Scope of this phase, deliberately:** scheduled episode evaluation,
-automatic delivery shortly after an episode becomes available, strict
+automatic delivery shortly after an episode becomes available (or at a
+preferred same-day time, see "Preferred delivery hour" below), strict
 deduplication, first-run/backfill protection, and notification tap
-navigation. No evening reminders, no custom times, no notification
-categories/badges beyond the existing fixed icon, no broad Settings
-redesign.
+navigation. No notification categories/badges beyond the existing fixed
+icon, no broad Settings redesign — the one added control (Notification
+time) is a single compact row in the existing Notifications section.
 
 ## What was added
 
@@ -25,12 +26,22 @@ redesign.
 - `supabase/migrations/20260719160000_add_complete_episode_notification_deliveries.sql`
   — a claim-token-bound finalization RPC, called only after `web-push`
   confirms a send succeeded (see "Deduplication & delivery" below).
+- `supabase/migrations/20260719170000_add_preferred_notification_hour.sql`
+  — adds `push_subscriptions.preferred_notification_hour_ist` (custom
+  notification-time feature; see "Preferred delivery hour" below).
 - `src/lib/notifications/episodeEligibility.js` — pure, synchronous
   eligibility + payload-grouping logic (no fetching, no Supabase, no
   web-push). Consumes the same `status`/`episodesBySeason` shape
   `src/lib/watchingShows.js` already produces for the live Watching tab, so
   tracked/hidden/finished filtering and release-timestamp resolution are
   reused unchanged, not reimplemented.
+- `src/lib/notifications/deliverySchedule.js` — pure scheduling calculation
+  layered on top of eligibility: given an episode's already-resolved release
+  instant and a subscription's preferred hour, computes when that episode
+  should actually be pushed. Never touches whether an episode is eligible.
+- `api/push/preferences.js` — updates the caller's own
+  `preferred_notification_hour_ist`, authenticated by management token the
+  same way `api/push/test.js` is.
 - `src/lib/tvmaze.js` — refactored (not behaviorally changed) to expose
   cache-free primitives (`fetchTvmazeShowIdByImdb`, `fetchTvmazeEpisodes`,
   `buildEpisodeReleaseMap`) so the server worker resolves TVmaze releases
@@ -52,10 +63,11 @@ redesign.
   replaces the existing OS notification instead of stacking a duplicate.
   Untagged (Phase 1 manual test) pushes are unaffected.
 - Settings: automatic notifications activate themselves once a subscription
-  is enabled (see "Activation" below). No new UI controls — the existing
-  "Episode notifications — Native notifications from Rerun" row is
-  unchanged, with one added status line ("Automatic episode alerts —
-  Active") once enabled.
+  is enabled (see "Activation" below). The existing "Episode notifications —
+  Native notifications from Rerun" row is unchanged, with one added status
+  line ("Automatic episode alerts — Active") once enabled, plus one added
+  compact control — **Notification time** — described under "Preferred
+  delivery hour" below.
 
 ## Activation & first-run backfill protection
 
@@ -177,19 +189,83 @@ An episode is eligible for a given subscription only when **all** of:
   (see above);
 - it isn't already in `watched_episodes` for that show;
 - it wasn't already claimed/delivered for that subscription (see
-  "Deduplication" above).
+  "Deduplication" above);
+- its **scheduled delivery instant** has arrived (see "Preferred delivery
+  hour" below) — this is a *when to send* gate layered on top of the rules
+  above, not an eligibility rule; it never turns an otherwise-ineligible
+  episode eligible, and never re-applies the activation watermark to
+  anything but the raw release instant.
+
+See `src/lib/notifications/episodeEligibility.js` for the exact functions
+(`collectAiredUnwatchedEpisodes`, `episodesSinceWatermark`,
+`buildEpisodeNotificationPayload`).
+
+## Preferred delivery hour
+
+Each installation has one global preferred delivery hour — Settings →
+Notifications → **Notification time**, one of 6:00 PM through 11:00 PM IST
+(default **8:00 PM**). It changes *when* an already-eligible episode is
+pushed, never *whether* it's eligible.
+
+- **Storage:** `push_subscriptions.preferred_notification_hour_ist`
+  (`supabase/migrations/20260719170000_add_preferred_notification_hour.sql`)
+  — an integer, `18` through `23`, `not null default 20`. Delivery targets
+  are subscription-scoped, so this lives on `push_subscriptions` rather than
+  a separate preferences table. Every existing subscription is backfilled to
+  `20` by the column default; no other row is touched.
+- **Scheduling rule** (`src/lib/notifications/deliverySchedule.js`,
+  `scheduledDeliveryInstant`): for an episode whose release instant is
+  `releaseInstant`, and a subscription's preferred hour `selectedHourIST`:
+  1. Compute `selectedDeliveryInstant` — the preferred hour on the **same
+     IST calendar date** `releaseInstant` falls on, using the same
+     fixed-offset (UTC+5:30, no DST) IST conversion the rest of the release
+     pipeline uses (`istDateISO` / `timestampFromISTDate` from
+     `src/lib/networkReleaseTiming.js` — not `Intl.DateTimeFormat`, not
+     `process.env.TZ`, not server local time).
+  2. `scheduledDeliveryInstant = max(releaseInstant, selectedDeliveryInstant)`.
+  3. An episode is sendable once the worker's evaluation instant reaches
+     `scheduledDeliveryInstant`.
+  - Released before the preferred hour (e.g. 9:30 AM, preferred 8 PM): held,
+    sent on the first worker run at or after 8 PM IST that same day.
+  - Released shortly before the preferred hour (e.g. 7:55 PM, preferred
+    8 PM): sent on the first worker run at or after 8 PM IST.
+  - Released after the preferred hour (e.g. 9:15 PM, preferred 8 PM): sent
+    on the first worker run at or after 9:15 PM — **never** delayed to the
+    next day.
+- **Interaction with the activation watermark:** step 1 above always reads
+  `releaseInstant`, never `scheduledDeliveryInstant`. `episodesSinceWatermark`
+  keeps comparing against the raw release instant exactly as before, so a
+  later preferred hour can never turn a pre-activation backlog episode
+  eligible — it can only delay an already-eligible episode's send time.
+- **Grouping stays per show, per sendable batch** (see "Notification
+  content" below) — the preferred hour doesn't change how episodes are
+  grouped, only which episodes are in the pool the worker groups from on a
+  given run.
+- **Client:** `POST /api/push/preferences` (`api/push/preferences.js`)
+  updates the caller's own row, resolved by management-token hash — the
+  same ownership proof `api/push/test.js` uses. It never accepts or returns
+  a subscription endpoint or push keys, and never rotates the management
+  token. Settings (`src/routes/Settings.jsx`) shows the value from the most
+  recent server response (either `/api/push/subscribe`, which now also
+  returns `preferredNotificationHourIst`, or a successful preferences save)
+  cached locally (`src/lib/push/notificationPreference.js`) so it displays
+  correctly without a dedicated read endpoint. A failed save reverts the
+  selector to the previous value and shows a compact error — no fake
+  success state.
 
 ## Notification content
 
-- One newly-available episode of a show:
-  `{Show name} — New episode available` / `S{season}E{episode} · {episode
-  title}` (or `Season {season}, Episode {episode}` if the title is
-  missing).
-- Multiple episodes of the same show becoming available together, same
-  season: `{Show name} — {count} new episodes available` / `Season
-  {season} is ready`.
-- Same, spanning seasons: body becomes the truthful generic `New episodes
-  are ready to watch`.
+Deliberately minimal — the iOS/app heading ("Rerun") is supplied by the
+installed app identity, not the push payload:
+
+- **Title:** the show name alone (e.g. `House of the Dragon`).
+- **Body:** exactly `New Episode`, regardless of how many episodes are
+  grouped into the notification — no season/episode number, episode title,
+  episode count, release time, or platform/network.
+- Multiple episodes of the same show becoming available in the same
+  sendable batch (e.g. all 8 episodes of a season dropping together) still
+  produce exactly **one** notification with this same minimal content — see
+  "One notification per show per delivery window" below.
 - Tap target: `/watching/{tmdbShowId}` (the show-detail route) — always
   producible here since `tmdbShowId` is always a real positive integer;
   `episodeNotificationUrl` falls back to `/watching` only as a defensive
@@ -198,9 +274,31 @@ An episode is eligible for a given subscription only when **all** of:
   a single episode, `rerun-episode-{tmdbId}-batch` for a group) — see
   `public/push-sw.js`.
 
-See `src/lib/notifications/episodeEligibility.js` for the exact functions
-(`collectAiredUnwatchedEpisodes`, `episodesSinceWatermark`,
-`buildEpisodeNotificationPayload`).
+Sample real-worker payload (as sent to `web-push`, before the OS renders the
+app-supplied "Rerun" heading above it):
+
+```json
+{ "title": "The Bear", "body": "New Episode", "url": "/watching/1", "tag": "rerun-episode-1-batch" }
+```
+
+## One notification per show per delivery window
+
+At one worker evaluation, every currently-sendable, unnotified episode for a
+given show and subscription is grouped into **one** push — whether that's 1
+episode or 8. All of the grouped episodes' delivery identities are still
+claimed and finalized individually (see "Deduplication & delivery" above),
+so:
+
+- a later worker run never re-sends for an episode already covered by an
+  earlier group's push;
+- if a *further* episode of the same show becomes available later the same
+  day, **after** an earlier notification for that show already went out,
+  the worker sends a **new**, separate notification for it — grouping is
+  per currently-sendable batch, not a once-per-show-per-calendar-day rule.
+
+Three different shows with new episodes in the same window still get three
+separate notifications — episodes are never combined across shows into one
+summary push.
 
 ## Scheduler
 
@@ -233,11 +331,17 @@ different endpoint, not a revival of that system).
    `rerun_notification_cron_secret` (see `docs/web-push.md`'s note on
    deleting those manually).
 3. Apply, in order, `20260719140000_add_automatic_episode_notifications.sql`,
-   `20260719150000_schedule_episode_notification_worker.sql`, and
-   `20260719160000_add_complete_episode_notification_deliveries.sql` in the
-   Supabase SQL Editor. The scheduling migration is safe to run even before
-   the Vault secrets above exist — the job just fails (harmlessly, into
-   Cron's own run history) until they're set.
+   `20260719150000_schedule_episode_notification_worker.sql`,
+   `20260719160000_add_complete_episode_notification_deliveries.sql`, and
+   `20260719170000_add_preferred_notification_hour.sql` in the Supabase SQL
+   Editor. The scheduling migration is safe to run even before the Vault
+   secrets above exist — the job just fails (harmlessly, into Cron's own run
+   history) until they're set. The last migration is additive and
+   idempotent (`add column if not exists`, a `drop constraint if exists`
+   before re-adding it) — safe to apply exactly once in production, doesn't
+   touch `notification_deliveries` or any existing subscription row beyond
+   backfilling the new column via its own `default 20`, and doesn't
+   recreate or reschedule the Cron job.
 4. `TMDB_API_KEY` (already configured for `api/tmdb.js`) is reused as-is —
    the worker calls TMDB directly with it, server-side.
 
@@ -334,15 +438,24 @@ curl -X POST https://rerun-nine.vercel.app/api/notifications/verify \
 
 Steps:
 
-1. Enable notifications on the installed iPhone Home Screen PWA (Phase 1
+1. Merge and deploy this branch, and apply
+   `20260719170000_add_preferred_notification_hour.sql` (see "Setup" above)
+   if it hasn't already been applied.
+2. Open the installed iPhone Home Screen PWA. Enable notifications (Phase 1
    flow, unchanged) if not already enabled.
-2. In Settings → Notifications, tap **Verify automatic episode alert**
-   (or run the `curl` above with the `managementToken` value read from
-   that installation's `localStorage` key `rerun:push:managementToken`).
-3. Background Rerun on the iPhone.
-4. Confirm delivery: title "Rerun Verification — New episode available",
-   body "S1E1 · Verification episode".
-5. Tap the notification — it opens `/watching` (a synthetic show has no
+3. Go to Settings → Notifications. Confirm **Notification time** shows the
+   expected value (8:00 PM by default, or whatever was last saved) and that
+   changing it shows a brief "Saving…" state, then reflects the new value.
+4. Tap **Verify automatic episode alert** (or run the `curl` above with the
+   `managementToken` value read from that installation's `localStorage` key
+   `rerun:push:managementToken`).
+5. Background Rerun on the iPhone.
+6. Confirm delivery: heading "Rerun" (supplied by iOS from the installed
+   app, not the payload), title "Rerun Verification", body "New Episode" —
+   the same minimal content shape a real episode notification uses, kept
+   visibly distinct only by the title staying "Rerun Verification" instead
+   of a real show name.
+7. Tap the notification — it opens `/watching` (a synthetic show has no
    real detail page, so this is the correct, intentional fallback, not a
    bug).
 
@@ -358,15 +471,32 @@ Covered by `npm test`: activation watermark + no-backfill (including the
 exact watermark boundary), the aired-episode `evaluationTime` boundary
 (including an end-to-end IST platform-threshold boundary from a TMDB-only
 `air_date`), TVmaze-over-TMDB precedence, tracked/hidden/finished
-filtering, specials exclusion, watched-episode exclusion, single vs. batch
-(same-season vs. cross-season) payload content, missing-title fallback,
-claim/dedup including a simulated concurrent-claim race and a same-time
-worker rerun, transient-failure isolation, 404/410 stale-subscription
-removal, per-show and per-subscription failure isolation, malformed
-subscription rows, worker-secret auth and method rejection, sanitized
-error responses, dry run (including determinism across repeated calls),
-the Phase 1 manual test push (unchanged, still passing), and PWA
-precache/update-lifecycle tests (unchanged, still passing). Real push
-delivery, Lock Screen/Notification Center rendering, and backgrounded-app
-delivery still require the physical-device checklist above — no automated
-suite can cover those.
+filtering, specials exclusion, watched-episode exclusion, claim/dedup
+including a simulated concurrent-claim race and a same-time worker rerun,
+transient-failure isolation (including for a multi-episode grouped batch),
+404/410 stale-subscription removal, per-show and per-subscription failure
+isolation, malformed subscription rows, worker-secret auth and method
+rejection, sanitized error responses, dry run (including determinism across
+repeated calls), the Phase 1 manual test push (unchanged, still passing),
+and PWA precache/update-lifecycle tests (unchanged, still passing).
+
+Added by this feature: the IST scheduling calculation
+(`src/lib/notifications/deliverySchedule.js`) across the release-before/
+at/after-preferred-hour cases and the UTC/IST calendar-day boundary; the
+scheduling gate combined with the activation watermark at the worker level
+(a delayed schedule never resurrects pre-activation backlog); minimal
+notification content (title = show name, body exactly `New Episode`, no
+episode metadata, verified for both a single episode and an 8-episode
+batch); one-notification-per-show grouping across 1, 8, and 3-simultaneous-
+show scenarios, with every grouped episode identity claimed and finalized;
+a later episode from an already-notified show still notifying separately;
+`api/push/preferences.js` validation (18-23 accepted, 17/24/non-integer/
+missing rejected, ownership by management-token hash, no token rotation, no
+endpoint/keys in the response); and the Settings selector (default display,
+exactly six options, save-on-select, pending state, revert-on-failure,
+existing enable/disable/test/verify flows unchanged).
+
+Real push delivery, Lock Screen/Notification Center rendering, backgrounded-
+app delivery, and the native `<select>`'s on-device wheel-picker rendering
+still require the physical-device checklist above — no automated suite can
+cover those.
