@@ -82,6 +82,13 @@ export const PWA_OPTIONS = {
     navigateFallback: '/index.html',
     navigateFallbackDenylist: PWA_NAVIGATION_FALLBACK_DENYLIST,
     globPatterns: ['**/*.{js,css,html,woff,woff2}'],
+    // Adds push + notificationclick handling to the generated service worker
+    // without migrating off generateSW — see public/push-sw.js. Workbox
+    // inlines this as a literal `importScripts("push-sw.js")` call at the
+    // very top of the generated sw.js, before its own precaching/update
+    // lifecycle code, so it only ever adds listeners and never touches that
+    // lifecycle (PRs #79–#81).
+    importScripts: ['push-sw.js'],
     runtimeCaching: [
       {
         urlPattern: PWA_IMAGE_PATTERN,

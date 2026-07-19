@@ -8,7 +8,6 @@
     "build": "vite build",
     "icons:generate": "node scripts/generate-icons.mjs",
     "lint": "oxlint",
-    "notifications:simulate": "node scripts/notifications/simulate.js",
     "preview": "vite preview",
     "test": "vitest run",
     "check:encoding": "node scripts/check-encoding.mjs"
@@ -20,7 +19,8 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
-    "tailwindcss": "^4.3.2"
+    "tailwindcss": "^4.3.2",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

@@ -43,11 +43,16 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
    polished bar as FinFlow's Hearth pass, though Rerun gets its own distinct visual identity
    (not a reskin of Hearth's espresso/gold/sage/rust palette)
 
-## Notifications (separate system, not built into the app)
-- Existing ntfy.sh + GitHub Actions notifier (lib.js, poll.js, digest.js, weekly.js) stays as-is.
-- Follow-up integration (not initial scaffold): point the notifier at Supabase's tracked_shows
-  table instead of the manually-maintained shows.txt, so adding a show in the app auto-feeds
-  notifications.
+## Notifications
+- Native Web Push, sent by Rerun's own service worker — no ntfy, no third-party relay.
+  See `docs/web-push.md` for setup (VAPID keys, required env vars, migration) and exactly
+  what the old ntfy/GitHub Actions system (PRs #52–#56) was replaced.
+- **Phase 1 (done):** permission + subscription plumbing, Settings → Notifications is fully
+  interactive (enable/disable/send test), one manually triggered test notification. No
+  automatic episode notifications yet.
+- **Phase 2 (not built):** automatic "episode available" notifications on a schedule. When
+  built, reuse `notification_deliveries` (left in place, unused) or its identity/claim shape
+  — don't reinvent idempotent delivery tracking from scratch.
 
 ## Key Technical Decisions
 - **Cache TMDB responses locally from day one.** Lesson learned from Marquee — don't skip this.
