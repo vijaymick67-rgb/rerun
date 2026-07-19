@@ -102,8 +102,9 @@ describe('notification verify endpoint', () => {
     // Same minimal content shape a real episode notification uses, but the
     // title stays visibly "Rerun Verification" — never a real show name —
     // so a synthetic push can never be mistaken for a real one.
-    expect(payload.title).toBe(SYNTHETIC_SHOW_NAME)
-    expect(payload.body).toBe('New Episode')
+    expect(payload.title).toBe(`${SYNTHETIC_SHOW_NAME} - New Episode`)
+    expect(payload).not.toHaveProperty('body')
+    expect(payload.omitBody).toBe(true)
     expect(SYNTHETIC_EPISODE.name).toBe('Verification episode') // still distinguishable in logs/fixtures, just not in the payload
     // A synthetic, never-real show falls back to /watching, not a dead detail route.
     expect(payload.url).toBe('/watching')

@@ -122,6 +122,41 @@ describe('push-sw.js: push event', () => {
     const options = showNotification.mock.calls[0][1]
     expect('tag' in options).toBe(false)
   })
+
+  it('shows no body at all for an automatic episode payload marked omitBody, instead of the generic fallback', async () => {
+    const { listeners, showNotification } = loadPushSw()
+    const event = pushEvent({
+      title: 'House of the Dragon - New Episode', url: '/watching/1', tag: 'rerun-episode-1-s1e1', omitBody: true,
+    })
+    listeners.get('push')(event)
+    await event.waitUntil.mock.calls[0][0]
+
+    expect(showNotification).toHaveBeenCalledWith('House of the Dragon - New Episode', expect.anything())
+    const options = showNotification.mock.calls[0][1]
+    expect('body' in options).toBe(false)
+    expect(options.tag).toBe('rerun-episode-1-s1e1')
+  })
+
+  it('still falls back to the generic body when body is missing and omitBody is not set', async () => {
+    const { listeners, showNotification } = loadPushSw()
+    const event = pushEvent({ title: 'Some future payload shape', url: '/watching/1' })
+    listeners.get('push')(event)
+    await event.waitUntil.mock.calls[0][0]
+
+    expect(showNotification).toHaveBeenCalledWith(
+      'Some future payload shape',
+      expect.objectContaining({ body: 'You have a new notification.' }),
+    )
+  })
+
+  it('a real body always wins over omitBody, even if omitBody is (incorrectly) set', async () => {
+    const { listeners, showNotification } = loadPushSw()
+    const event = pushEvent({ title: 'Has a body', body: 'Real content', omitBody: true })
+    listeners.get('push')(event)
+    await event.waitUntil.mock.calls[0][0]
+
+    expect(showNotification).toHaveBeenCalledWith('Has a body', expect.objectContaining({ body: 'Real content' }))
+  })
 })
 
 describe('push-sw.js: notificationclick', () => {

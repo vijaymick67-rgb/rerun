@@ -255,13 +255,14 @@ pushed, never *whether* it's eligible.
 
 ## Notification content
 
-Deliberately minimal — the iOS/app heading ("Rerun") is supplied by the
-installed app identity, not the push payload:
+Deliberately minimal — iOS supplies "from Rerun" on its own for the
+installed PWA, so this payload never generates or duplicates that line:
 
-- **Title:** the show name alone (e.g. `House of the Dragon`).
-- **Body:** exactly `New Episode`, regardless of how many episodes are
-  grouped into the notification — no season/episode number, episode title,
-  episode count, release time, or platform/network.
+- **Title:** `${showName} - New Episode` (e.g. `House of the Dragon - New
+  Episode`) — no season/episode number, episode title, episode count,
+  release time, or platform/network.
+- **Body:** intentionally absent. There is no separate body line; the title
+  is the entire visible content besides the OS-supplied "from Rerun".
 - Multiple episodes of the same show becoming available in the same
   sendable batch (e.g. all 8 episodes of a season dropping together) still
   produce exactly **one** notification with this same minimal content — see
@@ -274,11 +275,18 @@ installed app identity, not the push payload:
   a single episode, `rerun-episode-{tmdbId}-batch` for a group) — see
   `public/push-sw.js`.
 
+The payload also carries `omitBody: true` — a marker that distinguishes
+"this push is intentionally bodyless" from a malformed/legacy payload that
+merely happens to be missing a body. `public/push-sw.js` only shows its
+generic fallback body ("You have a new notification.") in the latter case;
+when `omitBody` is set, the notification shows no body at all instead of
+substituting the fallback text.
+
 Sample real-worker payload (as sent to `web-push`, before the OS renders the
-app-supplied "Rerun" heading above it):
+app-supplied "from Rerun" line above it):
 
 ```json
-{ "title": "The Bear", "body": "New Episode", "url": "/watching/1", "tag": "rerun-episode-1-batch" }
+{ "title": "The Bear - New Episode", "url": "/watching/1", "tag": "rerun-episode-1-batch", "omitBody": true }
 ```
 
 ## One notification per show per delivery window
@@ -450,11 +458,11 @@ Steps:
    `managementToken` value read from that installation's `localStorage` key
    `rerun:push:managementToken`).
 5. Background Rerun on the iPhone.
-6. Confirm delivery: heading "Rerun" (supplied by iOS from the installed
-   app, not the payload), title "Rerun Verification", body "New Episode" —
-   the same minimal content shape a real episode notification uses, kept
-   visibly distinct only by the title staying "Rerun Verification" instead
-   of a real show name.
+6. Confirm delivery: "from Rerun" (supplied by iOS from the installed app,
+   not the payload) above the title "Rerun Verification - New Episode",
+   with no separate body line — the same minimal content shape a real
+   episode notification uses, kept visibly distinct only by the title
+   staying "Rerun Verification" instead of a real show name.
 7. Tap the notification — it opens `/watching` (a synthetic show has no
    real detail page, so this is the correct, intentional fallback, not a
    bug).
@@ -485,9 +493,12 @@ Added by this feature: the IST scheduling calculation
 at/after-preferred-hour cases and the UTC/IST calendar-day boundary; the
 scheduling gate combined with the activation watermark at the worker level
 (a delayed schedule never resurrects pre-activation backlog); minimal
-notification content (title = show name, body exactly `New Episode`, no
-episode metadata, verified for both a single episode and an 8-episode
-batch); one-notification-per-show grouping across 1, 8, and 3-simultaneous-
+notification content (title `${showName} - New Episode`, intentionally no
+body, no episode metadata, verified for both a single episode and an
+8-episode batch); the service worker's `omitBody` marker (an intentionally
+bodyless automatic episode push shows no body, while a malformed/legacy
+payload without the marker still gets the generic fallback body);
+one-notification-per-show grouping across 1, 8, and 3-simultaneous-
 show scenarios, with every grouped episode identity claimed and finalized;
 a later episode from an already-notified show still notifying separately;
 `api/push/preferences.js` validation (18-23 accepted, 17/24/non-integer/

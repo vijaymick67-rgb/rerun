@@ -228,7 +228,7 @@ export function createNotificationWorkerHandler({
 
             if (dryRun) {
               const payload = buildEpisodeNotificationPayload(tmdbShowId, entry.showName, sendable)
-              preview.push({ tmdbShowId, title: payload.title, body: payload.body, episodeCount: sendable.length })
+              preview.push({ tmdbShowId, title: payload.title, episodeCount: sendable.length })
               continue
             }
 
@@ -272,7 +272,7 @@ export function createNotificationWorkerHandler({
             const target = { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }
             try {
               await sendNotification(target, JSON.stringify({
-                title: payload.title, body: payload.body, url: payload.url, tag: payload.tag,
+                title: payload.title, url: payload.url, tag: payload.tag, omitBody: payload.omitBody,
               }))
             } catch (err) {
               const statusCode = err?.statusCode
