@@ -22,6 +22,9 @@ redesign.
   "Deduplication" below).
 - `supabase/migrations/20260719150000_schedule_episode_notification_worker.sql`
   — schedules the worker via Supabase Cron + pg_net every 15 minutes.
+- `supabase/migrations/20260719160000_add_complete_episode_notification_deliveries.sql`
+  — a claim-token-bound finalization RPC, called only after `web-push`
+  confirms a send succeeded (see "Deduplication & delivery" below).
 - `src/lib/notifications/episodeEligibility.js` — pure, synchronous
   eligibility + payload-grouping logic (no fetching, no Supabase, no
   web-push). Consumes the same `status`/`episodesBySeason` shape
@@ -122,11 +125,31 @@ patched column-by-column.
   minute cron cadence — a transient send failure (row stays claimed, never
   marked delivered) becomes retryable within a run or two, without racing
   an invocation that might still be actively sending.
-- **Marked delivered only after `web-push` confirms acceptance** —
-  `run.js` calls `sendNotification` first and only updates
-  `delivered_at` in the `then` path; a thrown/rejected send leaves the
-  claim exactly as the atomic claim left it (undelivered, so retryable per
-  the window above).
+- **Marked delivered only after `web-push` confirms acceptance, via a
+  claim-token-bound finalization RPC:** `run.js` calls `sendNotification`
+  first; only on success does it call
+  `complete_episode_notification_deliveries(p_claim_token, p_identities,
+  p_delivered_at)` (added in
+  `20260719160000_add_complete_episode_notification_deliveries.sql`), which
+  atomically updates rows matching **both** the identity list **and** the
+  exact `claim_token` this worker was issued, and only while
+  `delivered_at is null`. The worker checks the RPC's error and the number
+  of rows it actually finalized against the number of episodes it expected
+  to finalize, and only increments `sent` when they match exactly. A
+  thrown/rejected send never calls this RPC at all, leaving the claim
+  exactly as the atomic claim left it (undelivered, so retryable per the
+  window above). This two-step claim → send → claim-token-scoped-finalize
+  sequence closes two gaps a plain post-send `update ... where identity in
+  (...)` would leave open:
+  - A database write failure *after* a successful push would otherwise
+    still report as delivered even though the row stays undelivered and
+    becomes reclaimable — risking a duplicate resend of an already-received
+    notification, while the run's summary silently overstates `sent`.
+  - A claim that outlives the 10-minute staleness window (an unusually slow
+    send) can be reclaimed by a newer worker invocation, which replaces
+    `claim_token`. Scoping finalization to the exact token a worker was
+    handed means a stale, slow worker's finalize call is a no-op instead of
+    incorrectly marking a different invocation's claim delivered.
 - **`on delete cascade`** from `push_subscriptions` to
   `notification_deliveries.push_subscription_id`: removing a subscription
   (disable, or the worker's own stale-subscription cleanup below) removes
@@ -209,11 +232,12 @@ different endpoint, not a revival of that system).
    Phase-1-era `rerun_notification_endpoint_url` /
    `rerun_notification_cron_secret` (see `docs/web-push.md`'s note on
    deleting those manually).
-3. Apply, in order, `20260719140000_add_automatic_episode_notifications.sql`
-   and `20260719150000_schedule_episode_notification_worker.sql` in the
-   Supabase SQL Editor. The second is safe to run even before the Vault
-   secrets above exist — the job just fails (harmlessly, into Cron's own
-   run history) until they're set.
+3. Apply, in order, `20260719140000_add_automatic_episode_notifications.sql`,
+   `20260719150000_schedule_episode_notification_worker.sql`, and
+   `20260719160000_add_complete_episode_notification_deliveries.sql` in the
+   Supabase SQL Editor. The scheduling migration is safe to run even before
+   the Vault secrets above exist — the job just fails (harmlessly, into
+   Cron's own run history) until they're set.
 4. `TMDB_API_KEY` (already configured for `api/tmdb.js`) is reused as-is —
    the worker calls TMDB directly with it, server-side.
 

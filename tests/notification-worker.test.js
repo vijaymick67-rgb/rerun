@@ -52,15 +52,27 @@ function makeQueryBuilder(resolveResult) {
   return builder
 }
 
+// Default `complete` resolver: durably finalizes every identity requested,
+// as long as the claim_token matches — mirroring the real
+// complete_episode_notification_deliveries RPC's WHERE clause closely enough
+// for these tests (the "delivered_at is null" guard doesn't need modeling
+// here since no test reuses an already-finalized identity).
+function defaultComplete(args, record) {
+  const claimedTokens = record.claimTokensByIdentity
+  const finalized = args.p_identities.filter((identity) => claimedTokens.get(identity) === args.p_claim_token)
+  for (const identity of finalized) claimedTokens.set(identity, 'delivered')
+  return { data: finalized.map((identity) => ({ identity })), error: null }
+}
+
 function makeSupabaseStub({
   subscriptions = [],
   trackedShows = [],
   watchedRows = [],
   claim = () => ({ data: [], error: null }),
+  complete,
   onDelete = () => {},
-  onDeliveredUpdate = () => {},
 } = {}) {
-  const record = { deletes: [], deliveredUpdates: [], rpcCalls: [] }
+  const record = { deletes: [], rpcCalls: [], claimTokensByIdentity: new Map() }
   return {
     record,
     from(table) {
@@ -77,20 +89,24 @@ function makeSupabaseStub({
         }
         if (table === 'tracked_shows') return { data: trackedShows, error: null }
         if (table === 'watched_episodes') return { data: watchedRows, error: null }
-        if (table === 'notification_deliveries') {
-          const updateCall = calls.find((c) => c[0] === 'update')
-          const inCall = calls.find((c) => c[0] === 'in')
-          const entry = [updateCall[1][0], inCall[1][1]]
-          record.deliveredUpdates.push(entry)
-          onDeliveredUpdate(...entry)
-          return { error: null }
-        }
         return { data: null, error: null }
       })
     },
     rpc(name, args) {
       record.rpcCalls.push([name, args])
-      return Promise.resolve(claim(args))
+      if (name === 'claim_episode_notification_deliveries') {
+        const result = claim(args)
+        for (const identity of args.p_episodes.map((e) =>
+          `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`,
+        )) {
+          if ((result.data ?? []).length > 0) record.claimTokensByIdentity.set(identity, args.p_claim_token)
+        }
+        return Promise.resolve(result)
+      }
+      if (name === 'complete_episode_notification_deliveries') {
+        return Promise.resolve((complete ?? defaultComplete)(args, record))
+      }
+      return Promise.resolve({ data: null, error: null })
     },
   }
 }
@@ -238,10 +254,12 @@ describe('notification worker: happy path', () => {
       url: '/watching/1',
       tag: 'rerun-episode-1-s1e1',
     })
-    expect(supabase.record.deliveredUpdates).toHaveLength(1)
-    const [updateBody, identities] = supabase.record.deliveredUpdates[0]
-    expect(updateBody.delivered_at).toBe(EVALUATION_TIME.toISOString())
-    expect(identities).toEqual([`1:1:1:1:${EPISODE_NOTIFICATION_TYPE}`])
+    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCall).toBeTruthy()
+    const [, completeArgs] = completeCall
+    expect(completeArgs.p_delivered_at).toBe(EVALUATION_TIME.toISOString())
+    expect(completeArgs.p_identities).toEqual([`1:1:1:1:${EPISODE_NOTIFICATION_TYPE}`])
+    expect(completeArgs.p_claim_token).toBeTruthy()
   })
 
   it('an episode released before the subscription watermark is not eligible (no backfill)', async () => {
@@ -286,6 +304,94 @@ describe('notification worker: happy path', () => {
     expect(parsed.title).toBe('Test Show — 2 new episodes available')
     expect(parsed.body).toBe('Season 1 is ready')
     expect(parsed.tag).toBe('rerun-episode-1-batch')
+  })
+})
+
+describe('notification worker: delivery finalization', () => {
+  function claimingSupabase({ complete }) {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.map((e) => ({
+          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
+        })),
+        error: null,
+      }),
+      complete,
+    })
+    return { showsById, supabase }
+  }
+
+  it('a database error finalizing after a successful push counts as failed, not sent', async () => {
+    const { showsById, supabase } = claimingSupabase({
+      complete: () => ({ data: null, error: { message: 'connection reset' } }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 0, staleRemoved: 0, failed: 1 })
+  })
+
+  it('a stale worker whose claim was reclaimed under a newer token cannot finalize those rows', async () => {
+    // Simulates: this worker's claim_token no longer matches the row (a
+    // second invocation reclaimed it after the 10-minute staleness window),
+    // so the completion RPC's claim_token filter finds nothing to update.
+    const { showsById, supabase } = claimingSupabase({
+      complete: () => ({ data: [], error: null }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 0, staleRemoved: 0, failed: 1 })
+  })
+
+  it('a partial finalization (row count mismatch) does not count as sent', async () => {
+    const { showsById, supabase } = claimingSupabase({
+      // This fixture only ever claims one identity, so any resolver that
+      // returns fewer than requested exercises the mismatch path.
+      complete: () => ({ data: [], error: null }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(0)
+    expect(res.body.failed).toBe(1)
+  })
+
+  it('sent increments only after the finalization RPC durably confirms every claimed episode', async () => {
+    const { showsById, supabase } = claimingSupabase({
+      complete: (args) => ({ data: args.p_identities.map((identity) => ({ identity })), error: null }),
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 1, skipped: 0, staleRemoved: 0, failed: 0 })
+  })
+
+  it('the completion RPC is scoped to the exact claim_token the worker was issued', async () => {
+    let capturedArgs
+    const { showsById, supabase } = claimingSupabase({
+      complete: (args) => {
+        capturedArgs = args
+        return { data: args.p_identities.map((identity) => ({ identity })), error: null }
+      },
+    })
+    const handler = makeHandler({ supabase, showsById })
+    const res = response()
+    await handler(request(), res)
+    const claimCall = supabase.record.rpcCalls.find((c) => c[0] === 'claim_episode_notification_deliveries')
+    expect(capturedArgs.p_claim_token).toBe(claimCall[1].p_claim_token)
+    expect(res.body.sent).toBe(1)
   })
 })
 
@@ -473,7 +579,6 @@ describe('notification worker: dry run', () => {
     ])
     expect(sendNotification).not.toHaveBeenCalled()
     expect(supabase.record.rpcCalls).toHaveLength(0)
-    expect(supabase.record.deliveredUpdates).toHaveLength(0)
   })
 
   it('dry run is deterministic across repeated calls', async () => {

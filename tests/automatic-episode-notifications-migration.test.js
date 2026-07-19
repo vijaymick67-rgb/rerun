@@ -64,3 +64,23 @@ describe('20260719150000_schedule_episode_notification_worker.sql', () => {
     expect(sql).toMatch(/rerun_notification_endpoint_url \/ rerun_notification_cron_secret/)
   })
 })
+
+describe('20260719160000_add_complete_episode_notification_deliveries.sql', () => {
+  const sql = migration('20260719160000_add_complete_episode_notification_deliveries.sql')
+
+  it('finalizes only rows matching both the identity list and the exact claim_token', () => {
+    expect(sql).toMatch(/notification_deliveries\.identity = any \(p_identities\)/)
+    expect(sql).toMatch(/notification_deliveries\.claim_token = p_claim_token/)
+    expect(sql).toMatch(/notification_deliveries\.delivered_at is null/)
+  })
+
+  it('is locked down to service_role only', () => {
+    expect(sql).toMatch(/revoke all on function public\.complete_episode_notification_deliveries/)
+    expect(sql).toMatch(/grant execute on function public\.complete_episode_notification_deliveries[\s\S]*to service_role/)
+  })
+
+  it('documents why an unscoped identity-only update is unsafe', () => {
+    expect(sql).toMatch(/reclaimed/)
+    expect(sql).toMatch(/claim_token/)
+  })
+})

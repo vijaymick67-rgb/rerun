@@ -240,7 +240,9 @@ export function createNotificationWorkerHandler({
               (episode) => claimedKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
             )
             summary.skipped += sinceWatermark.length - claimedEpisodes.length
-            if (claimedEpisodes.length > 0) claims.push({ tmdbShowId, showName: entry.showName, episodes: claimedEpisodes })
+            if (claimedEpisodes.length > 0) {
+              claims.push({ tmdbShowId, showName: entry.showName, episodes: claimedEpisodes, claimToken })
+            }
           }
 
           if (dryRun) continue
@@ -252,12 +254,6 @@ export function createNotificationWorkerHandler({
               await sendNotification(target, JSON.stringify({
                 title: payload.title, body: payload.body, url: payload.url, tag: payload.tag,
               }))
-              const identities = claim.episodes.map((episode) => deliveryIdentity(
-                subscription.id, claim.tmdbShowId, episode.seasonNumber, episode.episodeNumber,
-              ))
-              await client.from('notification_deliveries').update({ delivered_at: evaluationInstant.toISOString() })
-                .in('identity', identities)
-              summary.sent += 1
             } catch (err) {
               const statusCode = err?.statusCode
               if (statusCode === 404 || statusCode === 410) {
@@ -267,7 +263,38 @@ export function createNotificationWorkerHandler({
               }
               summary.failed += 1
               console.error('notification_worker_send_failed', { statusCode, message: err?.message })
+              continue
             }
+
+            // Web Push confirmed acceptance — now durably finalize, but only
+            // the rows this exact claim owns. A plain unscoped update here
+            // would let a database-write failure report as "sent" while the
+            // claim stays reclaimable (risking a duplicate resend), or let a
+            // stale/slow worker finalize rows a newer invocation already
+            // reclaimed under a different claim_token. See migration
+            // 20260719160000 for the full rationale.
+            const identities = claim.episodes.map((episode) => deliveryIdentity(
+              subscription.id, claim.tmdbShowId, episode.seasonNumber, episode.episodeNumber,
+            ))
+            const { data: finalizedRows, error: finalizeError } = await client.rpc(
+              'complete_episode_notification_deliveries',
+              {
+                p_claim_token: claim.claimToken,
+                p_identities: identities,
+                p_delivered_at: evaluationInstant.toISOString(),
+              },
+            )
+            if (finalizeError || (finalizedRows ?? []).length !== identities.length) {
+              summary.failed += 1
+              console.error('notification_worker_finalize_mismatch', {
+                tmdbShowId: claim.tmdbShowId,
+                expected: identities.length,
+                finalized: (finalizedRows ?? []).length,
+                message: finalizeError?.message,
+              })
+              continue
+            }
+            summary.sent += 1
           }
         } catch (err) {
           summary.failed += 1
