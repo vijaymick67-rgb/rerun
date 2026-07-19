@@ -16,7 +16,7 @@ import { importWatchHistory } from './importWatchHistory.js'
 export const BACKUP_FORMAT = 'rerun-backup'
 export const BACKUP_SCHEMA_VERSION = 1
 
-const TRACKED_SHOW_COLUMNS = 'tmdb_id, name, poster_path, added_at'
+const TRACKED_SHOW_COLUMNS = 'tmdb_id, name, poster_path, added_at, finished_at, hidden_at'
 const WATCHED_EPISODE_COLUMNS =
   'tmdb_show_id, season_number, episode_number, episode_name, runtime_minutes, watched_at'
 
@@ -55,6 +55,8 @@ function toBackupShow(row) {
     name: row.name,
     poster_path: row.poster_path ?? null,
     added_at: row.added_at,
+    finished_at: row.finished_at ?? null,
+    hidden_at: row.hidden_at ?? null,
   }
 }
 
@@ -168,11 +170,19 @@ function validateTrackedShowRow(row, index) {
   if (!isValidDateString(row.added_at)) {
     throw new BackupValidationError(`trackedShows[${index}] has an invalid added_at date.`)
   }
+  if (row.finished_at != null && !isValidDateString(row.finished_at)) {
+    throw new BackupValidationError(`trackedShows[${index}] has an invalid finished_at date.`)
+  }
+  if (row.hidden_at != null && !isValidDateString(row.hidden_at)) {
+    throw new BackupValidationError(`trackedShows[${index}] has an invalid hidden_at date.`)
+  }
   return {
     tmdb_id: row.tmdb_id,
     name: row.name,
     poster_path: row.poster_path ?? null,
     added_at: row.added_at,
+    finished_at: row.finished_at ?? null,
+    hidden_at: row.hidden_at ?? null,
   }
 }
 
@@ -274,10 +284,16 @@ function dedupeBy(rows, keyFn) {
 // constraint — an existing row is never touched, so exported added_at /
 // watched_at values are preserved on insert and current Rerun data always
 // wins on conflict. The returned `data` set contains only the rows Supabase
-// actually inserted, which is what lets the caller report accurate
-// added-vs-skipped counts without a separate read-back.
+// actually inserted.
+//
+// A chunk whose write fails is counted as `failed`, never as `alreadyPresent`
+// — otherwise a failed write would be indistinguishable from rows that were
+// genuinely already in Supabase, and the UI could tell the user data is safe
+// when it was never written.
 async function upsertChunked(supabase, table, rows, onConflict, chunkSize, onChunkProgress) {
   let inserted = 0
+  let alreadyPresent = 0
+  let failed = 0
   const errors = []
   for (let i = 0; i < rows.length; i += chunkSize) {
     const chunk = rows.slice(i, i + chunkSize)
@@ -286,13 +302,16 @@ async function upsertChunked(supabase, table, rows, onConflict, chunkSize, onChu
       .upsert(chunk, { onConflict, ignoreDuplicates: true })
       .select('*')
     if (error) {
+      failed += chunk.length
       errors.push(`Couldn't write ${chunk.length} ${table} row(s): ${error.message}`)
     } else {
-      inserted += data?.length ?? 0
+      const insertedInChunk = data?.length ?? 0
+      inserted += insertedInChunk
+      alreadyPresent += chunk.length - insertedInChunk
     }
     onChunkProgress?.(Math.min(i + chunkSize, rows.length), rows.length)
   }
-  return { inserted, errors }
+  return { inserted, alreadyPresent, failed, errors }
 }
 
 // Imports an already-validated native backup. Merge-only: writes go through
@@ -305,13 +324,15 @@ export async function importNativeBackup(validated, options = {}) {
   const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE
   const onProgress = options.onProgress
 
-  const rawShowsCount = validated.trackedShows.length
-  const rawEpisodesCount = validated.watchedEpisodes.length
   const trackedShows = dedupeBy(validated.trackedShows, (row) => row.tmdb_id)
   const watchedEpisodes = dedupeBy(
     validated.watchedEpisodes,
     (row) => `${row.tmdb_show_id}:${row.season_number}:${row.episode_number}`,
   )
+  // Rows that repeat within the file itself, collapsed before ever reaching
+  // Supabase — distinct from rows Supabase reports as already present.
+  const showsDuplicateInFile = validated.trackedShows.length - trackedShows.length
+  const episodesDuplicateInFile = validated.watchedEpisodes.length - watchedEpisodes.length
   const totalRows = trackedShows.length + watchedEpisodes.length
 
   onProgress?.({ phase: 'writing', current: 0, total: totalRows, label: 'Adding shows…' })
@@ -348,9 +369,13 @@ export async function importNativeBackup(validated, options = {}) {
   return {
     kind: 'native',
     showsAdded: showsResult.inserted,
-    showsSkipped: rawShowsCount - showsResult.inserted,
+    showsAlreadyTracked: showsResult.alreadyPresent,
+    showsDuplicateInFile,
+    showsFailed: showsResult.failed,
     episodesAdded: episodesResult.inserted,
-    episodesSkipped: rawEpisodesCount - episodesResult.inserted,
+    episodesAlreadyLogged: episodesResult.alreadyPresent,
+    episodesDuplicateInFile,
+    episodesFailed: episodesResult.failed,
     errors: [...showsResult.errors, ...episodesResult.errors],
   }
 }

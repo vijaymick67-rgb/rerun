@@ -81,6 +81,8 @@ function validShow(overrides = {}) {
     name: 'Lucky',
     poster_path: '/lucky.jpg',
     added_at: '2026-01-01T00:00:00.000Z',
+    finished_at: null,
+    hidden_at: null,
     ...overrides,
   }
 }
@@ -119,7 +121,7 @@ describe('serializeBackup', () => {
   it('keeps only the allowlisted fields, dropping ids and any other internal columns', () => {
     const backup = serializeBackup({
       trackedShows: [
-        { id: 1, tmdb_id: 100, name: 'Lucky', poster_path: '/p.jpg', added_at: 'A', hidden_at: null, finished_at: null },
+        { id: 1, tmdb_id: 100, name: 'Lucky', poster_path: '/p.jpg', added_at: 'A', hidden_at: null, finished_at: null, other: 'x' },
       ],
       watchedEpisodes: [
         { id: 55, tmdb_show_id: 100, season_number: 1, episode_number: 1, episode_name: 'Pilot', runtime_minutes: 30, watched_at: 'B' },
@@ -127,11 +129,30 @@ describe('serializeBackup', () => {
       exportedAt: 'X',
     })
     expect(Object.keys(backup.data.trackedShows[0]).sort()).toEqual(
-      ['added_at', 'name', 'poster_path', 'tmdb_id'].sort(),
+      ['added_at', 'finished_at', 'hidden_at', 'name', 'poster_path', 'tmdb_id'].sort(),
     )
     expect(Object.keys(backup.data.watchedEpisodes[0]).sort()).toEqual(
       ['episode_name', 'episode_number', 'runtime_minutes', 'season_number', 'tmdb_show_id', 'watched_at'].sort(),
     )
+  })
+
+  it('preserves finished_at and hidden_at (personal completion / hidden state), not just watch-history fields', () => {
+    const backup = serializeBackup({
+      trackedShows: [
+        validShow({ tmdb_id: 1, finished_at: '2026-02-01T00:00:00.000Z', hidden_at: null }),
+        validShow({ tmdb_id: 2, finished_at: null, hidden_at: '2026-03-01T00:00:00.000Z' }),
+        validShow({ tmdb_id: 3, finished_at: null, hidden_at: null }),
+      ],
+      watchedEpisodes: [],
+      exportedAt: 'X',
+    })
+    const [finished, hidden, active] = backup.data.trackedShows
+    expect(finished.finished_at).toBe('2026-02-01T00:00:00.000Z')
+    expect(finished.hidden_at).toBeNull()
+    expect(hidden.hidden_at).toBe('2026-03-01T00:00:00.000Z')
+    expect(hidden.finished_at).toBeNull()
+    expect(active.finished_at).toBeNull()
+    expect(active.hidden_at).toBeNull()
   })
 
   it('orders shows by added date, then tmdb id', () => {
@@ -175,15 +196,30 @@ describe('serializeBackup', () => {
 describe('buildBackup', () => {
   it('reads both tables and serializes them with no ids or secrets', async () => {
     const supabase = makeReadSupabase({
-      tracked_shows: [{ id: 9, tmdb_id: 100, name: 'Lucky', poster_path: '/p.jpg', added_at: 'A' }],
+      tracked_shows: [{ id: 9, tmdb_id: 100, name: 'Lucky', poster_path: '/p.jpg', added_at: 'A', finished_at: null, hidden_at: null }],
       watched_episodes: [{ id: 1, tmdb_show_id: 100, season_number: 1, episode_number: 1, episode_name: 'Pilot', runtime_minutes: 30, watched_at: 'B' }],
     })
     const backup = await buildBackup({ supabase, now: 'NOW' })
     expect(backup.exportedAt).toBe('NOW')
-    expect(backup.data.trackedShows).toEqual([{ tmdb_id: 100, name: 'Lucky', poster_path: '/p.jpg', added_at: 'A' }])
+    expect(backup.data.trackedShows).toEqual([
+      { tmdb_id: 100, name: 'Lucky', poster_path: '/p.jpg', added_at: 'A', finished_at: null, hidden_at: null },
+    ])
     expect(backup.data.watchedEpisodes).toEqual([
       { tmdb_show_id: 100, season_number: 1, episode_number: 1, episode_name: 'Pilot', runtime_minutes: 30, watched_at: 'B' },
     ])
+  })
+
+  it('carries a personally-finished or hidden show\'s state through export', async () => {
+    const supabase = makeReadSupabase({
+      tracked_shows: [
+        { id: 9, tmdb_id: 100, name: 'Finished Show', poster_path: null, added_at: 'A', finished_at: '2026-02-01T00:00:00.000Z', hidden_at: null },
+        { id: 10, tmdb_id: 200, name: 'Hidden Show', poster_path: null, added_at: 'A', finished_at: null, hidden_at: '2026-03-01T00:00:00.000Z' },
+      ],
+      watched_episodes: [],
+    })
+    const backup = await buildBackup({ supabase, now: 'NOW' })
+    expect(backup.data.trackedShows[0].finished_at).toBe('2026-02-01T00:00:00.000Z')
+    expect(backup.data.trackedShows[1].hidden_at).toBe('2026-03-01T00:00:00.000Z')
   })
 
   it('explicitly paginates tracked_shows past the default 1,000-row response cap', async () => {
@@ -254,6 +290,28 @@ describe('validateNativeBackup', () => {
     expect(() => validateNativeBackup(backup)).not.toThrow()
   })
 
+  it('accepts null finished_at/hidden_at as well as valid timestamps', () => {
+    const backup = nativeBackup({
+      trackedShows: [
+        validShow({ tmdb_id: 1, finished_at: null, hidden_at: null }),
+        validShow({ tmdb_id: 2, finished_at: '2026-02-01T00:00:00.000Z', hidden_at: null }),
+        validShow({ tmdb_id: 3, finished_at: null, hidden_at: '2026-03-01T00:00:00.000Z' }),
+      ],
+    })
+    const result = validateNativeBackup(backup)
+    expect(result.trackedShows[0]).toMatchObject({ finished_at: null, hidden_at: null })
+    expect(result.trackedShows[1]).toMatchObject({ finished_at: '2026-02-01T00:00:00.000Z', hidden_at: null })
+    expect(result.trackedShows[2]).toMatchObject({ finished_at: null, hidden_at: '2026-03-01T00:00:00.000Z' })
+  })
+
+  it('defaults a missing finished_at/hidden_at (older backups) to null rather than rejecting the row', () => {
+    const { finished_at: _f, hidden_at: _h, ...legacyShow } = validShow()
+    const backup = nativeBackup({ trackedShows: [legacyShow] })
+    const result = validateNativeBackup(backup)
+    expect(result.trackedShows[0].finished_at).toBeNull()
+    expect(result.trackedShows[0].hidden_at).toBeNull()
+  })
+
   it.each([
     ['null root', null],
     ['array root', [1, 2, 3]],
@@ -301,6 +359,10 @@ describe('validateNativeBackup', () => {
     ['empty name', validShow({ name: '  ' })],
     ['non-string poster_path', validShow({ poster_path: 123 })],
     ['malformed added_at', validShow({ added_at: 'not-a-date' })],
+    ['malformed finished_at', validShow({ finished_at: 'not-a-date' })],
+    ['non-string non-null finished_at', validShow({ finished_at: 12345 })],
+    ['malformed hidden_at', validShow({ hidden_at: 'not-a-date' })],
+    ['non-string non-null hidden_at', validShow({ hidden_at: 12345 })],
   ])('rejects a malformed tracked-show row (%s)', (_label, badRow) => {
     expect(() => validateNativeBackup(nativeBackup({ trackedShows: [badRow] }))).toThrow(BackupValidationError)
   })
@@ -331,7 +393,18 @@ describe('importNativeBackup', () => {
     const validated = validateNativeBackup(nativeBackup())
     const result = await importNativeBackup(validated, { supabase })
 
-    expect(result).toMatchObject({ kind: 'native', showsAdded: 1, showsSkipped: 0, episodesAdded: 1, episodesSkipped: 0, errors: [] })
+    expect(result).toMatchObject({
+      kind: 'native',
+      showsAdded: 1,
+      showsAlreadyTracked: 0,
+      showsDuplicateInFile: 0,
+      showsFailed: 0,
+      episodesAdded: 1,
+      episodesAlreadyLogged: 0,
+      episodesDuplicateInFile: 0,
+      episodesFailed: 0,
+      errors: [],
+    })
     expect(supabase.tables.tracked_shows.get('100')).toEqual(validShow())
     expect(supabase.tables.watched_episodes.get('100|1|1')).toEqual(validEpisode())
   })
@@ -352,11 +425,24 @@ describe('importNativeBackup', () => {
     const result = await importNativeBackup(validated, { supabase })
 
     expect(result.showsAdded).toBe(0)
-    expect(result.showsSkipped).toBe(1)
+    expect(result.showsAlreadyTracked).toBe(1)
     expect(result.episodesAdded).toBe(0)
-    expect(result.episodesSkipped).toBe(1)
+    expect(result.episodesAlreadyLogged).toBe(1)
     expect(supabase.tables.tracked_shows.get('100')).toEqual(existingShow)
     expect(supabase.tables.watched_episodes.get('100|1|1')).toEqual(existingEpisode)
+  })
+
+  it('never overwrites an existing show\'s finished_at/hidden_at with the incoming backup\'s values (current Rerun state wins)', async () => {
+    const existingShow = validShow({ finished_at: '2026-01-15T00:00:00.000Z', hidden_at: null })
+    const supabase = makeWriteSupabase({ tracked_shows: [['100', existingShow]] })
+    const validated = validateNativeBackup(
+      nativeBackup({ trackedShows: [validShow({ finished_at: null, hidden_at: '2026-01-20T00:00:00.000Z' })] }),
+    )
+    const result = await importNativeBackup(validated, { supabase })
+
+    expect(result.showsAdded).toBe(0)
+    expect(result.showsAlreadyTracked).toBe(1)
+    expect(supabase.tables.tracked_shows.get('100')).toEqual(existingShow)
   })
 
   it('is idempotent: importing the same backup twice adds nothing the second time', async () => {
@@ -374,14 +460,14 @@ describe('importNativeBackup', () => {
 
     const second = await importNativeBackup(validated, { supabase })
     expect(second.showsAdded).toBe(0)
-    expect(second.showsSkipped).toBe(2)
+    expect(second.showsAlreadyTracked).toBe(2)
     expect(second.episodesAdded).toBe(0)
-    expect(second.episodesSkipped).toBe(2)
+    expect(second.episodesAlreadyLogged).toBe(2)
     expect(supabase.tables.tracked_shows.size).toBe(2)
     expect(supabase.tables.watched_episodes.size).toBe(2)
   })
 
-  it('deduplicates rows that repeat within a single file', async () => {
+  it('deduplicates rows that repeat within a single file, counted separately from already-tracked rows', async () => {
     const supabase = makeWriteSupabase()
     const validated = {
       trackedShows: [validShow(), validShow()],
@@ -389,9 +475,28 @@ describe('importNativeBackup', () => {
     }
     const result = await importNativeBackup(validated, { supabase })
     expect(result.showsAdded).toBe(1)
-    expect(result.showsSkipped).toBe(1)
+    expect(result.showsDuplicateInFile).toBe(1)
+    expect(result.showsAlreadyTracked).toBe(0)
     expect(result.episodesAdded).toBe(1)
-    expect(result.episodesSkipped).toBe(1)
+    expect(result.episodesDuplicateInFile).toBe(1)
+    expect(result.episodesAlreadyLogged).toBe(0)
+  })
+
+  it('reports accurate counts across a mixture of inserted, existing, and duplicate rows', async () => {
+    const supabase = makeWriteSupabase({ tracked_shows: [['100', validShow({ tmdb_id: 100 })]] })
+    const validated = {
+      trackedShows: [
+        validShow({ tmdb_id: 100 }), // already tracked in Supabase
+        validShow({ tmdb_id: 200 }), // new
+        validShow({ tmdb_id: 200 }), // duplicate of the new row, within the file
+      ],
+      watchedEpisodes: [],
+    }
+    const result = await importNativeBackup(validated, { supabase })
+    expect(result.showsAdded).toBe(1)
+    expect(result.showsAlreadyTracked).toBe(1)
+    expect(result.showsDuplicateInFile).toBe(1)
+    expect(result.showsFailed).toBe(0)
   })
 
   it('writes in chunks rather than one request per row', async () => {
@@ -418,6 +523,85 @@ describe('importNativeBackup', () => {
     expect(result.showsAdded).toBe(0)
     expect(result.errors).toEqual(["Couldn't write 1 tracked_shows row(s): network blip"])
     expect(result.episodesAdded).toBe(1) // the unrelated table's write still succeeded
+  })
+
+  it('counts a failed show chunk as failed to write, never as already tracked', async () => {
+    const supabase = makeWriteSupabase()
+    const realFrom = supabase.from.bind(supabase)
+    supabase.from = (name) => {
+      if (name === 'tracked_shows') {
+        return { upsert: () => ({ select: () => Promise.resolve({ data: null, error: { message: 'write failed' } }) }) }
+      }
+      return realFrom(name)
+    }
+    const validated = validateNativeBackup(nativeBackup({ trackedShows: [validShow()], watchedEpisodes: [] }))
+    const result = await importNativeBackup(validated, { supabase })
+
+    expect(result.showsAdded).toBe(0)
+    expect(result.showsAlreadyTracked).toBe(0)
+    expect(result.showsDuplicateInFile).toBe(0)
+    expect(result.showsFailed).toBe(1)
+    expect(result.errors).toEqual(["Couldn't write 1 tracked_shows row(s): write failed"])
+  })
+
+  it('counts a failed episode chunk as failed to write, never as already logged', async () => {
+    const supabase = makeWriteSupabase()
+    const realFrom = supabase.from.bind(supabase)
+    supabase.from = (name) => {
+      if (name === 'watched_episodes') {
+        return { upsert: () => ({ select: () => Promise.resolve({ data: null, error: { message: 'write failed' } }) }) }
+      }
+      return realFrom(name)
+    }
+    const validated = validateNativeBackup(nativeBackup({ trackedShows: [], watchedEpisodes: [validEpisode()] }))
+    const result = await importNativeBackup(validated, { supabase })
+
+    expect(result.episodesAdded).toBe(0)
+    expect(result.episodesAlreadyLogged).toBe(0)
+    expect(result.episodesDuplicateInFile).toBe(0)
+    expect(result.episodesFailed).toBe(1)
+    expect(result.errors).toEqual(["Couldn't write 1 watched_episodes row(s): write failed"])
+  })
+
+  it('does not let a failed chunk\'s failure bleed into the counts for a later, successful chunk', async () => {
+    const supabase = makeWriteSupabase()
+    let call = 0
+    const realFrom = supabase.from.bind(supabase)
+    supabase.from = (name) => {
+      if (name === 'tracked_shows') {
+        call += 1
+        if (call === 1) {
+          return { upsert: () => ({ select: () => Promise.resolve({ data: null, error: { message: 'blip' } }) }) }
+        }
+      }
+      return realFrom(name)
+    }
+    const validated = { trackedShows: [validShow({ tmdb_id: 1 }), validShow({ tmdb_id: 2 })], watchedEpisodes: [] }
+    const result = await importNativeBackup(validated, { supabase, chunkSize: 1 })
+
+    expect(result.showsAdded).toBe(1)
+    expect(result.showsFailed).toBe(1)
+    expect(result.showsAlreadyTracked).toBe(0)
+  })
+
+  it('restores an active, a personally-finished, and a hidden show into an empty database with their state intact', async () => {
+    const supabase = makeWriteSupabase()
+    const validated = validateNativeBackup(
+      nativeBackup({
+        trackedShows: [
+          validShow({ tmdb_id: 1, name: 'Active', finished_at: null, hidden_at: null }),
+          validShow({ tmdb_id: 2, name: 'Finished', finished_at: '2026-02-01T00:00:00.000Z', hidden_at: null }),
+          validShow({ tmdb_id: 3, name: 'Hidden', finished_at: null, hidden_at: '2026-03-01T00:00:00.000Z' }),
+        ],
+        watchedEpisodes: [],
+      }),
+    )
+    const result = await importNativeBackup(validated, { supabase })
+
+    expect(result.showsAdded).toBe(3)
+    expect(supabase.tables.tracked_shows.get('1')).toMatchObject({ finished_at: null, hidden_at: null })
+    expect(supabase.tables.tracked_shows.get('2')).toMatchObject({ finished_at: '2026-02-01T00:00:00.000Z', hidden_at: null })
+    expect(supabase.tables.tracked_shows.get('3')).toMatchObject({ finished_at: null, hidden_at: '2026-03-01T00:00:00.000Z' })
   })
 
   it('never calls TMDB during a native import', async () => {

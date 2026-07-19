@@ -218,12 +218,24 @@ function NativeImportSummary({ summary }) {
       <dl className="mt-3 space-y-1.5 text-sm">
         <SummaryRow
           label="Shows added"
-          value={`${summary.showsAdded} new · ${summary.showsSkipped} already tracked`}
+          value={`${summary.showsAdded} new · ${summary.showsAlreadyTracked} already tracked`}
         />
         <SummaryRow
           label="Watched episodes added"
-          value={`${summary.episodesAdded} new · ${summary.episodesSkipped} already logged`}
+          value={`${summary.episodesAdded} new · ${summary.episodesAlreadyLogged} already logged`}
         />
+        {summary.showsDuplicateInFile > 0 && (
+          <SummaryRow label="Duplicate shows in file" value={summary.showsDuplicateInFile} />
+        )}
+        {summary.episodesDuplicateInFile > 0 && (
+          <SummaryRow label="Duplicate episodes in file" value={summary.episodesDuplicateInFile} />
+        )}
+        {summary.showsFailed > 0 && (
+          <SummaryRow label="Shows failed to write" value={summary.showsFailed} />
+        )}
+        {summary.episodesFailed > 0 && (
+          <SummaryRow label="Episodes failed to write" value={summary.episodesFailed} />
+        )}
       </dl>
 
       {summary.errors.length > 0 && (

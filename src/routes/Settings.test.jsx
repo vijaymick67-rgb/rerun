@@ -132,13 +132,17 @@ describe('Settings: Backup & Restore section', () => {
     expect(container.textContent).toContain('Network unreachable')
   })
 
-  it('renders a native-backup import summary with added/skipped counts', async () => {
+  it('renders a native-backup import summary with added/already-tracked counts', async () => {
     backupMock.importBackupFile.mockResolvedValue({
       kind: 'native',
       showsAdded: 2,
-      showsSkipped: 1,
+      showsAlreadyTracked: 1,
+      showsDuplicateInFile: 0,
+      showsFailed: 0,
       episodesAdded: 5,
-      episodesSkipped: 3,
+      episodesAlreadyLogged: 3,
+      episodesDuplicateInFile: 0,
+      episodesFailed: 0,
       errors: [],
     })
     await mountSettings()
@@ -152,6 +156,37 @@ describe('Settings: Backup & Restore section', () => {
     expect(container.textContent).toContain('1 already tracked')
     expect(container.textContent).toContain('5 new')
     expect(container.textContent).toContain('3 already logged')
+    // No duplicate/failed rows in this summary — those lines must stay hidden, not read as zero-value noise.
+    expect(container.textContent).not.toContain('Duplicate shows in file')
+    expect(container.textContent).not.toContain('Shows failed to write')
+  })
+
+  it('never labels duplicate-in-file or failed-write rows as "already tracked/logged" data', async () => {
+    backupMock.importBackupFile.mockResolvedValue({
+      kind: 'native',
+      showsAdded: 1,
+      showsAlreadyTracked: 0,
+      showsDuplicateInFile: 2,
+      showsFailed: 4,
+      episodesAdded: 0,
+      episodesAlreadyLogged: 0,
+      episodesDuplicateInFile: 1,
+      episodesFailed: 3,
+      errors: ["Couldn't write 4 tracked_shows row(s): network blip", "Couldn't write 3 watched_episodes row(s): network blip"],
+    })
+    await mountSettings()
+    await selectFile('{"format":"rerun-backup"}')
+
+    expect(container.textContent).toContain('1 new')
+    expect(container.textContent).toContain('0 already tracked')
+    expect(container.textContent).toContain('Duplicate shows in file')
+    expect(container.textContent).toContain('2')
+    expect(container.textContent).toContain('Shows failed to write')
+    expect(container.textContent).toContain('4')
+    expect(container.textContent).toContain('Duplicate episodes in file')
+    expect(container.textContent).toContain('Episodes failed to write')
+    // The 4 failed shows must never be counted as "already tracked" data the user can trust exists.
+    expect(container.textContent).not.toMatch(/4 already tracked/)
   })
 
   it('renders the existing external-import summary shape unchanged', async () => {
@@ -180,7 +215,18 @@ describe('Settings: Backup & Restore section', () => {
   })
 
   it('resets the input value after selection so the same file can be chosen again', async () => {
-    backupMock.importBackupFile.mockResolvedValue({ kind: 'native', showsAdded: 0, showsSkipped: 0, episodesAdded: 0, episodesSkipped: 0, errors: [] })
+    backupMock.importBackupFile.mockResolvedValue({
+      kind: 'native',
+      showsAdded: 0,
+      showsAlreadyTracked: 0,
+      showsDuplicateInFile: 0,
+      showsFailed: 0,
+      episodesAdded: 0,
+      episodesAlreadyLogged: 0,
+      episodesDuplicateInFile: 0,
+      episodesFailed: 0,
+      errors: [],
+    })
     await mountSettings()
     await selectFile('{"format":"rerun-backup"}')
     expect(fileInput().value).toBe('')
@@ -206,7 +252,18 @@ describe('Settings: Backup & Restore section', () => {
     expect(exportRow.disabled).toBe(true)
 
     await act(async () => {
-      gate.resolve({ kind: 'native', showsAdded: 0, showsSkipped: 0, episodesAdded: 0, episodesSkipped: 0, errors: [] })
+      gate.resolve({
+        kind: 'native',
+        showsAdded: 0,
+        showsAlreadyTracked: 0,
+        showsDuplicateInFile: 0,
+        showsFailed: 0,
+        episodesAdded: 0,
+        episodesAlreadyLogged: 0,
+        episodesDuplicateInFile: 0,
+        episodesFailed: 0,
+        errors: [],
+      })
       await gate.promise
     })
     expect(importRow.disabled).toBe(false)
