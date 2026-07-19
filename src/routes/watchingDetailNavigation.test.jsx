@@ -94,17 +94,31 @@ describe('App structure: Watching is preserved across the detail subtree', () =>
     expect(html).toContain('route-content route-content--nested')
   })
 
-  it('keeps the shared route wrapper on route-content--tab across the whole subtree', () => {
-    // The outer wrapper stays a tab shell (never swapped to a nested class on the
-    // shared element), so returning to the list does not re-trigger a fade.
-    expect(renderApp('/watching')).toContain('route-content route-content--tab')
-    expect(renderApp('/watching/123')).toContain('route-content route-content--tab')
+  it('never puts the Watching list under the tab fade wrapper (the flash precondition)', () => {
+    // Root fix: a route into Watching must not remount and replay the
+    // `.route-content--tab` opacity fade over freshly built swipe rows — that
+    // replay is what exposed the red Remove layer for a frame on iOS WebKit.
+    // The persistent list is a plain `route-content`; no Watching-subtree route
+    // renders a tab-fade wrapper at all.
+    for (const path of ['/watching', '/watching/123', '/watching/123/season/1']) {
+      expect(renderApp(path)).not.toContain('route-content--tab')
+    }
+    // The non-Watching tabs deliberately keep the fade (no persistent swipe
+    // layer there, so it is harmless).
+    for (const path of ['/browse', '/stats', '/settings']) {
+      expect(renderApp(path)).toContain('route-content route-content--tab')
+    }
   })
 
-  it('does not render the Watching list under a different tab (Browse stays isolated)', () => {
+  it('keeps the single Watching instance mounted but hidden and inert under another tab', () => {
     const html = renderApp('/browse')
+    // Browse renders in its own tab-fade wrapper...
     expect(html).toContain('route-content route-content--tab')
-    expect(html).not.toContain('style="display:none"')
+    // ...while the persistent Watching list stays in the tree but hidden
+    // (display:none) and out of the accessibility tree (aria-hidden), so it can
+    // be revealed instantly on return with no remount, and cannot obscure or
+    // intercept the active tab while hidden.
+    expect(html).toMatch(/class="route-content" style="display:none" aria-hidden="true"/)
     expect(html).not.toContain('nested-page')
   })
 
@@ -137,22 +151,41 @@ describe('App structure: route destinations unchanged', () => {
 })
 
 describe('Watching route transitions', () => {
-  it('refreshes exactly once after detail -> season -> detail -> Watching', () => {
-    let state = { detailOpen: false, refreshToken: 0 }
-    for (const detailOpen of [true, true, true, false]) {
-      state = advanceWatchingRefreshState(state, detailOpen)
+  it('refreshes exactly once returning through detail -> season -> detail -> list', () => {
+    // `showing` is false whenever the list is covered — by a detail overlay OR
+    // by another main tab — and true on the list itself.
+    let state = { showing: true, hasShown: true, refreshToken: 0 }
+    for (const showing of [false, false, false, true]) {
+      state = advanceWatchingRefreshState(state, showing)
     }
-    expect(state).toEqual({ detailOpen: false, refreshToken: 1 })
+    expect(state.refreshToken).toBe(1)
   })
 
-  it('increments once per repeated detail round-trip and never on detail entry', () => {
-    let state = { detailOpen: false, refreshToken: 0 }
+  it('increments once per round-trip back into view and never on leaving', () => {
+    let state = { showing: true, hasShown: true, refreshToken: 0 }
     for (let roundTrip = 0; roundTrip < 10; roundTrip += 1) {
-      state = advanceWatchingRefreshState(state, true)
+      state = advanceWatchingRefreshState(state, false) // leave the list (detail or another tab)
       expect(state.refreshToken).toBe(roundTrip)
-      state = advanceWatchingRefreshState(state, false)
+      state = advanceWatchingRefreshState(state, true) // come back into view
       expect(state.refreshToken).toBe(roundTrip + 1)
     }
+  })
+
+  it('never bumps on the first reveal (mount-time load paints that view)', () => {
+    // Cold start already showing the list: the first advance must not bump.
+    let shownFirst = { showing: true, hasShown: true, refreshToken: 0 }
+    shownFirst = advanceWatchingRefreshState(shownFirst, true)
+    expect(shownFirst.refreshToken).toBe(0)
+
+    // Cold start on another tab (hidden first): revealing the list the first
+    // time still must not bump — that first paint is the mount-time load.
+    let hiddenFirst = { showing: false, hasShown: false, refreshToken: 0 }
+    hiddenFirst = advanceWatchingRefreshState(hiddenFirst, true)
+    expect(hiddenFirst.refreshToken).toBe(0)
+    // ...but the next time it returns to view it does refresh quietly.
+    hiddenFirst = advanceWatchingRefreshState(hiddenFirst, false)
+    hiddenFirst = advanceWatchingRefreshState(hiddenFirst, true)
+    expect(hiddenFirst.refreshToken).toBe(1)
   })
 
   it('disarms swipe and remove-dialog state while Watching is hidden', () => {
