@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSubscribeHandler } from '../api/push/subscribe.js'
 import { createUnsubscribeHandler } from '../api/push/unsubscribe.js'
 import { createTestPushHandler, TEST_NOTIFICATION_BODY, TEST_NOTIFICATION_TITLE } from '../api/push/test.js'
+import { createPreferencesHandler } from '../api/push/preferences.js'
 import { validateSubscriptionPayload } from '../api/push/_validation.js'
 import { generateManagementToken, hashManagementToken, managementTokenMatches } from '../api/push/_managementToken.js'
 
@@ -37,20 +38,26 @@ function validSubscriptionBody(endpoint = 'https://web.push.apple.com/abc123') {
 // and test.js) — each handler only ever makes one such lookup per request,
 // so one configurable result per test is enough.
 function makeSupabaseStub({
-  upsertResult = { error: null },
+  upsertResult = { data: [{ preferred_notification_hour_ist: 20 }], error: null },
   deleteResult = { error: null },
   rowResult = { data: null, error: null },
   countResult = { count: 0, error: null },
   updateResult = { error: null },
 } = {}) {
-  const calls = { upsertArgs: null, deleteEqCalls: [], selectCalls: [], eqCalls: [], updateArgs: [] }
+  const calls = { upsertArgs: null, upsertSelectCols: null, deleteEqCalls: [], selectCalls: [], eqCalls: [], updateArgs: [] }
   return {
     calls,
     from() {
       return {
         upsert: (obj, opts) => {
           calls.upsertArgs = [obj, opts]
-          return Promise.resolve(upsertResult)
+          return {
+            select: (cols) => {
+              calls.upsertSelectCols = cols
+              return Promise.resolve(upsertResult)
+            },
+            then: (onFulfilled, onRejected) => Promise.resolve(upsertResult).then(onFulfilled, onRejected),
+          }
         },
         delete: () => ({
           eq: (col, val) => {
@@ -168,11 +175,20 @@ describe('POST /api/push/subscribe', () => {
     expect(res.body.success).toBe(true)
     expect(typeof res.body.managementToken).toBe('string')
     expect(res.body.managementToken.length).toBeGreaterThan(32)
+    // Lets Settings display the current server-stored value without a
+    // separate read endpoint — see api/push/preferences.js and
+    // src/routes/Settings.jsx.
+    expect(res.body.preferredNotificationHourIst).toBe(20)
+    expect(supabase.calls.upsertSelectCols).toBe('preferred_notification_hour_ist')
 
     const [row, opts] = supabase.calls.upsertArgs
     expect(row).toMatchObject({ endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth, user_agent: 'Rerun-Test/1.0' })
     expect(row.management_token_hash).toBe(hashManagementToken(res.body.managementToken))
     expect(opts).toEqual({ onConflict: 'endpoint' })
+    // Never resets an already-chosen notification time back to the column
+    // default on a re-subscribe — the column is simply absent from the
+    // upsert payload.
+    expect(row).not.toHaveProperty('preferred_notification_hour_ist')
   })
 
   it('rejects new subscriptions once the stored-subscription cap is reached', async () => {
@@ -441,5 +457,114 @@ describe('POST /api/push/test', () => {
     await handler(testRequest(), res)
     expect(sendNotification).not.toHaveBeenCalled()
     expect(res.statusCode).toBe(429)
+  })
+})
+
+describe('POST /api/push/preferences', () => {
+  it('rejects non-POST methods', async () => {
+    const handler = createPreferencesHandler({ supabase: makeSupabaseStub() })
+    const res = response()
+    await handler(request({ method: 'GET' }), res)
+    expect(res.statusCode).toBe(405)
+  })
+
+  it('rejects a missing management token before touching Supabase', async () => {
+    const supabase = makeSupabaseStub()
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { preferredNotificationHourIst: 20 } }), res)
+    expect(res.statusCode).toBe(400)
+    expect(supabase.calls.selectCalls).toEqual([])
+  })
+
+  it.each([18, 19, 20, 21, 22, 23])('accepts integer hour %i', async (hour) => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { id: 7 }, error: null } })
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: hour } }), res)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toEqual({ success: true, preferredNotificationHourIst: hour })
+  })
+
+  it('rejects 17 (below the allowed range) without touching Supabase', async () => {
+    const supabase = makeSupabaseStub()
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: 17 } }), res)
+    expect(res.statusCode).toBe(400)
+    expect(supabase.calls.selectCalls).toEqual([])
+  })
+
+  it('rejects 24 (above the allowed range) without touching Supabase', async () => {
+    const supabase = makeSupabaseStub()
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: 24 } }), res)
+    expect(res.statusCode).toBe(400)
+    expect(supabase.calls.selectCalls).toEqual([])
+  })
+
+  it('rejects strings, floats, null, and a missing hour', async () => {
+    const supabase = makeSupabaseStub()
+    const handler = createPreferencesHandler({ supabase })
+    for (const bad of ['20', 20.5, null]) {
+      const res = response()
+      await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: bad } }), res)
+      expect(res.statusCode).toBe(400)
+    }
+    const missingRes = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN } }), missingRes)
+    expect(missingRes.statusCode).toBe(400)
+    expect(supabase.calls.selectCalls).toEqual([])
+  })
+
+  it('requires ownership: an unrecognized token returns 404 and never updates', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: null, error: null } })
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: 'someone-elses-token', preferredNotificationHourIst: 21 } }), res)
+    expect(res.statusCode).toBe(404)
+    expect(supabase.calls.updateArgs).toEqual([])
+  })
+
+  it("resolves exactly one subscription by management-token hash, so an invalid token can never reach another subscription's row", async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { id: 7 }, error: null } })
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: 22 } }), res)
+    expect(supabase.calls.eqCalls).toEqual([['management_token_hash', TEST_TOKEN_HASH]])
+    expect(supabase.calls.updateArgs).toEqual([
+      [{ preferred_notification_hour_ist: 22, updated_at: expect.any(String) }, 'id', 7],
+    ])
+  })
+
+  it('never rotates the management token — only preferred_notification_hour_ist and updated_at are written', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { id: 7 }, error: null } })
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: 22 } }), res)
+    const [updateObj] = supabase.calls.updateArgs[0]
+    expect(Object.keys(updateObj).sort()).toEqual(['preferred_notification_hour_ist', 'updated_at'])
+    expect(res.body).toEqual({ success: true, preferredNotificationHourIst: 22 })
+  })
+
+  it('returns only success and the hour — never a subscription endpoint or push keys', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { id: 7 }, error: null } })
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: 22 } }), res)
+    expect(Object.keys(res.body).sort()).toEqual(['preferredNotificationHourIst', 'success'])
+  })
+
+  it('returns 500 without leaking details when the update fails', async () => {
+    const supabase = makeSupabaseStub({
+      rowResult: { data: { id: 7 }, error: null },
+      updateResult: { error: { message: 'db exploded' } },
+    })
+    const handler = createPreferencesHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { managementToken: TEST_TOKEN, preferredNotificationHourIst: 22 } }), res)
+    expect(res.statusCode).toBe(500)
+    expect(JSON.stringify(res.body)).not.toContain('db exploded')
   })
 })

@@ -1,6 +1,7 @@
 import { createSupabaseAdmin } from './_supabaseAdmin.js'
 import { validateSubscriptionPayload } from './_validation.js'
 import { generateManagementToken, hashManagementToken } from './_managementToken.js'
+import { DEFAULT_PREFERRED_HOUR_IST } from '../../src/lib/notifications/deliverySchedule.js'
 
 export const config = { runtime: 'nodejs' }
 
@@ -92,18 +93,28 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
       existingRow?.automatic_notifications_enabled_at ??
       new Date(Date.now() - ACTIVATION_GRACE_WINDOW_MS).toISOString()
 
-    const { error } = await client.from('push_subscriptions').upsert(
-      {
-        endpoint: result.endpoint,
-        p256dh: result.p256dh,
-        auth: result.auth,
-        user_agent: userAgent,
-        management_token_hash: managementTokenHash,
-        automatic_notifications_enabled_at: automaticNotificationsEnabledAt,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'endpoint' },
-    )
+    // preferred_notification_hour_ist is deliberately left out of this
+    // upsert payload — leaving it out of the ON CONFLICT SET clause means a
+    // re-subscribe never resets an already-chosen notification time back to
+    // the column default; a brand-new row picks up the column's own DB
+    // default (20) at insert time. .select() reads back whichever value is
+    // actually stored so the response can hand it to the client without
+    // duplicating the default as a second source of truth.
+    const { data: upsertedRows, error } = await client
+      .from('push_subscriptions')
+      .upsert(
+        {
+          endpoint: result.endpoint,
+          p256dh: result.p256dh,
+          auth: result.auth,
+          user_agent: userAgent,
+          management_token_hash: managementTokenHash,
+          automatic_notifications_enabled_at: automaticNotificationsEnabledAt,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'endpoint' },
+      )
+      .select('preferred_notification_hour_ist')
 
     if (error) {
       console.error('push_subscribe_failed', { message: error.message })
@@ -111,7 +122,8 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
       return
     }
 
-    json(res, 200, { success: true, managementToken })
+    const preferredNotificationHourIst = upsertedRows?.[0]?.preferred_notification_hour_ist ?? DEFAULT_PREFERRED_HOUR_IST
+    json(res, 200, { success: true, managementToken, preferredNotificationHourIst })
   }
 }
 

@@ -40,3 +40,11 @@ export async function sendTestPush(managementToken, fetchImpl = fetch) {
 export async function verifyAutomaticEpisodePush(managementToken, fetchImpl = fetch) {
   return postJson('/api/notifications/verify', { managementToken }, fetchImpl)
 }
+
+// Updates the caller's own preferred automatic-notification delivery hour
+// (18-23 = 6 PM-11 PM IST). Like sendTestPush/verifyAutomaticEpisodePush,
+// this never accepts or sends a caller-supplied subscription endpoint —
+// ownership is proven by managementToken alone.
+export async function updateNotificationPreference(managementToken, preferredNotificationHourIst, fetchImpl = fetch) {
+  return postJson('/api/push/preferences', { managementToken, preferredNotificationHourIst }, fetchImpl)
+}
