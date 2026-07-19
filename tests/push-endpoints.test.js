@@ -3,6 +3,7 @@ import { createSubscribeHandler } from '../api/push/subscribe.js'
 import { createUnsubscribeHandler } from '../api/push/unsubscribe.js'
 import { createTestPushHandler, TEST_NOTIFICATION_BODY, TEST_NOTIFICATION_TITLE } from '../api/push/test.js'
 import { validateSubscriptionPayload } from '../api/push/_validation.js'
+import { generateManagementToken, hashManagementToken, managementTokenMatches } from '../api/push/_managementToken.js'
 
 function response() {
   return {
@@ -31,13 +32,18 @@ function validSubscriptionBody(endpoint = 'https://web.push.apple.com/abc123') {
   return { endpoint, keys: validKeys() }
 }
 
+// A single generic `rowResult` backs every select().eq().maybeSingle() call
+// (existing-endpoint lookup in subscribe.js, token lookup in unsubscribe.js
+// and test.js) — each handler only ever makes one such lookup per request,
+// so one configurable result per test is enough.
 function makeSupabaseStub({
   upsertResult = { error: null },
   deleteResult = { error: null },
-  selectResult = { data: [], error: null },
+  rowResult = { data: null, error: null },
+  countResult = { count: 0, error: null },
   updateResult = { error: null },
 } = {}) {
-  const calls = { upsertArgs: null, deleteEqCalls: [], selectOrderArgs: null, updateArgs: [] }
+  const calls = { upsertArgs: null, deleteEqCalls: [], selectCalls: [], eqCalls: [], updateArgs: [] }
   return {
     calls,
     from() {
@@ -52,18 +58,24 @@ function makeSupabaseStub({
             return Promise.resolve(deleteResult)
           },
         }),
-        select: (cols) => ({
-          order: (col, opts) => {
-            calls.selectOrderArgs = [cols, col, opts]
-            return Promise.resolve(selectResult)
-          },
-        }),
         update: (obj) => ({
           eq: (col, val) => {
             calls.updateArgs.push([obj, col, val])
             return Promise.resolve(updateResult)
           },
         }),
+        select: (cols, opts) => {
+          calls.selectCalls.push([cols, opts])
+          if (opts?.count === 'exact' && opts?.head) {
+            return Promise.resolve(countResult)
+          }
+          return {
+            eq: (col, val) => {
+              calls.eqCalls.push([col, val])
+              return { maybeSingle: () => Promise.resolve(rowResult) }
+            },
+          }
+        },
       }
     },
   }
@@ -100,6 +112,35 @@ describe('validateSubscriptionPayload', () => {
   })
 })
 
+describe('management token helpers', () => {
+  it('generates a URL-safe opaque token', () => {
+    const token = generateManagementToken()
+    expect(token).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(token.length).toBeGreaterThan(32)
+  })
+
+  it('hashes deterministically', () => {
+    const token = generateManagementToken()
+    expect(hashManagementToken(token)).toBe(hashManagementToken(token))
+    expect(hashManagementToken(token)).not.toBe(token)
+  })
+
+  it('matches only the correct token against its own hash', () => {
+    const token = generateManagementToken()
+    const other = generateManagementToken()
+    const hash = hashManagementToken(token)
+    expect(managementTokenMatches(token, hash)).toBe(true)
+    expect(managementTokenMatches(other, hash)).toBe(false)
+  })
+
+  it('treats missing/empty token or hash as no match', () => {
+    expect(managementTokenMatches('', 'abc')).toBe(false)
+    expect(managementTokenMatches(null, 'abc')).toBe(false)
+    expect(managementTokenMatches('abc', '')).toBe(false)
+    expect(managementTokenMatches('abc', null)).toBe(false)
+  })
+})
+
 describe('POST /api/push/subscribe', () => {
   it('rejects non-POST methods', async () => {
     const handler = createSubscribeHandler({ supabase: makeSupabaseStub() })
@@ -117,17 +158,39 @@ describe('POST /api/push/subscribe', () => {
     expect(supabase.calls.upsertArgs).toBeNull()
   })
 
-  it('upserts a valid subscription by endpoint', async () => {
+  it('upserts a valid subscription by endpoint and returns a fresh management token', async () => {
     const supabase = makeSupabaseStub()
     const handler = createSubscribeHandler({ supabase })
     const res = response()
     const body = validSubscriptionBody()
     await handler(request({ body, headers: { 'user-agent': 'Rerun-Test/1.0' } }), res)
     expect(res.statusCode).toBe(200)
-    expect(res.body).toEqual({ success: true })
+    expect(res.body.success).toBe(true)
+    expect(typeof res.body.managementToken).toBe('string')
+    expect(res.body.managementToken.length).toBeGreaterThan(32)
+
     const [row, opts] = supabase.calls.upsertArgs
     expect(row).toMatchObject({ endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth, user_agent: 'Rerun-Test/1.0' })
+    expect(row.management_token_hash).toBe(hashManagementToken(res.body.managementToken))
     expect(opts).toEqual({ onConflict: 'endpoint' })
+  })
+
+  it('rejects new subscriptions once the stored-subscription cap is reached', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: null, error: null }, countResult: { count: 20, error: null } })
+    const handler = createSubscribeHandler({ supabase })
+    const res = response()
+    await handler(request({ body: validSubscriptionBody() }), res)
+    expect(res.statusCode).toBe(429)
+    expect(supabase.calls.upsertArgs).toBeNull()
+  })
+
+  it('does not enforce the cap when re-subscribing an already-stored endpoint', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { id: 1 }, error: null }, countResult: { count: 999, error: null } })
+    const handler = createSubscribeHandler({ supabase })
+    const res = response()
+    await handler(request({ body: validSubscriptionBody() }), res)
+    expect(res.statusCode).toBe(200)
+    expect(supabase.calls.upsertArgs).not.toBeNull()
   })
 
   it('returns 500 without leaking details when Supabase write fails', async () => {
@@ -148,6 +211,9 @@ describe('POST /api/push/subscribe', () => {
 })
 
 describe('POST /api/push/unsubscribe', () => {
+  const token = 'a-real-management-token'
+  const tokenHash = hashManagementToken(token)
+
   it('rejects non-POST methods', async () => {
     const handler = createUnsubscribeHandler({ supabase: makeSupabaseStub() })
     const res = response()
@@ -158,31 +224,63 @@ describe('POST /api/push/unsubscribe', () => {
   it('rejects a missing endpoint', async () => {
     const handler = createUnsubscribeHandler({ supabase: makeSupabaseStub() })
     const res = response()
-    await handler(request({ body: {} }), res)
+    await handler(request({ body: { managementToken: token } }), res)
     expect(res.statusCode).toBe(400)
   })
 
-  it('deletes the stored row by endpoint', async () => {
-    const supabase = makeSupabaseStub()
-    const handler = createUnsubscribeHandler({ supabase })
+  it('rejects a missing management token', async () => {
+    const handler = createUnsubscribeHandler({ supabase: makeSupabaseStub() })
     const res = response()
     await handler(request({ body: { endpoint: 'https://web.push.apple.com/abc123' } }), res)
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('returns 404 for an endpoint with no stored subscription', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: null, error: null } })
+    const handler = createUnsubscribeHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { endpoint: 'https://web.push.apple.com/abc123', managementToken: token } }), res)
+    expect(res.statusCode).toBe(404)
+    expect(supabase.calls.deleteEqCalls).toEqual([])
+  })
+
+  it('rejects a mismatched management token without deleting the row', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { management_token_hash: tokenHash }, error: null } })
+    const handler = createUnsubscribeHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { endpoint: 'https://web.push.apple.com/abc123', managementToken: 'wrong-token' } }), res)
+    expect(res.statusCode).toBe(403)
+    expect(supabase.calls.deleteEqCalls).toEqual([])
+  })
+
+  it('deletes the stored row by endpoint when the management token matches', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: { management_token_hash: tokenHash }, error: null } })
+    const handler = createUnsubscribeHandler({ supabase })
+    const res = response()
+    await handler(request({ body: { endpoint: 'https://web.push.apple.com/abc123', managementToken: token } }), res)
     expect(res.statusCode).toBe(200)
     expect(supabase.calls.deleteEqCalls).toEqual([['endpoint', 'https://web.push.apple.com/abc123']])
   })
 })
 
 const BASE_ENV = { VITE_VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv', VAPID_SUBJECT: 'mailto:owner@example.com' }
+const TEST_TOKEN = 'the-owning-installations-token'
+const TEST_TOKEN_HASH = hashManagementToken(TEST_TOKEN)
 
 function storedRow(overrides = {}) {
   return {
     endpoint: 'https://web.push.apple.com/abc123',
     p256dh: validKeys().p256dh,
     auth: validKeys().auth,
+    management_token_hash: TEST_TOKEN_HASH,
     updated_at: '2020-01-01T00:00:00.000Z',
     last_test_sent_at: null,
     ...overrides,
   }
+}
+
+function testRequest(body = {}) {
+  return request({ body: { managementToken: TEST_TOKEN, ...body } })
 }
 
 describe('POST /api/push/test', () => {
@@ -193,30 +291,41 @@ describe('POST /api/push/test', () => {
     expect(res.statusCode).toBe(405)
   })
 
+  it('rejects a missing management token before touching Supabase or VAPID', async () => {
+    const supabase = makeSupabaseStub()
+    const setVapidDetails = vi.fn()
+    const handler = createTestPushHandler({ env: BASE_ENV, supabase, setVapidDetails })
+    const res = response()
+    await handler(request({ body: {} }), res)
+    expect(res.statusCode).toBe(400)
+    expect(setVapidDetails).not.toHaveBeenCalled()
+    expect(supabase.calls.selectCalls).toEqual([])
+  })
+
   it('returns 500 when VAPID is not configured, without calling Supabase', async () => {
     const supabase = makeSupabaseStub()
     const handler = createTestPushHandler({ env: {}, supabase })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
     expect(res.statusCode).toBe(500)
-    expect(supabase.calls.selectOrderArgs).toBeNull()
+    expect(supabase.calls.selectCalls).toEqual([])
   })
 
-  it('returns 404 when there is no stored subscription', async () => {
-    const supabase = makeSupabaseStub({ selectResult: { data: [], error: null } })
+  it('returns 404 when no subscription matches the management token', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: null, error: null } })
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, setVapidDetails: vi.fn() })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
     expect(res.statusCode).toBe(404)
   })
 
-  it('sends the fixed test payload to the stored subscription and reports success', async () => {
-    const supabase = makeSupabaseStub({ selectResult: { data: [storedRow()], error: null } })
+  it('sends the fixed test payload only to the subscription owned by the token, and reports success', async () => {
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow(), error: null } })
     const sendNotification = vi.fn().mockResolvedValue(undefined)
     const setVapidDetails = vi.fn()
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
 
     expect(setVapidDetails).toHaveBeenCalledWith('mailto:owner@example.com', 'pub', 'priv')
     expect(sendNotification).toHaveBeenCalledTimes(1)
@@ -228,56 +337,69 @@ describe('POST /api/push/test', () => {
     const parsed = JSON.parse(payload)
     expect(parsed).toEqual({ title: TEST_NOTIFICATION_TITLE, body: TEST_NOTIFICATION_BODY, url: '/watching' })
     expect(res.statusCode).toBe(200)
-    expect(res.body).toEqual({ success: true, sent: 1, staleRemoved: 0 })
+    expect(res.body).toEqual({ success: true })
+    // Looked up by the caller's own token hash — never a table-wide read.
+    expect(supabase.calls.eqCalls).toEqual([['management_token_hash', TEST_TOKEN_HASH]])
   })
 
   it('never accepts a caller-supplied delivery target', async () => {
-    const supabase = makeSupabaseStub({ selectResult: { data: [storedRow()], error: null } })
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow(), error: null } })
     const sendNotification = vi.fn().mockResolvedValue(undefined)
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails: vi.fn() })
     const res = response()
-    await handler(request({ body: { endpoint: 'https://evil.example.com/hijack' } }), res)
+    await handler(testRequest({ endpoint: 'https://evil.example.com/hijack' }), res)
     const [sentSubscription] = sendNotification.mock.calls[0]
     expect(sentSubscription.endpoint).toBe('https://web.push.apple.com/abc123')
   })
 
+  it("never sends to another installation's subscription even if other rows exist", async () => {
+    // The stub only ever returns the row matching the queried hash — this
+    // asserts the handler queries by hash rather than reading every row.
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow(), error: null } })
+    const sendNotification = vi.fn().mockResolvedValue(undefined)
+    const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails: vi.fn() })
+    const res = response()
+    await handler(testRequest(), res)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(supabase.calls.selectCalls).toEqual([['*', undefined]])
+  })
+
   it('removes the subscription on a 410 Gone response and reports expiry', async () => {
-    const supabase = makeSupabaseStub({ selectResult: { data: [storedRow()], error: null } })
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow(), error: null } })
     const sendNotification = vi.fn().mockRejectedValue(Object.assign(new Error('gone'), { statusCode: 410 }))
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails: vi.fn() })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
     expect(res.statusCode).toBe(410)
     expect(supabase.calls.deleteEqCalls).toEqual([['endpoint', 'https://web.push.apple.com/abc123']])
   })
 
   it('removes the subscription on a 404 Not Found response the same way', async () => {
-    const supabase = makeSupabaseStub({ selectResult: { data: [storedRow()], error: null } })
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow(), error: null } })
     const sendNotification = vi.fn().mockRejectedValue(Object.assign(new Error('missing'), { statusCode: 404 }))
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails: vi.fn() })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
     expect(res.statusCode).toBe(410)
     expect(supabase.calls.deleteEqCalls).toEqual([['endpoint', 'https://web.push.apple.com/abc123']])
   })
 
   it('reports a delivery failure without deleting the subscription for a transient error', async () => {
-    const supabase = makeSupabaseStub({ selectResult: { data: [storedRow()], error: null } })
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow(), error: null } })
     const sendNotification = vi.fn().mockRejectedValue(Object.assign(new Error('upstream unavailable'), { statusCode: 503 }))
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails: vi.fn() })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
     expect(res.statusCode).toBe(502)
     expect(supabase.calls.deleteEqCalls).toEqual([])
   })
 
   it('rate-limits repeat test sends to the same subscription', async () => {
-    const recentRow = storedRow({ last_test_sent_at: new Date().toISOString() })
-    const supabase = makeSupabaseStub({ selectResult: { data: [recentRow], error: null } })
+    const supabase = makeSupabaseStub({ rowResult: { data: storedRow({ last_test_sent_at: new Date().toISOString() }), error: null } })
     const sendNotification = vi.fn().mockResolvedValue(undefined)
     const handler = createTestPushHandler({ env: BASE_ENV, supabase, sendNotification, setVapidDetails: vi.fn() })
     const res = response()
-    await handler(request(), res)
+    await handler(testRequest(), res)
     expect(sendNotification).not.toHaveBeenCalled()
     expect(res.statusCode).toBe(429)
   })

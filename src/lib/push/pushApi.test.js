@@ -33,22 +33,27 @@ describe('subscribePush', () => {
 })
 
 describe('unsubscribePush', () => {
-  it('POSTs the endpoint to /api/push/unsubscribe', async () => {
+  it('POSTs the endpoint and management token to /api/push/unsubscribe', async () => {
     const fetchImpl = fakeFetch(200, { success: true })
-    await unsubscribePush('https://example.test/1', fetchImpl)
+    await unsubscribePush('https://example.test/1', 'a-management-token', fetchImpl)
     expect(fetchImpl).toHaveBeenCalledWith(
       '/api/push/unsubscribe',
-      expect.objectContaining({ body: JSON.stringify({ endpoint: 'https://example.test/1' }) }),
+      expect.objectContaining({
+        body: JSON.stringify({ endpoint: 'https://example.test/1', managementToken: 'a-management-token' }),
+      }),
     )
   })
 })
 
 describe('sendTestPush', () => {
-  it('POSTs to /api/push/test with no caller-supplied target', async () => {
-    const fetchImpl = fakeFetch(200, { success: true, sent: 1 })
-    const result = await sendTestPush(fetchImpl)
-    expect(result).toEqual({ success: true, sent: 1 })
-    expect(fetchImpl).toHaveBeenCalledWith('/api/push/test', expect.objectContaining({ method: 'POST' }))
+  it('POSTs the management token to /api/push/test with no caller-supplied delivery target', async () => {
+    const fetchImpl = fakeFetch(200, { success: true })
+    const result = await sendTestPush('a-management-token', fetchImpl)
+    expect(result).toEqual({ success: true })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/push/test',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ managementToken: 'a-management-token' }) }),
+    )
   })
 
   it('surfaces a generic error when the response has no JSON body', async () => {
@@ -59,6 +64,6 @@ describe('sendTestPush', () => {
         throw new Error('not json')
       },
     })
-    await expect(sendTestPush(fetchImpl)).rejects.toThrow('Request failed (502)')
+    await expect(sendTestPush('a-management-token', fetchImpl)).rejects.toThrow('Request failed (502)')
   })
 })

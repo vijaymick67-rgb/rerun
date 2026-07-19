@@ -14,6 +14,7 @@ import {
   unsubscribeFromPush,
 } from '../lib/push/pushClient'
 import { sendTestPush, subscribePush, unsubscribePush } from '../lib/push/pushApi'
+import { clearStoredManagementToken, getStoredManagementToken, setStoredManagementToken } from '../lib/push/managementToken'
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY
 
@@ -394,7 +395,8 @@ function NotificationsSection() {
       }
       const registration = await getServiceWorkerRegistration()
       const subscription = await subscribeToPush(registration, VAPID_PUBLIC_KEY)
-      await subscribePush(subscription)
+      const subscribeResult = await subscribePush(subscription)
+      setStoredManagementToken(subscribeResult?.managementToken ?? null)
       setStatus('enabled')
     } catch (err) {
       setSubscriptionError(err.message || 'Could not enable notifications.')
@@ -404,10 +406,16 @@ function NotificationsSection() {
 
   async function handleSendTest() {
     if (testState === 'sending') return
+    const managementToken = getStoredManagementToken()
+    if (!managementToken) {
+      setTestError('No stored subscription — enable notifications again.')
+      setTestState('error')
+      return
+    }
     setTestState('sending')
     setTestError(null)
     try {
-      await sendTestPush()
+      await sendTestPush(managementToken)
       setTestState('sent')
     } catch (err) {
       setTestError(err.message || 'Could not deliver the test notification.')
@@ -423,11 +431,13 @@ function NotificationsSection() {
       const registration = await getServiceWorkerRegistration()
       const subscription = await getExistingPushSubscription(registration)
       const endpoint = subscription?.endpoint ?? null
+      const managementToken = getStoredManagementToken()
       await unsubscribeFromPush(subscription)
-      if (endpoint) await unsubscribePush(endpoint)
+      clearStoredManagementToken()
       setStatus('idle')
       setTestState('idle')
       setTestError(null)
+      if (endpoint && managementToken) await unsubscribePush(endpoint, managementToken)
     } catch (err) {
       setSubscriptionError(err.message || 'Could not disable notifications.')
     } finally {

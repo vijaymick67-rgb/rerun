@@ -21,12 +21,15 @@ export async function subscribePush(subscription, fetchImpl = fetch) {
   return postJson('/api/push/subscribe', subscription.toJSON(), fetchImpl)
 }
 
-export async function unsubscribePush(endpoint, fetchImpl = fetch) {
-  return postJson('/api/push/unsubscribe', { endpoint }, fetchImpl)
+// managementToken proves this browser install owns the subscription being
+// removed — the server rejects a bare endpoint with no matching token.
+export async function unsubscribePush(endpoint, managementToken, fetchImpl = fetch) {
+  return postJson('/api/push/unsubscribe', { endpoint, managementToken }, fetchImpl)
 }
 
-// Sends a manual test push to the already-stored subscription(s) — this
-// endpoint never accepts a caller-supplied target.
-export async function sendTestPush(fetchImpl = fetch) {
-  return postJson('/api/push/test', {}, fetchImpl)
+// Sends a manual test push to the caller's own stored subscription — this
+// endpoint never accepts a caller-supplied target, and never broadcasts to
+// any subscription other than the one the managementToken proves ownership of.
+export async function sendTestPush(managementToken, fetchImpl = fetch) {
+  return postJson('/api/push/test', { managementToken }, fetchImpl)
 }

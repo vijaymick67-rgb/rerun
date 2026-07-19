@@ -1,4 +1,5 @@
 import { createSupabaseAdmin } from './_supabaseAdmin.js'
+import { managementTokenMatches } from './_managementToken.js'
 
 export const config = { runtime: 'nodejs' }
 
@@ -21,12 +22,38 @@ export function createUnsubscribeHandler({ env = process.env, supabase } = {}) {
       json(res, 400, { error: 'Invalid endpoint' })
       return
     }
+    const managementToken = req.body?.managementToken
+    if (typeof managementToken !== 'string' || managementToken.trim() === '') {
+      json(res, 400, { error: 'Invalid management token' })
+      return
+    }
 
     let client
     try {
       client = supabase ?? createSupabaseAdmin(env)
     } catch {
       json(res, 500, { error: 'Push notifications are not configured' })
+      return
+    }
+
+    // Proves the caller manages this specific subscription before deleting
+    // it — a bare endpoint string isn't proof of ownership.
+    const { data: row, error: readError } = await client
+      .from('push_subscriptions')
+      .select('management_token_hash')
+      .eq('endpoint', endpoint)
+      .maybeSingle()
+    if (readError) {
+      console.error('push_unsubscribe_lookup_failed', { message: readError.message })
+      json(res, 500, { error: 'Could not remove subscription' })
+      return
+    }
+    if (!row) {
+      json(res, 404, { error: 'No stored subscription for that endpoint' })
+      return
+    }
+    if (!managementTokenMatches(managementToken, row.management_token_hash)) {
+      json(res, 403, { error: 'Not authorized to manage this subscription' })
       return
     }
 

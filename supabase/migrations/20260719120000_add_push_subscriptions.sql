@@ -15,6 +15,11 @@ create table if not exists public.push_subscriptions (
   p256dh text not null,
   auth text not null,
   user_agent text null,
+  -- SHA-256 hash of a per-installation opaque token, generated server-side
+  -- and returned to the client exactly once at subscribe time. Proves a
+  -- caller manages this specific subscription (required by /api/push/test
+  -- and /api/push/unsubscribe) without adding real auth to a no-auth app.
+  management_token_hash text not null unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_test_sent_at timestamptz null

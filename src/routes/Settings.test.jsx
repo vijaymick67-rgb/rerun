@@ -30,10 +30,17 @@ vi.mock('../lib/push/pushApi', () => ({
   sendTestPush: vi.fn(),
 }))
 
+vi.mock('../lib/push/managementToken', () => ({
+  getStoredManagementToken: vi.fn(),
+  setStoredManagementToken: vi.fn(),
+  clearStoredManagementToken: vi.fn(),
+}))
+
 import * as backupMock from '../lib/backup'
 import * as pushSupportMock from '../lib/push/pushSupport'
 import * as pushClientMock from '../lib/push/pushClient'
 import * as pushApiMock from '../lib/push/pushApi'
+import * as managementTokenMock from '../lib/push/managementToken'
 import Settings from './Settings'
 
 let container = null
@@ -104,6 +111,9 @@ beforeEach(() => {
   pushApiMock.subscribePush.mockReset()
   pushApiMock.unsubscribePush.mockReset()
   pushApiMock.sendTestPush.mockReset()
+  managementTokenMock.getStoredManagementToken.mockReset().mockReturnValue('stored-management-token')
+  managementTokenMock.setStoredManagementToken.mockReset()
+  managementTokenMock.clearStoredManagementToken.mockReset()
   delete globalThis.Notification
 })
 
@@ -362,7 +372,7 @@ describe('Settings: Notifications section', () => {
       toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }),
     }
     pushClientMock.subscribeToPush.mockResolvedValue(subscription)
-    pushApiMock.subscribePush.mockResolvedValue({ success: true })
+    pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
 
     await mountSettings()
     await flush()
@@ -373,6 +383,7 @@ describe('Settings: Notifications section', () => {
 
     expect(pushClientMock.requestNotificationPermission).toHaveBeenCalledOnce()
     expect(pushApiMock.subscribePush).toHaveBeenCalledWith(subscription)
+    expect(managementTokenMock.setStoredManagementToken).toHaveBeenCalledWith('fresh-management-token')
     expect(container.textContent).toContain('Notifications enabled')
     expect(getByText('Send test notification')).not.toBeNull()
     expect(getByText('Disable notifications')).not.toBeNull()
@@ -401,17 +412,34 @@ describe('Settings: Notifications section', () => {
     pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
     const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
     pushClientMock.subscribeToPush.mockResolvedValue(subscription)
-    pushApiMock.subscribePush.mockResolvedValue({ success: true })
-    pushApiMock.sendTestPush.mockResolvedValue({ success: true, sent: 1 })
+    pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
+    pushApiMock.sendTestPush.mockResolvedValue({ success: true })
 
     await mountSettings()
     await flush()
     await act(async () => { getByText('Enable notifications').closest('button').click() })
     await act(async () => { getByText('Send test notification').closest('button').click() })
 
-    expect(pushApiMock.sendTestPush).toHaveBeenCalledOnce()
+    expect(pushApiMock.sendTestPush).toHaveBeenCalledWith('stored-management-token')
     expect(container.textContent).toContain('Test notification sent.')
     expect(container.textContent).not.toContain('received')
+  })
+
+  it('shows an error and never calls the server when no management token is stored', async () => {
+    pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
+    const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
+    pushClientMock.subscribeToPush.mockResolvedValue(subscription)
+    pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
+    managementTokenMock.getStoredManagementToken.mockReturnValue(null)
+
+    await mountSettings()
+    await flush()
+    await act(async () => { getByText('Enable notifications').closest('button').click() })
+    await act(async () => { getByText('Send test notification').closest('button').click() })
+
+    expect(pushApiMock.sendTestPush).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Test delivery error:')
+    expect(container.textContent).toContain('Notifications enabled')
   })
 
   it('shows a test delivery error while remaining enabled', async () => {
@@ -430,11 +458,11 @@ describe('Settings: Notifications section', () => {
     expect(container.textContent).toContain('Notifications enabled')
   })
 
-  it('disables notifications on tap: unsubscribes locally and removes the stored row', async () => {
+  it('disables notifications on tap: unsubscribes locally, clears the local token, and removes the stored row', async () => {
     pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
     const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
     pushClientMock.subscribeToPush.mockResolvedValue(subscription)
-    pushApiMock.subscribePush.mockResolvedValue({ success: true })
+    pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
 
     await mountSettings()
     await flush()
@@ -444,8 +472,29 @@ describe('Settings: Notifications section', () => {
     await act(async () => { getByText('Disable notifications').closest('button').click() })
 
     expect(pushClientMock.unsubscribeFromPush).toHaveBeenCalledWith(subscription)
-    expect(pushApiMock.unsubscribePush).toHaveBeenCalledWith('https://web.push.apple.com/abc')
+    expect(pushApiMock.unsubscribePush).toHaveBeenCalledWith('https://web.push.apple.com/abc', 'stored-management-token')
+    expect(managementTokenMock.clearStoredManagementToken).toHaveBeenCalledOnce()
     expect(getByText('Enable notifications')).not.toBeNull()
     expect(getByText('Send test notification')).toBeNull()
+  })
+
+  it('still unsubscribes locally and clears the local token when no management token was stored', async () => {
+    pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
+    const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
+    pushClientMock.subscribeToPush.mockResolvedValue(subscription)
+    pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
+
+    await mountSettings()
+    await flush()
+    await act(async () => { getByText('Enable notifications').closest('button').click() })
+
+    pushClientMock.getExistingPushSubscription.mockResolvedValue(subscription)
+    managementTokenMock.getStoredManagementToken.mockReturnValue(null)
+    await act(async () => { getByText('Disable notifications').closest('button').click() })
+
+    expect(pushClientMock.unsubscribeFromPush).toHaveBeenCalledWith(subscription)
+    expect(pushApiMock.unsubscribePush).not.toHaveBeenCalled()
+    expect(managementTokenMock.clearStoredManagementToken).toHaveBeenCalledOnce()
+    expect(getByText('Enable notifications')).not.toBeNull()
   })
 })

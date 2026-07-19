@@ -37,6 +37,19 @@ describe('legacy ntfy notification system removal (PRs #52-#56)', () => {
     ).toBe(true)
   })
 
+  it('added a forward migration that unschedules the old Supabase Cron jobs by name', () => {
+    const path = resolve(repoRoot, 'supabase/migrations/20260719130000_unschedule_legacy_notification_cron.sql')
+    expect(existsSync(path)).toBe(true)
+    const sql = readFileSync(path, 'utf8')
+    expect(sql).toContain('rerun-notification-worker-10pm-ist')
+    expect(sql).toContain('rerun-notification-worker-1005pm-ist')
+    expect(sql).toContain('rerun-notification-worker-1010pm-ist')
+    expect(sql).toContain('cron.unschedule')
+    // Deleting the file that scheduled these does not undo the applied
+    // database state, so removing 20260715100000 alone isn't enough.
+    expect(sql).toMatch(/idempotent|does not undo|safe/i)
+  })
+
   it('kept shared release/timezone/Watching helpers used elsewhere by the app', () => {
     for (const path of [
       'src/lib/tvmaze.js',
