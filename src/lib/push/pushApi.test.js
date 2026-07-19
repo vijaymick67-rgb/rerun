@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { sendTestPush, subscribePush, unsubscribePush } from './pushApi.js'
+import { sendTestPush, subscribePush, unsubscribePush, verifyAutomaticEpisodePush } from './pushApi.js'
 
 function fakeFetch(status, body) {
   return vi.fn().mockResolvedValue({
@@ -65,5 +65,50 @@ describe('sendTestPush', () => {
       },
     })
     await expect(sendTestPush('a-management-token', fetchImpl)).rejects.toThrow('Request failed (502)')
+  })
+})
+
+describe('verifyAutomaticEpisodePush', () => {
+  it('POSTs the management token to /api/notifications/verify with no caller-supplied delivery target', async () => {
+    const fetchImpl = fakeFetch(200, { success: true, synthetic: true })
+    const result = await verifyAutomaticEpisodePush('a-management-token', fetchImpl)
+    expect(result).toEqual({ success: true, synthetic: true })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/notifications/verify',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ managementToken: 'a-management-token' }),
+      }),
+    )
+  })
+
+  it('throws the server error message on failure', async () => {
+    const fetchImpl = fakeFetch(429, { error: 'A verification notification was sent recently — try again shortly' })
+    await expect(verifyAutomaticEpisodePush('a-management-token', fetchImpl)).rejects.toThrow(
+      'A verification notification was sent recently — try again shortly',
+    )
+  })
+
+  it('surfaces a generic error when the response has no JSON body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new Error('not json')
+      },
+    })
+    await expect(verifyAutomaticEpisodePush('a-management-token', fetchImpl)).rejects.toThrow('Request failed (502)')
+  })
+
+  it('never logs the management token', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchImpl = fakeFetch(200, { success: true })
+    await verifyAutomaticEpisodePush('a-secret-management-token', fetchImpl)
+    const loggedText = [...consoleSpy.mock.calls, ...errorSpy.mock.calls].flat().join(' ')
+    expect(loggedText).not.toContain('a-secret-management-token')
+    consoleSpy.mockRestore()
+    errorSpy.mockRestore()
   })
 })

@@ -28,6 +28,7 @@ vi.mock('../lib/push/pushApi', () => ({
   subscribePush: vi.fn(),
   unsubscribePush: vi.fn(),
   sendTestPush: vi.fn(),
+  verifyAutomaticEpisodePush: vi.fn(),
 }))
 
 vi.mock('../lib/push/managementToken', () => ({
@@ -117,6 +118,7 @@ beforeEach(() => {
   pushApiMock.subscribePush.mockReset()
   pushApiMock.unsubscribePush.mockReset()
   pushApiMock.sendTestPush.mockReset()
+  pushApiMock.verifyAutomaticEpisodePush.mockReset()
   managementTokenMock.getStoredManagementToken.mockReset().mockReturnValue('stored-management-token')
   managementTokenMock.setStoredManagementToken.mockReset()
   managementTokenMock.clearStoredManagementToken.mockReset()
@@ -517,6 +519,127 @@ describe('Settings: Notifications section', () => {
     await flush()
     expect(container.textContent).toContain('Automatic episode alerts')
     expect(container.textContent).toContain('Active')
+  })
+
+  describe('Verify automatic episode alert', () => {
+    async function enableNotifications() {
+      pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
+      const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
+      pushClientMock.subscribeToPush.mockResolvedValue(subscription)
+      pushApiMock.subscribePush.mockResolvedValue({ success: true, managementToken: 'fresh-management-token' })
+
+      await mountSettings()
+      await flush()
+      await act(async () => { getByText('Enable notifications').closest('button').click() })
+    }
+
+    it('does not render before notifications are enabled', async () => {
+      await mountSettings()
+      await flush()
+      expect(getByText('Verify automatic episode alert')).toBeNull()
+    })
+
+    it('renders once notifications are enabled', async () => {
+      await enableNotifications()
+      expect(getByText('Verify automatic episode alert')).not.toBeNull()
+    })
+
+    it('reads the stored management token and calls /api/notifications/verify with it on tap', async () => {
+      pushApiMock.verifyAutomaticEpisodePush.mockResolvedValue({ success: true, synthetic: true })
+      await enableNotifications()
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+
+      expect(managementTokenMock.getStoredManagementToken).toHaveBeenCalled()
+      expect(pushApiMock.verifyAutomaticEpisodePush).toHaveBeenCalledWith('stored-management-token')
+    })
+
+    it('shows a compact pending state and blocks a second tap while one request is in flight', async () => {
+      const gate = deferred()
+      pushApiMock.verifyAutomaticEpisodePush.mockReturnValue(gate.promise)
+      await enableNotifications()
+
+      const verifyRow = getByText('Verify automatic episode alert').closest('button')
+      await act(async () => { verifyRow.click() })
+      expect(getByText('Verifying…')).not.toBeNull()
+
+      const stillPendingRow = getByText('Verifying…').closest('button')
+      await act(async () => { stillPendingRow.click() }) // second tap while pending
+      expect(pushApiMock.verifyAutomaticEpisodePush).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        gate.resolve({ success: true, synthetic: true })
+        await gate.promise
+      })
+      expect(getByText('Verification notification sent')).not.toBeNull()
+    })
+
+    it('shows a success state after the endpoint confirms delivery', async () => {
+      pushApiMock.verifyAutomaticEpisodePush.mockResolvedValue({ success: true, synthetic: true })
+      await enableNotifications()
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+
+      expect(container.textContent).toContain('Verification notification sent')
+    })
+
+    it('shows the missing-token message and never calls the endpoint when no management token is stored', async () => {
+      managementTokenMock.getStoredManagementToken.mockReturnValue(null)
+      await enableNotifications()
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+
+      expect(pushApiMock.verifyAutomaticEpisodePush).not.toHaveBeenCalled()
+      expect(container.textContent).toContain('No stored subscription — enable notifications again.')
+    })
+
+    it('surfaces an endpoint error safely below the control', async () => {
+      pushApiMock.verifyAutomaticEpisodePush.mockRejectedValue(new Error('Could not deliver verification notification'))
+      await enableNotifications()
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+
+      expect(container.textContent).toContain('Could not deliver verification notification')
+    })
+
+    it('displays the 30-second throttle error returned by the endpoint', async () => {
+      pushApiMock.verifyAutomaticEpisodePush.mockRejectedValue(
+        new Error('A verification notification was sent recently — try again shortly'),
+      )
+      await enableNotifications()
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+
+      expect(container.textContent).toContain('A verification notification was sent recently — try again shortly')
+    })
+
+    it('leaves the existing Send test notification action calling the Phase 1 test endpoint unchanged', async () => {
+      pushApiMock.sendTestPush.mockResolvedValue({ success: true })
+      await enableNotifications()
+
+      await act(async () => { getByText('Send test notification').closest('button').click() })
+
+      expect(pushApiMock.sendTestPush).toHaveBeenCalledWith('stored-management-token')
+      expect(pushApiMock.verifyAutomaticEpisodePush).not.toHaveBeenCalled()
+      expect(container.textContent).toContain('Test notification sent.')
+    })
+
+    it('does not touch permission, subscription, or automatic-activation state', async () => {
+      pushApiMock.verifyAutomaticEpisodePush.mockResolvedValue({ success: true, synthetic: true })
+      await enableNotifications()
+      automaticActivationMock.setAutomaticNotificationsActivated.mockClear()
+      pushApiMock.subscribePush.mockClear()
+      pushClientMock.requestNotificationPermission.mockClear()
+      managementTokenMock.setStoredManagementToken.mockClear()
+
+      await act(async () => { getByText('Verify automatic episode alert').closest('button').click() })
+
+      expect(automaticActivationMock.setAutomaticNotificationsActivated).not.toHaveBeenCalled()
+      expect(pushApiMock.subscribePush).not.toHaveBeenCalled()
+      expect(pushClientMock.requestNotificationPermission).not.toHaveBeenCalled()
+      expect(managementTokenMock.setStoredManagementToken).not.toHaveBeenCalled()
+      expect(managementTokenMock.clearStoredManagementToken).not.toHaveBeenCalled()
+    })
   })
 
   describe('Phase 2 automatic-notification activation', () => {

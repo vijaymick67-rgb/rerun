@@ -317,9 +317,14 @@ scheduled worker; it never scans tracked shows.
 
 It's authenticated the same way Phase 1's manual test push is — the
 installation's own `managementToken` (from `localStorage`, already stored
-by Settings) — and shares that same 30-second resend throttle. There's no
-Settings UI button for it (out of scope for this phase); trigger it
-directly:
+by Settings) — and shares that same 30-second resend throttle.
+
+Settings → Notifications has a **Verify automatic episode alert** button
+(next to "Send test notification") that reads the stored `managementToken`
+and calls this endpoint directly on-device — no need to extract the token
+from the iPhone PWA's `localStorage` by hand. The endpoint can still be
+triggered manually from any machine (the token, not the request origin, is
+what's checked), which is useful off-device:
 
 ```sh
 curl -X POST https://rerun-nine.vercel.app/api/notifications/verify \
@@ -331,10 +336,9 @@ Steps:
 
 1. Enable notifications on the installed iPhone Home Screen PWA (Phase 1
    flow, unchanged) if not already enabled.
-2. Run the `curl` above (from any machine — the token, not the request
-   origin, is what's checked) with the `managementToken` value read from
-   that installation's `localStorage` key
-   `rerun:push:managementToken`.
+2. In Settings → Notifications, tap **Verify automatic episode alert**
+   (or run the `curl` above with the `managementToken` value read from
+   that installation's `localStorage` key `rerun:push:managementToken`).
 3. Background Rerun on the iPhone.
 4. Confirm delivery: title "Rerun Verification — New episode available",
    body "S1E1 · Verification episode".

@@ -33,3 +33,10 @@ export async function unsubscribePush(endpoint, managementToken, fetchImpl = fet
 export async function sendTestPush(managementToken, fetchImpl = fetch) {
   return postJson('/api/push/test', { managementToken }, fetchImpl)
 }
+
+// Sends a synthetic episode-style push to the caller's own stored
+// subscription, exercising the Phase 2 payload/template path (not a real
+// tracked-show notification) — physical-device verification only.
+export async function verifyAutomaticEpisodePush(managementToken, fetchImpl = fetch) {
+  return postJson('/api/notifications/verify', { managementToken }, fetchImpl)
+}
