@@ -1,10 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import TabBar from '../components/TabBar'
 
+vi.mock('../components/ReloadPrompt', () => ({ default: () => null }))
+
+import App from '../App.jsx'
+
 const source = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+
+function renderApp(path) {
+  return renderToStaticMarkup(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+}
 const rootPages = [
   ['./Browse.jsx', 'Browse'],
   ['./Watching.jsx', 'Watching'],
@@ -34,16 +46,26 @@ describe('root navigation polish', () => {
     expect(source(path)).not.toMatch(new RegExp(`<h1[^>]*>${heading}</h1>`))
   })
 
-  it('keeps detail headings and all route paths unchanged', () => {
+  it('keeps detail headings unchanged', () => {
     expect(source('./ShowDetail.jsx')).toContain('<h1')
     expect(source('./SeasonDetail.jsx')).toContain('<h1')
+  })
 
-    const app = source('../App.jsx')
-    for (const path of ['/browse', '/watching', '/stats', '/settings']) {
-      expect(app).toContain(`path="${path}"`)
-    }
-    expect(app).toContain('path="/watching/:tmdbId"')
-    expect(app).toContain('path="/watching/:tmdbId/season/:seasonNumber"')
+  it('resolves every route destination (rendered, not source-grepped)', () => {
+    // The Watching list moved out of the top-level <Routes> into a persistent
+    // sibling, so route wiring is verified by what each path actually renders
+    // rather than by grepping App.jsx for `path="…"` literals.
+    expect(renderApp('/browse')).toContain('placeholder="Find a show…"') // Browse search
+    expect(renderApp('/stats')).toContain('route-content route-content--tab')
+    expect(renderApp('/settings')).toContain('route-content route-content--tab')
+    // Watching list route and its default `/` alias render the app-page list.
+    expect(renderApp('/watching')).toContain('app-page')
+    expect(renderApp('/')).toContain('app-page')
+    // Nested detail depths still render their detail overlay.
+    expect(renderApp('/watching/123')).toContain('nested-page')
+    expect(renderApp('/watching/123/season/1')).toContain('nested-page')
+    // Unknown paths still fall through to NotFound.
+    expect(renderApp('/no-such-page')).toContain('Page not found')
   })
 
   it('keeps the poster action accessible, visible, and behaviorally unchanged', () => {

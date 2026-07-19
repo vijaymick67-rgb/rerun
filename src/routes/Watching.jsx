@@ -67,8 +67,19 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
     confirmingShow,
   )
 
-  // The list stays mounted while detail is open, but transient destructive UI
-  // must not stay armed behind the hidden subtree or reappear on return.
+  // The single Watching instance is mounted for the whole app lifetime, even
+  // while another tab is on screen, so the initial data load must not fire until
+  // the list is first actually shown. Otherwise a cold start on a different tab
+  // would eagerly fetch the hidden list. Once shown, it stays loaded and only
+  // refreshes quietly via `refreshSignal` on later returns.
+  const [hasActivated, setHasActivated] = useState(active)
+  useEffect(() => {
+    if (active) setHasActivated(true)
+  }, [active])
+
+  // The list stays mounted while detail is open (or another tab is active), but
+  // transient destructive UI must not stay armed behind the hidden subtree or
+  // reappear on return.
   useEffect(() => {
     if (active) return
     setOpenSwipeId(null)
@@ -96,6 +107,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
   }, [refreshSignal])
 
   useEffect(() => {
+    if (!hasActivated) return undefined
     let ignore = false
 
     async function load() {
@@ -242,7 +254,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
     return () => {
       ignore = true
     }
-  }, [cachedShows, loadAttempt])
+  }, [cachedShows, loadAttempt, hasActivated])
 
   function handleRemove(show) {
     setOpenSwipeId(null)

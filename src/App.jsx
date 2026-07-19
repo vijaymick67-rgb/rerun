@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Routes, Route, Outlet, useLocation } from 'react-router-dom'
+import { Routes, Route, useLocation } from 'react-router-dom'
 import TabBar from './components/TabBar'
 import NotFound from './components/NotFound'
 import ReloadPrompt from './components/ReloadPrompt'
@@ -16,44 +16,63 @@ import { getRouteLevel, getRouteShellKey } from './lib/scrollRestoration'
 import { advanceWatchingRefreshState } from './lib/watchingNavigation'
 import usePressIntent from './hooks/usePressIntent'
 
-// The Watching list is a persistent layout parent for its whole subtree (the
-// list plus the nested Show/Season detail routes). Because the single
-// <Watching> instance lives above the <Outlet>, opening a detail route does
-// NOT unmount it — it's only hidden while the detail overlay is on screen, then
-// revealed untouched on Back: same scroll, same rows, same content, no
-// skeleton, no page fade, no red Remove-layer flash. Detail routes render in a
-// nested-entry wrapper via <Outlet>, keyed by pathname so each detail entry
-// keeps its slide-in animation. When we return from a detail route the list is
-// asked to refresh in the background (`refreshSignal`) so freshly-marked
-// watched episodes are reflected without visibly reconstructing the screen.
-function WatchingSubtree() {
+// The Watching list is mounted exactly once for the whole app lifetime and kept
+// mounted across BOTH its nested detail subtree AND genuine main-tab switches.
+// Only its visibility toggles (display:none) — it never remounts on tab return.
+//
+// Why: the outer tab wrapper (RouteContent below) is keyed per shell and carries
+// the `.route-content--tab` opacity fade. If Watching lived inside that wrapper,
+// switching into it from another tab would change the key, remount every
+// WatchingRow, and replay the fade over freshly-built rows. On iOS WebKit that
+// remount+fade briefly exposes the red swipe-to-remove layer beneath the opaque
+// row fronts (the "red flash"). PR #77 removed that precondition for detail
+// round-trips (one shared shell key) but not for main-tab returns, which still
+// remounted. Hosting Watching as a persistent sibling here removes the remount
+// precondition for every route into Watching — cold entry, tab return, and
+// detail Back alike — instead of masking the red color for a frame.
+//
+// `active`/`showing` (not "mounted") gates all visible-only and network work:
+// while another tab or a detail overlay is on screen the list is inert (no open
+// swipe row, no eager first load), and a quiet background refresh runs once each
+// time the list comes back into view so data changed elsewhere still appears.
+function PersistentWatching({ hidden }) {
   const location = useLocation()
   const detailOpen = getRouteLevel(location.pathname) > 0
+  const showing = !hidden && !detailOpen
 
-  const refreshStateRef = useRef({ detailOpen, refreshToken: 0 })
-  refreshStateRef.current = advanceWatchingRefreshState(
-    refreshStateRef.current,
-    detailOpen,
-  )
+  // Bumps once each time the list transitions back into view (from a detail
+  // overlay OR from another main tab), never on the initial reveal — that first
+  // paint is served by Watching's own mount-time load.
+  const refreshStateRef = useRef({ showing, hasShown: showing, refreshToken: 0 })
+  refreshStateRef.current = advanceWatchingRefreshState(refreshStateRef.current, showing)
+  const refreshToken = refreshStateRef.current.refreshToken
 
   return (
-    <>
+    <div
+      className="route-content"
+      style={hidden ? { display: 'none' } : undefined}
+      aria-hidden={hidden || undefined}
+    >
       <div style={detailOpen ? { display: 'none' } : undefined}>
-        <Watching
-          active={!detailOpen}
-          refreshSignal={refreshStateRef.current.refreshToken}
-        />
+        <Watching active={showing} refreshSignal={refreshToken} />
       </div>
       {detailOpen && (
         <div key={location.pathname} className="route-content route-content--nested">
-          <Outlet />
+          <Routes>
+            <Route path="/watching/:tmdbId" element={<ShowDetail />} />
+            <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
+          </Routes>
         </div>
       )}
-    </>
+    </div>
   )
 }
 
-function RouteContent() {
+// The non-Watching tabs keep the original behaviour exactly: a wrapper keyed by
+// shell identity so each genuine tab switch remounts the destination and replays
+// the `.route-content--tab` fade. These screens have no persistent swipe layer,
+// so the fade is harmless for them and is intentionally preserved.
+function OtherRoutes() {
   const location = useLocation()
 
   return (
@@ -62,12 +81,6 @@ function RouteContent() {
         <Route path="/browse" element={<Browse />} />
         <Route path="/stats" element={<Stats />} />
         <Route path="/settings" element={<Settings />} />
-        <Route element={<WatchingSubtree />}>
-          <Route path="/" element={null} />
-          <Route path="/watching" element={null} />
-          <Route path="/watching/:tmdbId" element={<ShowDetail />} />
-          <Route path="/watching/:tmdbId/season/:seasonNumber" element={<SeasonDetail />} />
-        </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>
     </div>
@@ -81,11 +94,19 @@ function App() {
 
   usePressIntent()
 
+  const location = useLocation()
+  // getRouteShellKey resolves the whole Watching subtree (`/`, `/watching`, and
+  // both nested detail depths) to the single `/watching` identity, so this is
+  // true for exactly the routes the persistent list owns and false for every
+  // other tab and for unknown (NotFound) paths.
+  const isWatchingRoute = getRouteShellKey(location.pathname) === '/watching'
+
   return (
     <div className="app-shell">
       <GlobalTopScrim />
       <ScrollRestorationManager />
-      <RouteContent />
+      <PersistentWatching hidden={!isWatchingRoute} />
+      {!isWatchingRoute && <OtherRoutes />}
       <TabBar />
       <ReloadPrompt />
     </div>
