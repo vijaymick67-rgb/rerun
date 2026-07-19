@@ -13,7 +13,7 @@ import {
   subscribeToPush,
   unsubscribeFromPush,
 } from '../lib/push/pushClient'
-import { sendTestPush, subscribePush, unsubscribePush } from '../lib/push/pushApi'
+import { sendTestPush, subscribePush, unsubscribePush, verifyAutomaticEpisodePush } from '../lib/push/pushApi'
 import { clearStoredManagementToken, getStoredManagementToken, setStoredManagementToken } from '../lib/push/managementToken'
 import { getAutomaticNotificationsActivated, setAutomaticNotificationsActivated } from '../lib/push/automaticActivation'
 
@@ -69,6 +69,22 @@ function SettingsActionRow({ label, onPress, disabled, busyLabel }) {
   )
 }
 
+// Compact secondary control — same row shape as SettingsActionRow but muted
+// styling, so it reads as a diagnostics aside rather than a primary action.
+function SettingsSecondaryActionRow({ label, onPress, disabled, ariaLabel }) {
+  return (
+    <button
+      type="button"
+      onClick={onPress}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className="motion-press flex min-h-11 w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-xs font-normal text-(--color-text-muted) disabled:opacity-60"
+    >
+      <span>{label}</span>
+    </button>
+  )
+}
+
 function SettingsInfoRow({ label, status }) {
   return (
     <div className="flex min-h-11 items-center justify-between gap-3 px-4 py-2.5 text-sm">
@@ -89,13 +105,16 @@ function SettingsDescriptionRow({ label, description }) {
   )
 }
 
-function Banner({ tone, children }) {
+function Banner({ tone, children, live }) {
   const toneClass =
     tone === 'error'
       ? 'border-red-400/40 bg-red-400/10 text-red-400'
       : 'border-(--color-accent) bg-(--color-accent-muted) text-(--color-text)'
   return (
-    <p className={`motion-banner mt-3 rounded-lg border px-3 py-2 text-sm ${toneClass}`}>
+    <p
+      className={`motion-banner mt-3 rounded-lg border px-3 py-2 text-sm ${toneClass}`}
+      aria-live={live ? 'polite' : undefined}
+    >
       {children}
     </p>
   )
@@ -346,6 +365,8 @@ function NotificationsSection() {
   const [disabling, setDisabling] = useState(false)
   const [testState, setTestState] = useState('idle') // idle | sending | sent | error
   const [testError, setTestError] = useState(null)
+  const [verifyState, setVerifyState] = useState('idle') // idle | verifying | verified | error
+  const [verifyError, setVerifyError] = useState(null)
 
   useEffect(() => {
     if (supportState !== 'supported') return
@@ -449,6 +470,30 @@ function NotificationsSection() {
     }
   }
 
+  // Physical-device diagnostics only: sends a synthetic episode-style push
+  // through the Phase 2 payload path so the owner can confirm delivery on a
+  // real device without waiting for a real episode to air. Never touches
+  // tracked_shows/watched_episodes, the automatic activation flag, or the
+  // stored management token.
+  async function handleVerify() {
+    if (verifyState === 'verifying') return
+    const managementToken = getStoredManagementToken()
+    if (!managementToken) {
+      setVerifyError('No stored subscription — enable notifications again.')
+      setVerifyState('error')
+      return
+    }
+    setVerifyState('verifying')
+    setVerifyError(null)
+    try {
+      await verifyAutomaticEpisodePush(managementToken)
+      setVerifyState('verified')
+    } catch (err) {
+      setVerifyError(err.message || 'Could not deliver the verification notification.')
+      setVerifyState('error')
+    }
+  }
+
   async function handleDisable() {
     if (disabling) return
     setDisabling(true)
@@ -464,6 +509,8 @@ function NotificationsSection() {
       setStatus('idle')
       setTestState('idle')
       setTestError(null)
+      setVerifyState('idle')
+      setVerifyError(null)
       if (endpoint && managementToken) await unsubscribePush(endpoint, managementToken)
     } catch (err) {
       setSubscriptionError(err.message || 'Could not disable notifications.')
@@ -514,6 +561,12 @@ function NotificationsSection() {
               disabled={testState === 'sending'}
               busyLabel={testState === 'sending' ? 'Sending test…' : null}
             />
+            <SettingsSecondaryActionRow
+              label={verifyState === 'verifying' ? 'Verifying…' : 'Verify automatic episode alert'}
+              ariaLabel="Verify automatic episode alert — sends a synthetic episode notification for physical-device testing"
+              onPress={handleVerify}
+              disabled={verifyState === 'verifying'}
+            />
             <SettingsActionRow
               label="Disable notifications"
               onPress={handleDisable}
@@ -526,6 +579,12 @@ function NotificationsSection() {
 
       {testState === 'sent' && <Banner tone="success">Test notification sent.</Banner>}
       {testState === 'error' && <Banner tone="error">Test delivery error: {testError}</Banner>}
+      {verifyState === 'verified' && (
+        <Banner tone="success" live>Verification notification sent</Banner>
+      )}
+      {verifyState === 'error' && (
+        <Banner tone="error" live>{verifyError}</Banner>
+      )}
       {subscriptionError && <Banner tone="error">Subscription error: {subscriptionError}</Banner>}
     </>
   )
