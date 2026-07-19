@@ -96,15 +96,18 @@ export function episodeNotificationTag(tmdbShowId, episodes) {
 // One show's eligible (and already-claimed, by the caller) episodes → one
 // notification payload. `episodes` must be non-empty and sorted (as returned
 // by collectAiredUnwatchedEpisodes / episodesSinceWatermark). Content is
-// deliberately minimal: the iOS/app heading ("Rerun") is supplied by the
-// installed app identity, not this payload, so the title is the show name
-// alone and the body carries no episode metadata (season/episode/title/
-// count/release time) regardless of how many episodes are grouped together —
-// one notification always means "go check the show", not a status report.
+// deliberately minimal: iOS supplies "from Rerun" on its own for the
+// installed PWA, so this payload never generates or duplicates that line —
+// the title alone (`${showName} - New Episode`) is the entire visible
+// content, regardless of how many episodes are grouped together. There is
+// intentionally no separate body; `omitBody` marks that as deliberate (as
+// opposed to a malformed/legacy payload that happens to have no body) so
+// the service worker's fallback text only ever applies to the latter — see
+// public/push-sw.js.
 export function buildEpisodeNotificationPayload(tmdbShowId, showName, episodes) {
   return {
-    title: showName,
-    body: 'New Episode',
+    title: `${showName} - New Episode`,
+    omitBody: true,
     url: episodeNotificationUrl(tmdbShowId),
     tag: episodeNotificationTag(tmdbShowId, episodes),
     episodes,

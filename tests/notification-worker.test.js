@@ -250,11 +250,13 @@ describe('notification worker: happy path', () => {
     expect(target).toEqual({ endpoint: subscriptionRow().endpoint, keys: { p256dh: 'p256dh-key', auth: 'auth-key' } })
     const parsed = JSON.parse(payload)
     expect(parsed).toEqual({
-      title: 'Test Show',
-      body: 'New Episode',
+      title: 'Test Show - New Episode',
       url: '/watching/1',
       tag: 'rerun-episode-1-s1e1',
+      omitBody: true,
     })
+    expect(parsed).not.toHaveProperty('body')
+    expect(parsed.title).not.toMatch(/rerun/i)
     const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
     expect(completeCall).toBeTruthy()
     const [, completeArgs] = completeCall
@@ -302,8 +304,8 @@ describe('notification worker: happy path', () => {
     expect(res.body.sent).toBe(1)
     expect(res.body.eligibleEpisodes).toBe(2)
     const parsed = JSON.parse(sendNotification.mock.calls[0][1])
-    expect(parsed.title).toBe('Test Show')
-    expect(parsed.body).toBe('New Episode')
+    expect(parsed.title).toBe('Test Show - New Episode')
+    expect(parsed).not.toHaveProperty('body')
     expect(parsed.tag).toBe('rerun-episode-1-batch')
   })
 
@@ -330,8 +332,8 @@ describe('notification worker: happy path', () => {
     expect(res.body.eligibleEpisodes).toBe(8)
     expect(sendNotification).toHaveBeenCalledTimes(1)
     const parsed = JSON.parse(sendNotification.mock.calls[0][1])
-    expect(parsed.title).toBe('The Bear')
-    expect(parsed.body).toBe('New Episode')
+    expect(parsed.title).toBe('The Bear - New Episode')
+    expect(parsed).not.toHaveProperty('body')
     // Every one of the 8 grouped episode identities was claimed and
     // finalized, even though only one push was sent.
     const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
@@ -365,7 +367,7 @@ describe('notification worker: happy path', () => {
     expect(res.body.sent).toBe(3)
     expect(sendNotification).toHaveBeenCalledTimes(3)
     const titles = sendNotification.mock.calls.map(([, payload]) => JSON.parse(payload).title).sort()
-    expect(titles).toEqual(['House of the Dragon', 'Sugar', 'The Bear'])
+    expect(titles).toEqual(['House of the Dragon - New Episode', 'Sugar - New Episode', 'The Bear - New Episode'])
   })
 
   it('a transient send failure for a multi-episode batch finalizes none of the grouped episodes', async () => {
@@ -825,7 +827,7 @@ describe('notification worker: dry run', () => {
     expect(res.body.sent).toBe(0)
     expect(res.body.eligibleEpisodes).toBe(1)
     expect(res.body.preview).toEqual([
-      { tmdbShowId: 1, title: 'Test Show', body: 'New Episode', episodeCount: 1 },
+      { tmdbShowId: 1, title: 'Test Show - New Episode', episodeCount: 1 },
     ])
     expect(sendNotification).not.toHaveBeenCalled()
     expect(supabase.record.rpcCalls).toHaveLength(0)

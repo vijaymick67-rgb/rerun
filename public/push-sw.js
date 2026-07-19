@@ -28,15 +28,26 @@ function parsePushPayload(event) {
 self.addEventListener('push', (event) => {
   const payload = parsePushPayload(event) || {}
   const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title : PUSH_FALLBACK_TITLE
-  const body = typeof payload.body === 'string' && payload.body.trim() ? payload.body : PUSH_FALLBACK_BODY
   const url = typeof payload.url === 'string' && payload.url.trim() ? payload.url : PUSH_DEFAULT_URL
+  const hasRealBody = typeof payload.body === 'string' && payload.body.trim()
+  // `omitBody: true` (automatic episode notifications — see
+  // src/lib/notifications/episodeEligibility.js) means the missing body is
+  // intentional: iOS already shows "from Rerun" on its own for the
+  // installed PWA, so a second body line would be redundant. Anything else
+  // with no real body — a malformed payload, or a future payload shape that
+  // forgets to set body — is treated as before and gets the generic
+  // fallback text, not silently left blank.
+  const omitBody = payload.omitBody === true
+
   // Automatic episode notifications (Phase 2) carry a stable per-show/episode
   // tag (see src/lib/notifications/episodeEligibility.js) so a redelivered
   // push for the same logical event replaces the existing OS notification
   // instead of stacking a visual duplicate. The Phase 1 manual test push
   // carries no tag and falls back to the browser's default (untagged)
   // behavior, unchanged from before.
-  const options = { body, icon: PUSH_ICON, badge: PUSH_BADGE, data: { url } }
+  const options = { icon: PUSH_ICON, badge: PUSH_BADGE, data: { url } }
+  if (hasRealBody) options.body = payload.body
+  else if (!omitBody) options.body = PUSH_FALLBACK_BODY
   if (typeof payload.tag === 'string' && payload.tag.trim()) options.tag = payload.tag
 
   event.waitUntil(self.registration.showNotification(title, options))
