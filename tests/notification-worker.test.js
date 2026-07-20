@@ -73,6 +73,7 @@ function makeSupabaseStub({
   trackedShows = [],
   watchedRows = [],
   claim = () => ({ data: [], error: null }),
+  claimCollision = () => ({ data: [], error: null }),
   complete,
   onDelete = () => {},
 } = {}) {
@@ -107,6 +108,9 @@ function makeSupabaseStub({
         }
         return Promise.resolve(result)
       }
+      if (name === 'claim_episode_reminder_with_airtime_collision') {
+        return Promise.resolve(claimCollision(args))
+      }
       if (name === 'complete_episode_notification_deliveries') {
         return Promise.resolve((complete ?? defaultComplete)(args, record))
       }
@@ -115,30 +119,105 @@ function makeSupabaseStub({
   }
 }
 
-// Full claim -> deliver round trip with real "already delivered" persistence
-// across repeated calls against the same underlying store — lets a test
-// simulate multiple worker runs the way the real claim/finalize RPCs behave
-// (an identity claimed and finalized once can never be claimed again).
+// Full claim -> deliver round trip against a single shared, lease-aware
+// store — not just "delivered or not" but the same claimed-and-not-yet-
+// delivered lease state the real claim_episode_notification_deliveries /
+// claim_episode_reminder_with_airtime_collision RPCs enforce (a 10-minute
+// window during which a fresh, undelivered claim blocks anyone else from
+// winning the same identity). This is what lets a test simulate two
+// genuinely *overlapping* worker invocations racing the same identity, not
+// just repeated sequential runs.
+const CLAIM_LEASE_MS = 10 * 60 * 1000
+
 function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows = [] } = {}) {
-  const delivered = new Set()
+  // identity -> { claimToken, claimedAtMs, delivered }
+  const store = new Map()
+
+  function isFreeToClaim(identity, claimToken, claimedAtMs) {
+    const existing = store.get(identity)
+    if (!existing) return true
+    if (existing.delivered) return false
+    if (existing.claimToken === claimToken) return true
+    return existing.claimedAt < claimedAtMs - CLAIM_LEASE_MS
+  }
+
+  function setClaim(identity, claimToken, claimedAtMs) {
+    store.set(identity, { claimToken, claimedAt: claimedAtMs, delivered: false })
+  }
+
   return makeSupabaseStub({
     subscriptions,
     trackedShows,
     watchedRows,
-    claim: (args) => ({
-      data: args.p_episodes
-        .filter((e) => !delivered.has(
-          `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`,
-        ))
-        .map((e) => ({ season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type })),
-      error: null,
-    }),
-    complete: (args, record) => {
-      const result = defaultComplete(args, record)
-      for (const { identity } of result.data) delivered.add(identity)
-      return result
+    claim: (args) => {
+      const claimedAtMs = Date.parse(args.p_claimed_at)
+      const claimed = []
+      for (const e of args.p_episodes) {
+        const identity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`
+        if (isFreeToClaim(identity, args.p_claim_token, claimedAtMs)) {
+          setClaim(identity, args.p_claim_token, claimedAtMs)
+          claimed.push({ season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type })
+        }
+      }
+      return { data: claimed, error: null }
+    },
+    // Mirrors claim_episode_reminder_with_airtime_collision: per episode,
+    // the reminder identity must be free; only if it is, and the episode is
+    // flagged airtime_also_due *and* the airtime identity is itself free, is
+    // the pair reserved together (combined: true). Otherwise only the
+    // reminder identity is reserved (combined: false).
+    claimCollision: (args) => {
+      const claimedAtMs = Date.parse(args.p_claimed_at)
+      const rows = []
+      for (const ep of args.p_episodes) {
+        const reminderIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_reminder`
+        if (!isFreeToClaim(reminderIdentity, args.p_claim_token, claimedAtMs)) continue
+
+        let combined = false
+        let airtimeIdentity = null
+        if (ep.airtime_also_due) {
+          airtimeIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_airtime`
+          combined = isFreeToClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+        }
+
+        setClaim(reminderIdentity, args.p_claim_token, claimedAtMs)
+        if (combined) setClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+        rows.push({ season_number: ep.season_number, episode_number: ep.episode_number, combined })
+      }
+      return { data: rows, error: null }
+    },
+    complete: (args) => {
+      const finalized = []
+      for (const identity of args.p_identities) {
+        const existing = store.get(identity)
+        if (existing && existing.claimToken === args.p_claim_token && !existing.delivered) {
+          existing.delivered = true
+          finalized.push(identity)
+        }
+      }
+      return { data: finalized.map((identity) => ({ identity })), error: null }
     },
   })
+}
+
+// Lets a test deterministically pause one worker invocation mid-flight (after
+// it has already committed a claim, before it sends/finalizes) and run a
+// second, fully-concurrent invocation to completion in between — simulating
+// two overlapping Vercel Cron invocations without relying on incidental
+// microtask-ordering luck.
+function makeGate() {
+  let release
+  const promise = new Promise((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+// A single macrotask tick lets every already-scheduled microtask (including
+// chains of them, e.g. several sequential `await`s over stub promises) run
+// to completion before returning — enough to let a handler run all the way
+// up to a genuinely blocking await (like makeGate's promise), since nothing
+// else in the stubbed pipeline does real async I/O.
+async function flushAsync() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function subscriptionRow(overrides = {}) {
@@ -515,8 +594,11 @@ describe('notification worker: same-evaluation collision', () => {
     await handler(request(), response())
 
     const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
-    const reminderFinalize = completeCalls.find((c) => c[1].p_identities[0].endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE))
+    const reminderFinalize = completeCalls.find((c) => c[1].p_identities.some((id) => id.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE)))
     expect(reminderFinalize).toBeTruthy() // reminder identity finalized without a second push
+    // The same call also finalized the airtime identity — one combined
+    // finalize, not two separate ones.
+    expect(reminderFinalize[1].p_identities.some((id) => id.endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE))).toBe(true)
 
     // A later run (well after this evaluation) must not resend anything.
     const laterHandler = makeHandler({
@@ -544,32 +626,23 @@ describe('notification worker: same-evaluation collision', () => {
     expect(completeCalls).toHaveLength(0)
   })
 
-  it('a partial finalization failure on the reminder side is reported as failed, not silently dropped, and stays retry-safe', async () => {
+  it('a failed combined finalize (push already sent) is reported as failed, not silently dropped, and leaves both identities retryable', async () => {
     const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
     const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
-    let reminderCompleteCalls = 0
-    const delivered = new Set()
+    let combinedCompleteCalls = 0
     const supabase = makeSupabaseStub({
       subscriptions: [subscriptionRow()],
       trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes
-          .filter((e) => !delivered.has(`${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`))
-          .map((e) => ({ season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type })),
+      claimCollision: (args) => ({
+        data: args.p_episodes.map((e) => ({ season_number: e.season_number, episode_number: e.episode_number, combined: e.airtime_also_due })),
         error: null,
       }),
-      complete: (args, record) => {
-        const isReminder = args.p_identities[0]?.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE)
-        if (isReminder) {
-          reminderCompleteCalls += 1
-          // The reminder-satisfaction write fails once, simulating a
-          // transient database error right after a successful airtime send.
-          return { data: null, error: { message: 'connection reset' } }
-        }
-        const claimedTokens = record.claimTokensByIdentity
-        const finalized = args.p_identities.filter((identity) => claimedTokens.get(identity) === args.p_claim_token)
-        for (const identity of finalized) { claimedTokens.set(identity, 'delivered'); delivered.add(identity) }
-        return { data: finalized.map((identity) => ({ identity })), error: null }
+      complete: () => {
+        combinedCompleteCalls += 1
+        // The push already went out; the finalize write itself fails once,
+        // simulating a transient database error right after a successful
+        // combined send.
+        return { data: null, error: { message: 'connection reset' } }
       },
     })
     const sendNotification = vi.fn(async () => undefined)
@@ -579,12 +652,149 @@ describe('notification worker: same-evaluation collision', () => {
     const res = response()
     await handler(request(), res)
 
-    // Airtime itself still succeeded and is reported sent; the reminder
-    // finalization failure is a separate, visible failure — never silently
-    // swallowed, and never unwinding the airtime send.
-    expect(res.body.sent).toBe(1)
+    // A push already fired, but since the finalize RPC never durably
+    // confirmed it, this run must not credit it as sent — exactly the same
+    // contract a non-collision send/finalize failure already has.
+    expect(res.body.sent).toBe(0)
     expect(res.body.failed).toBe(1)
-    expect(reminderCompleteCalls).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(combinedCompleteCalls).toBe(1)
+    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCall[1].p_identities).toHaveLength(2) // one call, both identities together
+  })
+})
+
+describe('notification worker: cross-invocation collision race', () => {
+  it('two overlapping workers racing the same airtime+reminder collision send exactly one combined push, and both identities finalize together', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const now = () => new Date(Date.parse('2026-07-18T15:50:00.000Z'))
+
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) await gate.promise // Worker A: claimed, paused before actually sending.
+    })
+
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync() // let A run candidate computation + claim, then block on the send gate
+
+    const resB = response()
+    await handlerB(request(), resB) // fully concurrent worker B, starting before A has sent/finalized anything
+
+    // Worker B must not have won or sent anything — the reminder must not go
+    // out standalone just because B lost the airtime side of the race.
+    expect(resB.body.sent).toBe(0)
+    expect(sendCallCount).toBe(1) // B never called sendNotification at all
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1) // only ever one push, total, across both workers
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.tag).toBe('rerun-episode-airtime-1-s1e1')
+
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(1)
+    expect(completeCalls[0][1].p_identities).toHaveLength(2)
+    expect(completeCalls[0][1].p_identities.some((id) => id.endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE))).toBe(true)
+    expect(completeCalls[0][1].p_identities.some((id) => id.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE))).toBe(true)
+  })
+
+  it('a failed combined send while a second worker was mid-race finalizes neither identity, and both stay retryable', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const now = () => new Date(Date.parse('2026-07-18T15:50:00.000Z'))
+
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) {
+        await gate.promise
+        throw new Error('temporary network blip') // Worker A's send ultimately fails.
+      }
+    })
+
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync()
+
+    const resB = response()
+    await handlerB(request(), resB)
+    expect(resB.body.sent).toBe(0) // B still must not send standalone while A's claim is live
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(0)
+    expect(resA.body.failed).toBeGreaterThan(0)
+    expect(sendNotification).toHaveBeenCalledTimes(1) // B never sent; A's single attempt failed
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(0) // never reached — a failed send never finalizes
+
+    // A later, non-overlapping run picks the same episode back up and
+    // succeeds — nothing was left permanently stuck.
+    const laterHandler = makeHandler({
+      supabase, showsById, sendNotification: vi.fn(async () => undefined),
+      now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z') + 11 * 60 * 1000), // past the 10-minute lease
+    })
+    const later = response()
+    await laterHandler(request(), later)
+    expect(later.body.sent).toBe(1)
+  })
+
+  it('a reminder due after airtime already delivered on an earlier run still sends for real, even when two workers race the reminder claim', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+
+    // Run 1: airtime alone, well before the preferred hour — no collision.
+    const firstHandler = makeHandler({
+      supabase, showsById, sendNotification: vi.fn(async () => undefined), now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000),
+    })
+    const first = response()
+    await firstHandler(request(), first)
+    expect(first.body.sent).toBe(1)
+
+    // Run 2 (later, separate): two workers race the now-due standalone
+    // reminder for the same episode — airtime is already fully delivered,
+    // so neither worker should treat this as a fresh collision.
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) await gate.promise
+    })
+    const now = () => new Date(DEFAULT_REMINDER_INSTANT)
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync()
+
+    const resB = response()
+    await handlerB(request(), resB)
+    expect(resB.body.sent).toBe(0)
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e1') // a real, standalone reminder — not folded into airtime
   })
 })
 

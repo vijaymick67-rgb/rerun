@@ -20,6 +20,15 @@ single-notification behavior described throughout most of this document
 now specifically the **reminder** stage; the **airtime** stage is new and
 never waits for the preferred hour.
 
+**Follow-up fix (same PR): a cross-invocation race in the same-evaluation
+collision handling.** Vercel Cron can overlap — two worker invocations can
+be mid-flight for the same subscription/show/episode at once. The initial
+Phase 3 implementation coordinated the "send only the airtime alert, satisfy
+the reminder silently" rule entirely in-process, which only worked within a
+single invocation; two overlapping invocations could split ownership (one
+sends airtime, the other independently sends the reminder), producing two
+pushes. See "Cross-invocation collision safety" below for the DB-backed fix.
+
 ## What was added
 
 - `supabase/migrations/20260719140000_add_automatic_episode_notifications.sql`
@@ -41,6 +50,11 @@ never waits for the preferred hour.
   watermark) and reclassifies already-delivered legacy `episode_available`
   rows to `episode_reminder` so they're never resent. See "Two-stage
   delivery: airtime + reminder" and "Rollout safety" below.
+- `supabase/migrations/20260720090000_add_collision_safe_reminder_claim.sql`
+  (Phase 3 follow-up) — adds `claim_episode_reminder_with_airtime_collision`,
+  a new RPC that atomically resolves the same-evaluation collision case
+  across concurrent worker invocations. See "Cross-invocation collision
+  safety" below.
 - `src/lib/notifications/episodeEligibility.js` — pure, synchronous
   eligibility + payload-grouping logic (no fetching, no Supabase, no
   web-push). Consumes the same `status`/`episodesBySeason` shape
@@ -121,10 +135,10 @@ differ.
 An episode releasing at or after the preferred hour makes both stages
 eligible in the very same worker evaluation. Sending both would be two
 back-to-back identical-looking pushes for one episode, so the worker
-applies one rule: **when an episode is claimed and successfully delivered
-as an airtime alert this run, its reminder identity is also durably
-finalized in the same run — silently, with no second push.** A later
-worker run then has nothing left to send for it.
+applies one rule: **when airtime and reminder become eligible together,
+send only the airtime alert, and durably finalize the reminder identity in
+the same delivery — silently, with no second push.** A later worker run
+then has nothing left to send for it.
 
 This is implemented in `api/notifications/run.js` as four passes per
 subscription:
@@ -132,38 +146,84 @@ subscription:
 1. Compute each show's airtime candidates (past the airtime watermark) and
    reminder candidates (past the preferred-hour schedule) independently,
    from the same underlying aired/unwatched episode pool
-   (`collectAiredUnwatchedEpisodes`, unchanged).
-2. Claim and send every show's airtime batch. Record exactly which
-   episodes were *successfully claimed and finalized* this run — critical:
-   this must be episodes actually won by *this run's claim*, not merely
-   "still airtime-watermark-eligible," since an already-delivered episode
-   stays watermark-eligible forever and must never keep suppressing its
-   reminder on every subsequent run.
-3. For each show's reminder candidates, split off the ones that were also
-   just claimed for airtime this run. If (and only if) that airtime push
-   *actually succeeded* (claimed, sent, and finalized), claim + finalize
-   those same reminder identities too — no second push. If the airtime
-   send failed, or only got as far as being claimed, those reminder
-   identities are touched **not at all** this run (not claimed, not
-   finalized, not sent) — they're simply reconsidered fresh next run. This
-   is what keeps a failed airtime delivery from ever finalizing either
-   type, and keeps the whole thing retry-safe: nothing is silently lost,
-   nothing is falsely marked delivered.
-4. Every remaining reminder candidate (never an airtime candidate this run,
-   or an airtime candidate whose delivery already happened on an earlier
-   run) goes through a completely ordinary standalone claim → send →
-   finalize, identical in shape to the airtime flow in step 2.
+   (`collectAiredUnwatchedEpisodes`, unchanged). Split the airtime
+   candidates into "reminder isn't due for this episode yet" (claimed
+   immediately via the plain, uncontested `claim_episode_notification_deliveries`
+   — no collision possible) and everything else. **Every reminder-due
+   episode — whether or not it also looks airtime-due — is claimed via
+   `claim_episode_reminder_with_airtime_collision`
+   (see "Cross-invocation collision safety" below), never a plain claim.**
+   That one RPC call, not this process, decides atomically whether the
+   episode is combined (airtime + reminder together) or reminder-only.
+2. Send every airtime-only claim from step 1.
+3. Send every combined claim from step 1 — one push per batch, using the
+   airtime payload/tag, but finalizing **both** the airtime and reminder
+   delivery identities in one `complete_episode_notification_deliveries`
+   call (they share the same `claim_token`, since the collision RPC wrote
+   both rows together). A failed send, or a failed finalize, leaves both
+   identities exactly as unfinalized and reclaimable as any other claim —
+   nothing is silently lost, nothing is falsely marked delivered.
+4. Send every remaining reminder-only claim from step 1 (an episode never
+   airtime-due this run, or one whose airtime already went out on an
+   earlier, separate run) through a completely ordinary standalone claim →
+   send → finalize, identical in shape to the airtime flow in step 2.
 
-No new database function was needed for the "silently finalize the
-reminder" step in pass 3 — it reuses the exact same
-`claim_episode_notification_deliveries` /
-`complete_episode_notification_deliveries` RPCs the airtime and standalone
-reminder flows already use, just without an intervening `sendNotification`
-call. That keeps it exactly as retry-safe as any other claim: if the
-finalize call fails, the claimed-but-undelivered row becomes reclaimable
-after the existing 10-minute staleness window, exactly like a transient
-send failure elsewhere in this worker — never silently dropped, never
-double-sent.
+### Cross-invocation collision safety
+
+The in-process version of this logic above (tracking "which episodes did
+*this run's* airtime claim actually win" in a local variable) only
+coordinates within a single worker invocation. Vercel Cron invocations can
+overlap, so two invocations ("A" and "B") can be mid-flight for the same
+subscription/show/episode at once:
+
+1. A wins the plain `episode_airtime` claim.
+2. B loses that same claim — but has no way to see A's in-memory state, so
+   the reminder looks like an ordinary standalone candidate to B.
+3. B claims and sends `episode_reminder` standalone.
+4. A sends `episode_airtime`.
+5. Two pushes go out for what should have been one.
+
+`claim_episode_reminder_with_airtime_collision`
+(`supabase/migrations/20260720090000_add_collision_safe_reminder_claim.sql`)
+fixes this by moving the combined/reminder-only decision into the database
+— the one place both invocations actually share — instead of a worker's own
+memory. For each requested episode (season, episode, and a JS-computed
+`airtime_also_due` boolean):
+
+1. A `pg_advisory_xact_lock`, keyed on `(subscription, show, season,
+   episode)` and held for the rest of that one RPC call, serializes every
+   concurrent caller of *this function* for that exact episode. Whichever
+   caller acquires it first makes the complete, final decision for that
+   episode; the second caller, once it acquires the lock after the first
+   commits, sees the settled result.
+2. If the reminder identity is already delivered, or freshly claimed by
+   someone else (the same 10-minute lease `claim_episode_notification_deliveries`
+   already uses), this worker has lost the reminder entirely for that
+   episode — nothing is reserved.
+3. Otherwise, if `airtime_also_due` is true *and* the airtime identity
+   itself is also still free (not delivered, not freshly claimed by anyone
+   else) — reserve **both** identities together, under the same
+   `claim_token`, and report `combined: true`. This is what correctly falls
+   through to reminder-only (not a phantom "collision") for an episode whose
+   airtime already went out on an earlier, separate run: `airtime_also_due`
+   is a pure time-based fact from the worker (it doesn't know delivery
+   history), but the RPC's own live-state check does.
+4. Otherwise, reserve only the reminder identity and report
+   `combined: false`.
+
+Because every reminder-due episode goes through this one serialized
+decision point — not just the ones a given invocation *thinks* are
+colliding — two overlapping invocations can never split ownership of an
+airtime/reminder pair between them. No changes were needed to
+`complete_episode_notification_deliveries`: it already finalizes an
+arbitrary claim-token-scoped list of identities, so a combined win is
+finalized by passing both identities (bound to the one `claim_token` the
+collision RPC wrote onto both rows) in a single call.
+
+Genuinely non-colliding airtime claims (an episode whose reminder isn't due
+yet) are untouched by this — they keep using the existing, already-atomic
+plain `claim_episode_notification_deliveries` call directly, exactly as
+before.
 
 ### Delivery identity, per type
 
@@ -350,11 +410,12 @@ patched column-by-column.
   existing `notification_type` column.
 - **Unchanged since Phase 2:** neither `claim_episode_notification_deliveries`
   nor `complete_episode_notification_deliveries` needed any modification for
-  Phase 3 — both were already generic over `notification_type`. The
-  same-evaluation collision handling (see "Two-stage delivery" above) reuses
-  them as-is, just called once for the airtime claim and, when it succeeds,
-  a second time for the reminder identities — no new RPC, no loosely-scoped
-  update.
+  Phase 3 — both were already generic over `notification_type`, and remain
+  so after the cross-invocation collision fix. The one new RPC,
+  `claim_episode_reminder_with_airtime_collision` (see "Cross-invocation
+  collision safety" above), is additive — it writes to the same table with
+  the same identity/unique-key shape, and finalization still goes through
+  the unmodified `complete_episode_notification_deliveries`.
 - **Claim before send:** `claim_episode_notification_deliveries(...)` is a
   `security definer` Postgres function (service-role only) that atomically
   inserts-or-conditionally-updates one row per requested episode. A row is
@@ -581,17 +642,21 @@ different endpoint, not a revival of that system).
 3. Apply, in order, `20260719140000_add_automatic_episode_notifications.sql`,
    `20260719150000_schedule_episode_notification_worker.sql`,
    `20260719160000_add_complete_episode_notification_deliveries.sql`,
-   `20260719170000_add_preferred_notification_hour.sql`, and
-   `20260720080000_add_two_stage_episode_notifications.sql` in the Supabase
+   `20260719170000_add_preferred_notification_hour.sql`,
+   `20260720080000_add_two_stage_episode_notifications.sql`, and
+   `20260720090000_add_collision_safe_reminder_claim.sql` in the Supabase
    SQL Editor. The scheduling migration is safe to run even before the
    Vault secrets above exist — the job just fails (harmlessly, into Cron's
    own run history) until they're set. The 17:00:00 and 08:00:00 migrations
    are both additive and safe to apply exactly once in production
    (`add column if not exists`, idempotent backfill `update`s scoped by
    `is null`/specific `notification_type` values) — neither recreates or
-   reschedules the Cron job, and the last one is forward-only: see "Rollout
-   safety" and "Legacy delivery migration" above for exactly what it
-   backfills and why.
+   reschedules the Cron job, and the 08:00:00 migration is forward-only: see
+   "Rollout safety" and "Legacy delivery migration" above for exactly what it
+   backfills and why. The 09:00:00 migration only adds a new function — it
+   touches no existing rows and is safe to apply exactly once, in any order
+   relative to a running worker (the worker simply starts using the new RPC
+   as soon as it's deployed and the function exists).
 4. `TMDB_API_KEY` (already configured for `api/tmdb.js`) is reused as-is —
    the worker calls TMDB directly with it, server-side.
 
@@ -769,13 +834,39 @@ existing preferred-hour scheduling unaffected by airtime; watched-before-
 reminder exclusion (including a partially-watched batch); the
 same-evaluation collision (one push, not two, for a late release) with the
 reminder identity durably satisfied in the same run; a failed airtime send
-finalizing neither type; a reminder-side partial-finalization failure
-surfacing as `failed` without silently dropping it or unwinding the
-already-successful airtime send; the airtime rollout watermark (no
-retroactive alert for pre-rollout backlog, still-correct grace-window
-boundary behavior, backlog episodes still reminding normally); dry-run
-previews carrying `notificationType` per entry; both payload types sharing
-identical visible content with only the tag differing; the two-stage
-migration file's exact rollout-backfill and legacy-reclassification SQL;
-and `api/push/subscribe.js` initializing/preserving both watermarks
-together across fresh activation, re-subscribe, and disable-then-re-enable.
+finalizing neither type; a failed combined finalize (push already sent)
+surfacing as `failed`, not credited as `sent`, and leaving both identities
+retryable; the airtime rollout watermark (no retroactive alert for
+pre-rollout backlog, still-correct grace-window boundary behavior, backlog
+episodes still reminding normally); dry-run previews carrying
+`notificationType` per entry; both payload types sharing identical visible
+content with only the tag differing; the two-stage migration file's exact
+rollout-backfill and legacy-reclassification SQL; and
+`api/push/subscribe.js` initializing/preserving both watermarks together
+across fresh activation, re-subscribe, and disable-then-re-enable.
+
+**Added by the cross-invocation collision fix**, in
+`tests/notification-worker.test.js` (`notification worker: cross-invocation
+collision race`) and `tests/collision-safe-reminder-claim-migration.test.js`:
+two genuinely concurrent worker invocations (one deliberately paused
+mid-flight after its claim commits but before it sends, using a controllable
+gate + a shared, lease-aware in-memory store standing in for
+`notification_deliveries`, rather than a plain "delivered or not" flag)
+racing the same airtime+reminder collision — the losing invocation sends
+nothing, exactly one push goes out in total, and both delivery identities
+finalize together in one call; a failed send while a second invocation was
+mid-race finalizes neither identity and both remain retryable after the
+lease window; and a reminder due after airtime already delivered on an
+earlier, separate run still sends for real (as a standalone reminder, not
+folded into airtime) even when two invocations race that later claim. The
+migration test asserts the new function's signature, its advisory-lock
+serialization (not an in-memory or process-global mechanism), the shared
+10-minute lease window, that both identities are written under one
+`claim_token` when combined, and that it leaves
+`complete_episode_notification_deliveries` untouched.
+
+Real concurrent Vercel Cron invocations, and Postgres's actual
+`pg_advisory_xact_lock` behavior under real concurrent connections, are not
+something a Vitest suite can exercise directly — the tests above verify the
+worker's use of the RPC's contract and the RPC's SQL shape, not genuine
+multi-connection Postgres concurrency itself.
