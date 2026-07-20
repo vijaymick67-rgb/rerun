@@ -22,7 +22,7 @@ function installLocalStorage() {
 
 // A canned TVmaze /episodes payload: HBO-style Sunday-night drop.
 const TVMAZE_EPISODES = [
-  { id: 101, season: 1, number: 1, airdate: '2026-07-19', airtime: '21:00', airstamp: '2026-07-19T21:00:00-04:00' },
+  { id: 101, season: 1, number: 1, name: 'Winter Is Coming', airdate: '2026-07-19', airtime: '21:00', airstamp: '2026-07-19T21:00:00-04:00' },
   { id: 102, season: 1, number: 2, airdate: '2026-07-26', airtime: '21:00', airstamp: '2026-07-26T21:00:00-04:00' },
   // Malformed rows are skipped, not thrown on.
   { season: 1, number: null, airstamp: '2026-08-02T21:00:00-04:00' },
@@ -50,14 +50,30 @@ describe('getShowAirstamps — TMDB→TVmaze bridge (happy path)', () => {
     const map = await getShowAirstamps(1, { getExternalIds })
 
     expect(map).toEqual({
-      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101 },
-      '1:2': { airstamp: '2026-07-26T21:00:00-04:00', airdate: '2026-07-26', airtime: '21:00', tvmazeEpisodeId: 102 },
-      '2:1': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: null },
+      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101, tvmazeName: 'Winter Is Coming' },
+      '1:2': { airstamp: '2026-07-26T21:00:00-04:00', airdate: '2026-07-26', airtime: '21:00', tvmazeEpisodeId: 102, tvmazeName: null },
+      '2:1': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: null, tvmazeName: null },
     })
     // The IMDb id is passed to TVmaze's lookup endpoint.
     expect(global.fetch).toHaveBeenCalledWith(
       'https://api.tvmaze.com/lookup/shows?imdb=tt1234567',
     )
+  })
+
+  it('persists the map under the v3 cache namespace, keyed by tvmaze show id', async () => {
+    const store = installLocalStorage()
+    const getExternalIds = vi.fn(async () => ({ imdb_id: 'tt1234567' }))
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/lookup/shows'))
+        return { ok: true, json: async () => ({ id: 42 }) }
+      return { ok: true, json: async () => TVMAZE_EPISODES }
+    })
+
+    await getShowAirstamps(1, { getExternalIds })
+
+    const cached = JSON.parse(store.get('tvmaze_episodes:v3:42'))
+    expect(cached['1:1'].tvmazeName).toBe('Winter Is Coming')
+    expect(store.has('tvmaze_episodes:v2:42')).toBe(false)
   })
 
   it('caches the show-id mapping — the lookup runs once per show', async () => {
@@ -170,9 +186,9 @@ describe('cache-free primitives (server worker reuse)', () => {
 
   it('buildEpisodeReleaseMap matches the cached client map for the same payload', () => {
     expect(buildEpisodeReleaseMap(TVMAZE_EPISODES)).toEqual({
-      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101 },
-      '1:2': { airstamp: '2026-07-26T21:00:00-04:00', airdate: '2026-07-26', airtime: '21:00', tvmazeEpisodeId: 102 },
-      '2:1': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: null },
+      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101, tvmazeName: 'Winter Is Coming' },
+      '1:2': { airstamp: '2026-07-26T21:00:00-04:00', airdate: '2026-07-26', airtime: '21:00', tvmazeEpisodeId: 102, tvmazeName: null },
+      '2:1': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: null, tvmazeName: null },
     })
   })
 

@@ -12,6 +12,7 @@ import {
 } from '../lib/watchingShows'
 import { createWatchMutationQueue, toggleEpisodeOptimistically } from '../lib/seasonWatchMutations'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
+import { advanceCachedWatchingRows } from '../lib/watchingCacheTransition'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
 import { getWatchingInteractionState } from '../lib/watchingNavigation'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -53,7 +54,17 @@ export function WatchingPartialWarning({ error, onRetry }) {
 // v3: one-time cache-bust so the Settings bulk-mark-watched writes are picked
 // up — old v2 entries are simply never matched and a fresh Supabase fetch runs.
 export default function Watching({ active = true, refreshSignal = 0 }) {
-  const [cachedShows] = useState(() => loadWatchingCache()?.filter((show) => !isHiddenShow(show)) ?? null)
+  // Feature 2: before a cached row ever reaches React state, synchronously
+  // advance any countdown row whose stored release instant has already
+  // passed (advanceCachedWatchingRows — see watchingCacheTransition.js), then
+  // re-sort through the exact same sortWatchingShows() the network path uses.
+  // This is what lets a cache opened after the real release threshold render
+  // "Up next" on its very first frame instead of a stale "New episode soon"
+  // that flips a second later.
+  const [cachedShows] = useState(() => {
+    const raw = loadWatchingCache()?.filter((show) => !isHiddenShow(show)) ?? null
+    return raw ? sortWatchingShows(advanceCachedWatchingRows(raw)) : null
+  })
   const [shows, setShows] = useState(() => cachedShows ?? [])
   const [loading, setLoading] = useState(() => cachedShows === null)
   const [error, setError] = useState(null)

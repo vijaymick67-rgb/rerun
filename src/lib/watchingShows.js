@@ -1,4 +1,5 @@
 import { computeReleasedProgress, computeWatchingStatus, episodeKey } from './watchHelpers.js'
+import { resolveEpisodeTitle } from './episodeTitle.js'
 import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
 import { classifyReleasePlatform } from './releasePlatforms.js'
 import { reportDataError, withTimeout } from './dataLoading.js'
@@ -130,6 +131,7 @@ export async function enrichTrackedShowsForWatching(
         releasedWatchedCount: loaded.releasedWatchedCount,
         releasedProgress: loaded.releasedProgress,
         nextReleasedUnwatchedEpisode: loaded.nextReleasedUnwatchedEpisode,
+        nextScheduledEpisode: loaded.nextScheduledEpisode,
         loadDiagnostics: loaded.failures ?? [],
       }
       for (const failure of loaded.failures ?? []) failures.push(failure)
@@ -158,12 +160,38 @@ export function deriveWatchingFields(episodesBySeason, watched, details) {
           .find((episode) => episode.episode_number === status.episode_number)?.runtime ?? null,
       }
     : null
+  // A lightweight candidate for the Watching-cache pre-render transition
+  // (see watchingCacheTransition.js): only built for a real, identified
+  // countdown episode (never a weekly-cadence *prediction*, which has no
+  // season/episode identity — see computeWatchingStatus) and carrying only
+  // the already-resolved release instant, never a recomputable one. This is
+  // the same nextEp identity computeWatchingStatus's countdown branch
+  // resolves — not a second "find the next episode" implementation.
+  const nextScheduledEpisode = (
+    status.type === 'countdown' &&
+    !status.predicted &&
+    Number.isInteger(status.season_number) &&
+    Number.isInteger(status.episode_number) &&
+    Number.isFinite(status.release?.timestamp)
+  )
+    ? {
+        season_number: status.season_number,
+        episode_number: status.episode_number,
+        name: status.name,
+        runtime: status.runtime ?? null,
+        release: {
+          timestamp: status.release.timestamp,
+          istDate: status.release.istDate,
+        },
+      }
+    : null
   return {
     status,
     releasedEpisodeCount: releasedCount,
     releasedWatchedCount: watchedCount,
     releasedProgress: percent,
     nextReleasedUnwatchedEpisode,
+    nextScheduledEpisode,
   }
 }
 
@@ -262,17 +290,28 @@ export function attachReleaseData(episodesBySeason, releaseMap, platformInfo) {
   return out
 }
 
-// Attach the matching TVmaze fields to an episode pointer or season row.
+// Attach the matching TVmaze fields to an episode pointer or season row, and
+// resolve the effective display title (see episodeTitle.js): TMDB's title
+// wins whenever it's meaningful, otherwise TVmaze's, otherwise "TBA". The
+// original TMDB title is preserved separately under `tmdbName` — never
+// overwritten — so re-attaching (or a later refresh) always re-resolves from
+// the real TMDB value rather than from a previously-resolved effective name.
 export function attachEpisodeReleaseData(episode, releaseMap, seasonNumber, platformInfo) {
   if (!episode) return episode
+  const tmdbName = episode.tmdbName ?? episode.name ?? null
   const release = releaseMap?.[episodeKey(seasonNumber ?? episode.season_number, episode.episode_number)]
-  if (!release) return { ...episode, releasePlatform: platformInfo ?? episode.releasePlatform }
   // Accept v1 string maps in tests/in-memory callers, while persisted v1 keys
-  // are isolated by the v2 cache prefixes.
+  // are isolated by the v2/v3 cache prefixes.
+  const releaseFields = release
+    ? (typeof release === 'string' ? { airstamp: release } : release)
+    : null
+  const tvmazeName = releaseFields && typeof releaseFields === 'object' ? releaseFields.tvmazeName ?? null : null
   return {
     ...episode,
+    tmdbName,
+    name: resolveEpisodeTitle({ tmdbName, tvmazeName, episodeNumber: episode.episode_number }),
     releasePlatform: platformInfo ?? episode.releasePlatform,
-    ...(typeof release === 'string' ? { airstamp: release } : release),
+    ...releaseFields,
   }
 }
 

@@ -250,6 +250,16 @@ export function computeWatchingStatus(episodesBySeason, watched, details) {
     return {
       type: 'countdown',
       subtype: isSeasonPremiere(nextEp, watched) ? 'premiere' : 'episode',
+      // Identity of the pointed-to episode — attached alongside the existing
+      // countdown fields (not a new calculation) so callers can build a
+      // lightweight next-scheduled-episode candidate without a second
+      // "find the next episode" implementation. See watchingShows.js's
+      // deriveWatchingFields (nextScheduledEpisode) and
+      // watchingCacheTransition.js.
+      season_number: nextEp.season_number,
+      episode_number: nextEp.episode_number,
+      name: nextEp.name,
+      runtime: nextEp.runtime ?? null,
       air_date: release.istDate,
       source: release.source,
       release,

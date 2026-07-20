@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTvmazeServerClient } from './_tvmazeServer.js'
 
 const TVMAZE_EPISODES = [
-  { id: 101, season: 1, number: 1, airdate: '2026-07-19', airtime: '21:00', airstamp: '2026-07-19T21:00:00-04:00' },
+  { id: 101, season: 1, number: 1, name: 'Winter Is Coming', airdate: '2026-07-19', airtime: '21:00', airstamp: '2026-07-19T21:00:00-04:00' },
 ]
 
 describe('createTvmazeServerClient', () => {
@@ -16,7 +16,10 @@ describe('createTvmazeServerClient', () => {
     const client = createTvmazeServerClient({ fetchImpl })
     const map = await client.getShowReleaseMap(1, { getExternalIds })
     expect(map).toEqual({
-      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101 },
+      '1:1': {
+        airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00',
+        tvmazeEpisodeId: 101, tvmazeName: 'Winter Is Coming',
+      },
     })
   })
 

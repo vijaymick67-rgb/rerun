@@ -432,6 +432,119 @@ describe('deriveWatchingFields — shared Watching-row derived fields', () => {
     expect(fields.releasedEpisodeCount).toBe(1)
     expect(fields.releasedWatchedCount).toBe(1)
   })
+
+  it('builds a lightweight nextScheduledEpisode candidate for a real (non-predicted) countdown episode', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-01T00:00:00Z'))
+    const episodesBySeason = {
+      1: [{ episode_number: 1, name: 'Pilot', air_date: '2026-01-01', runtime: 42 }],
+    }
+    const details = {
+      status: 'Returning Series',
+      next_episode_to_air: { air_date: '2026-08-01', season_number: 1, episode_number: 2, name: 'Second', runtime: 44 },
+    }
+    const fields = deriveWatchingFields(episodesBySeason, new Set(['1:1']), details)
+    expect(fields.status.type).toBe('countdown')
+    expect(fields.nextScheduledEpisode).toMatchObject({
+      season_number: 1, episode_number: 2, name: 'Second', runtime: 44,
+    })
+    expect(fields.nextScheduledEpisode.release.timestamp).toBe(fields.status.release.timestamp)
+  })
+
+  it('does not build a nextScheduledEpisode candidate for a weekly-cadence prediction (no episode identity)', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-10T00:00:00Z'))
+    const episodesBySeason = {
+      1: [
+        { episode_number: 1, name: 'Pilot', air_date: '2026-07-01', runtime: 42 },
+        { episode_number: 2, name: 'Second', air_date: '2026-07-08', runtime: 42 },
+      ],
+    }
+    const details = { status: 'Returning Series', seasons: [{ season_number: 1, episode_count: 10 }] }
+    const fields = deriveWatchingFields(episodesBySeason, new Set(['1:1', '1:2']), details)
+    expect(fields.status).toMatchObject({ type: 'countdown', predicted: true })
+    expect(fields.nextScheduledEpisode).toBeNull()
+  })
+
+  it('nextScheduledEpisode is null once the show is caught up (no countdown)', () => {
+    const fields = deriveWatchingFields({}, new Set(), {})
+    expect(fields.status.type).toBe('caughtUp')
+    expect(fields.nextScheduledEpisode).toBeNull()
+  })
+})
+
+describe('attachEpisodeReleaseData — effective title resolution (Feature 1)', () => {
+  it('a proper TMDB title wins over a TVmaze title', () => {
+    const episode = { episode_number: 5, name: 'The Red Dragon and the Gold' }
+    const releaseMap = { '3:5': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: 1, tvmazeName: 'Alternate Title' } }
+    const enriched = attachEpisodeReleaseData(episode, releaseMap, 3)
+    expect(enriched.name).toBe('The Red Dragon and the Gold')
+    expect(enriched.tmdbName).toBe('The Red Dragon and the Gold')
+  })
+
+  it('a generic TMDB title falls back to a proper TVmaze title', () => {
+    const episode = { episode_number: 5, name: 'Episode 5' }
+    const releaseMap = { '3:5': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: 1, tvmazeName: 'Unbowed and Unbent' } }
+    const enriched = attachEpisodeReleaseData(episode, releaseMap, 3)
+    expect(enriched.name).toBe('Unbowed and Unbent')
+    expect(enriched.tmdbName).toBe('Episode 5')
+  })
+
+  it('a missing TMDB title falls back to a proper TVmaze title', () => {
+    const episode = { episode_number: 6, name: null }
+    const releaseMap = { '1:6': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: 1, tvmazeName: 'Smallfolk' } }
+    const enriched = attachEpisodeReleaseData(episode, releaseMap, 1)
+    expect(enriched.name).toBe('Smallfolk')
+  })
+
+  it('generic titles from both sources produce TBA', () => {
+    const episode = { episode_number: 6, name: 'Episode 6' }
+    const releaseMap = { '1:6': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: 1, tvmazeName: null } }
+    const enriched = attachEpisodeReleaseData(episode, releaseMap, 1)
+    expect(enriched.name).toBe('TBA')
+  })
+
+  it('no TVmaze release at all still resolves TBA for a generic TMDB title', () => {
+    const episode = { episode_number: 6, name: 'Episode 6' }
+    const enriched = attachEpisodeReleaseData(episode, {}, 1)
+    expect(enriched.name).toBe('TBA')
+  })
+
+  it('a future episode may use the TVmaze title before release, without affecting hasAired', () => {
+    const episode = { episode_number: 5, name: 'Episode 5', air_date: '2099-01-01' }
+    const releaseMap = { '1:5': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: 1, tvmazeName: 'Unbowed and Unbent' } }
+    const enriched = attachEpisodeReleaseData(episode, releaseMap, 1)
+    expect(enriched.name).toBe('Unbowed and Unbent')
+    expect(hasAired(enriched)).toBe(false)
+  })
+
+  it('retains the airstamp/airdate/airtime/tvmazeEpisodeId fields alongside the title', () => {
+    const episode = { episode_number: 1, name: 'Episode 1' }
+    const releaseMap = {
+      '1:1': { airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101, tvmazeName: 'Winter Is Coming' },
+    }
+    const enriched = attachEpisodeReleaseData(episode, releaseMap, 1)
+    expect(enriched).toMatchObject({
+      airstamp: '2026-07-19T21:00:00-04:00', airdate: '2026-07-19', airtime: '21:00', tvmazeEpisodeId: 101,
+      name: 'Winter Is Coming',
+    })
+  })
+
+  it('a later proper TMDB title takes priority again over a previously-attached effective name', () => {
+    const releaseMap = { '1:6': { airstamp: null, airdate: null, airtime: null, tvmazeEpisodeId: 1, tvmazeName: 'The New Title' } }
+    // Monday: TMDB generic, TVmaze blank.
+    const monday = attachEpisodeReleaseData({ episode_number: 6, name: 'Episode 6' }, {}, 1)
+    expect(monday.name).toBe('TBA')
+    // Wednesday: TVmaze refresh supplies a title — re-attach from the raw TMDB episode again.
+    const wednesday = attachEpisodeReleaseData({ episode_number: 6, name: 'Episode 6' }, releaseMap, 1)
+    expect(wednesday.name).toBe('The New Title')
+    // Sunday: a fresh TMDB fetch supplies its own official title — a new raw
+    // episode object (as a real refresh would produce), not a merge of
+    // Wednesday's already-enriched one.
+    const sunday = attachEpisodeReleaseData({ episode_number: 6, name: 'Official Title' }, releaseMap, 1)
+    expect(sunday.name).toBe('Official Title')
+    expect(sunday.tmdbName).toBe('Official Title')
+  })
 })
 
 describe('enrichTrackedShowsForWatching — released progress fields end to end', () => {
