@@ -37,6 +37,16 @@ export function consumeOAuthCallbackError() {
   const hasError = params.has('error') || params.has('error_code')
   if (!hasError) return null
 
+  // Supabase returns this exact code when "Allow new users to sign up" is
+  // off and a non-owner Google identity tries to authenticate — no session
+  // is ever created. For this owner-only app that's not a generic OAuth
+  // failure, it's the same rejection a signed-in-but-unrecognized owner
+  // check would show, so it gets the same message rather than the vague
+  // "cancelled or failed" one.
+  const errorCode = params.get('error_code')
   clearOAuthErrorParams()
+  if (errorCode === 'signup_disabled') {
+    return "You're not the owner."
+  }
   return 'Google sign-in was cancelled or failed. Please try again.'
 }

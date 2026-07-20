@@ -37,4 +37,32 @@ describe('consumeOAuthCallbackError', () => {
     expect(window.location.hash).toBe('#section')
     expect(window.location.search).toBe('')
   })
+
+  it('maps error_code=signup_disabled to the owner-rejection message', () => {
+    window.history.replaceState({}, '', '/?error=access_denied&error_code=signup_disabled&error_description=Signups+not+allowed+for+this+instance')
+    const message = consumeOAuthCallbackError()
+    expect(message).toBe("You're not the owner.")
+  })
+
+  it('strips callback params for the signup_disabled case too', () => {
+    window.history.replaceState({}, '', '/?error=access_denied&error_code=signup_disabled')
+    consumeOAuthCallbackError()
+    expect(window.location.search).toBe('')
+  })
+
+  it('a refresh after consuming signup_disabled does not replay the message', () => {
+    window.history.replaceState({}, '', '/?error=access_denied&error_code=signup_disabled')
+    expect(consumeOAuthCallbackError()).toBe("You're not the owner.")
+    expect(consumeOAuthCallbackError()).toBeNull()
+  })
+
+  it('a non-signup_disabled error_code still maps to the generic message', () => {
+    window.history.replaceState({}, '', '/?error=access_denied&error_code=user_cancelled')
+    expect(consumeOAuthCallbackError()).toBe('Google sign-in was cancelled or failed. Please try again.')
+  })
+
+  it('an error with no error_code at all still maps to the generic message', () => {
+    window.history.replaceState({}, '', '/?error=access_denied')
+    expect(consumeOAuthCallbackError()).toBe('Google sign-in was cancelled or failed. Please try again.')
+  })
 })
