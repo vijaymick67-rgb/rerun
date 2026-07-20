@@ -12,7 +12,7 @@
   --color-border-strong: rgb(148 163 184 / 0.26);
   --color-text: #f1f3f8;
   --color-text-secondary: #a9b2c4;
-  --color-text-muted: #707b91;
+  --color-text-muted: #8f9bb0;
   --color-accent: #7297ff;
   --color-accent-strong: #8ba8ff;
   --color-accent-muted: rgb(114 151 255 / 0.14);
@@ -303,8 +303,14 @@ body {
   transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 
-.surface-interactive:active {
+.surface-interactive[data-pressed='true']:not(:disabled):not([aria-disabled='true']) {
   background: var(--color-surface-pressed);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .surface-interactive:active:not(:disabled):not([aria-disabled='true']) {
+    background: var(--color-surface-pressed);
+  }
 }
 
 .status-banner {

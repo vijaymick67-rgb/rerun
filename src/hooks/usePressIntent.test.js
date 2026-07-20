@@ -9,6 +9,26 @@ const indexCss = src('../index.css')
 const watchingRow = src('../components/WatchingRow.jsx')
 const pressIntentSrc = src('../lib/pressIntent.js')
 
+const relativeLuminance = (hex) => {
+  const channels = hex.slice(1).match(/../g).map((channel) => {
+    const normalized = Number.parseInt(channel, 16) / 255
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4
+  })
+
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+}
+
+const contrastRatio = (foreground, background) => {
+  const foregroundLuminance = relativeLuminance(foreground)
+  const backgroundLuminance = relativeLuminance(background)
+  return (
+    (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+  )
+}
+
 describe('usePressIntent: touch-only, delegated, cleaned-up wiring', () => {
   it('only reacts to touch pointers, leaving mouse/pen and keyboard activation untouched', () => {
     expect((hookSrc.match(/pointerType !== 'touch'/g) ?? []).length).toBe(4)
@@ -98,6 +118,36 @@ describe('release-time tap classification CSS', () => {
     expect(reducedMotionBlock).toContain('scale: none;')
     expect(reducedMotionBlock).toContain('opacity: 1;')
     expect(reducedMotionBlock).toContain('prefers-reduced-motion: reduce) and (hover: hover) and (pointer: fine)')
+  })
+})
+
+describe('cinematic-midnight semantic token CSS', () => {
+  it('keeps muted text readable while subordinate to secondary text', () => {
+    expect(indexCss).toContain('--color-surface: #111827;')
+    expect(indexCss).toContain('--color-canvas: #080b14;')
+    expect(indexCss).toContain('--color-text-secondary: #a9b2c4;')
+    expect(indexCss).toContain('--color-text-muted: #8f9bb0;')
+
+    expect(contrastRatio('#8f9bb0', '#111827')).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio('#8f9bb0', '#080b14')).toBeGreaterThanOrEqual(4.5)
+    expect(relativeLuminance('#8f9bb0')).toBeLessThan(relativeLuminance('#a9b2c4'))
+  })
+
+  it('uses intent-driven surface presses and gates native active styling to fine pointers', () => {
+    const dataPressedRule = indexCss.match(
+      /\.surface-interactive\[data-pressed='true'\]:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*\}/,
+    )?.[0]
+    expect(dataPressedRule).toContain('background: var(--color-surface-pressed);')
+
+    const surfaceActiveRule = indexCss.match(
+      /\.surface-interactive:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*\}/,
+    )?.[0]
+    expect(surfaceActiveRule).toContain('background: var(--color-surface-pressed);')
+
+    const surfaceActiveStart = indexCss.indexOf('.surface-interactive:active')
+    expect(surfaceActiveStart).toBeGreaterThan(indexCss.indexOf('@media (hover: hover) and (pointer: fine)'))
+    expect(indexCss.slice(0, surfaceActiveStart)).not.toContain('.surface-interactive:active')
+    expect(dataPressedRule).toContain(':not(:disabled):not([aria-disabled=\'true\'])')
   })
 })
 
