@@ -3,7 +3,8 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './fonts.css'
 import './index.css'
-import App from './App.jsx'
+import AuthGate from './AuthGate.jsx'
+import { AuthProvider } from './lib/AuthContext'
 import { removeStaticLoadingShell } from './pwa/appShell'
 
 const removeShellOnStartupFailure = () => removeStaticLoadingShell()
@@ -14,7 +15,9 @@ window.addEventListener('unhandledrejection', removeShellOnStartupFailure, { onc
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <AuthProvider>
+        <AuthGate />
+      </AuthProvider>
     </BrowserRouter>
   </StrictMode>,
 )

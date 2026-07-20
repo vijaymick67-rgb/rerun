@@ -3,6 +3,9 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./components/ReloadPrompt', () => ({ default: () => null }))
+vi.mock('./lib/AuthContext', () => ({
+  useAuth: () => ({ session: { user: { email: 'owner@example.com' } }, signOut: vi.fn() }),
+}))
 
 import App from './App.jsx'
 import { readFileSync } from 'node:fs'

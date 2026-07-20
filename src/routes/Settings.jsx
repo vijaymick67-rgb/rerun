@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { useAuth } from '../lib/AuthContext'
+import ConfirmDialog from '../components/ConfirmDialog'
+import { clearWatchingCache } from '../lib/watchingCache'
+import { clearAllDetailCaches } from '../lib/detailCache'
+import { clearStatsCache } from './Stats'
 import {
   buildBackup,
   backupFilename,
@@ -182,6 +187,7 @@ export default function Settings() {
     <div className="app-page px-4 pb-6">
       <BackupRestoreSection />
       <NotificationsSection />
+      <AccountSection />
     </div>
   )
 }
@@ -709,6 +715,61 @@ function NotificationsSection() {
         <Banner tone="error" live>{preferenceError}</Banner>
       )}
       {subscriptionError && <Banner tone="error">Subscription error: {subscriptionError}</Banner>}
+    </>
+  )
+}
+
+// Deliberately does NOT touch push subscription state (managementToken,
+// automaticActivation, notificationPreference) — this is a personal
+// single-owner device, and notification delivery is controlled entirely by
+// the Notifications section above, not by sign-in state. See
+// docs/AUTH_SETUP.md.
+function AccountSection() {
+  const { session, signOut } = useAuth()
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+
+  function handleSignOutPress() {
+    if (signingOut) return
+    setConfirmOpen(true)
+  }
+
+  async function handleConfirmSignOut() {
+    setConfirmOpen(false)
+    setSigningOut(true)
+    // Clear local caches that carry personal watch state before flipping
+    // auth status — AuthGate unmounts the private app (this component
+    // included) as soon as signOut() resolves.
+    clearWatchingCache()
+    clearAllDetailCaches()
+    clearStatsCache()
+    await signOut()
+  }
+
+  const identityLabel = session?.user?.email || 'Signed in'
+
+  return (
+    <>
+      <SettingsSection title="Account">
+        <SettingsInfoRow label="Signed in as" status={identityLabel} />
+        <SettingsActionRow
+          label="Sign out"
+          onPress={handleSignOutPress}
+          disabled={signingOut}
+          busyLabel={signingOut ? 'Signing out…' : null}
+        />
+      </SettingsSection>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Sign out?"
+        message="You'll need to sign back in with Google (or your recovery login) to see your watch history again."
+        confirmLabel="Sign out"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={handleConfirmSignOut}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </>
   )
 }

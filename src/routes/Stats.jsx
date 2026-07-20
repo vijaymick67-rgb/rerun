@@ -61,6 +61,17 @@ function saveCache(payload) {
   }
 }
 
+// Watch-history-derived data (totals, hours, per-show breakdowns) — cleared
+// on sign-out by Settings' Account section so it can't be read back before
+// the next owner signs in and repopulates it from Supabase.
+export function clearStatsCache() {
+  try {
+    localStorage.removeItem(CACHE_KEY)
+  } catch {
+    // ignore
+  }
+}
+
 // Runtime in minutes for a single watched episode, applying the documented
 // fallback chain: the episode's own runtime → the show's average typical
 // runtime → a flat default.

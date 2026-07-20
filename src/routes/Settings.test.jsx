@@ -48,6 +48,22 @@ vi.mock('../lib/push/automaticActivation', () => ({
   setAutomaticNotificationsActivated: vi.fn(),
 }))
 
+vi.mock('../lib/watchingCache', () => ({
+  clearWatchingCache: vi.fn(),
+}))
+
+vi.mock('../lib/detailCache', () => ({
+  clearAllDetailCaches: vi.fn(),
+}))
+
+vi.mock('./Stats', () => ({
+  clearStatsCache: vi.fn(),
+}))
+
+vi.mock('../lib/AuthContext', () => ({
+  useAuth: vi.fn(),
+}))
+
 import * as backupMock from '../lib/backup'
 import * as pushSupportMock from '../lib/push/pushSupport'
 import * as pushClientMock from '../lib/push/pushClient'
@@ -55,6 +71,10 @@ import * as pushApiMock from '../lib/push/pushApi'
 import * as managementTokenMock from '../lib/push/managementToken'
 import * as notificationPreferenceMock from '../lib/push/notificationPreference'
 import * as automaticActivationMock from '../lib/push/automaticActivation'
+import * as watchingCacheMock from '../lib/watchingCache'
+import * as detailCacheMock from '../lib/detailCache'
+import * as statsMock from './Stats'
+import * as authContextMock from '../lib/AuthContext'
 import Settings from './Settings'
 
 let container = null
@@ -139,6 +159,14 @@ beforeEach(() => {
   automaticActivationMock.getAutomaticNotificationsActivated.mockReset().mockReturnValue(true)
   automaticActivationMock.setAutomaticNotificationsActivated.mockReset()
   delete globalThis.Notification
+
+  watchingCacheMock.clearWatchingCache.mockReset()
+  detailCacheMock.clearAllDetailCaches.mockReset()
+  statsMock.clearStatsCache.mockReset()
+  authContextMock.useAuth.mockReset().mockReturnValue({
+    session: { user: { email: 'owner@example.com' } },
+    signOut: vi.fn().mockResolvedValue(undefined),
+  })
 })
 
 afterEach(async () => {
@@ -821,5 +849,79 @@ describe('Settings: Notifications section', () => {
 
       expect(automaticActivationMock.setAutomaticNotificationsActivated).toHaveBeenCalledWith(false)
     })
+  })
+})
+
+describe('Settings: Account section', () => {
+  it('shows the signed-in identity and a Sign out row', async () => {
+    await mountSettings()
+    expect(container.textContent).toContain('owner@example.com')
+    expect(getByText('Sign out')).not.toBeNull()
+  })
+
+  it('falls back to a generic label when the session has no email', async () => {
+    authContextMock.useAuth.mockReturnValue({
+      session: { user: {} },
+      signOut: vi.fn().mockResolvedValue(undefined),
+    })
+    await mountSettings()
+    expect(container.textContent).toContain('Signed in')
+  })
+
+  it('requires confirmation before signing out', async () => {
+    await mountSettings()
+    await act(async () => { getByText('Sign out').closest('button').click() })
+
+    expect(container.textContent).toContain('Sign out?')
+    const { signOut } = authContextMock.useAuth.mock.results.at(-1).value
+    expect(signOut).not.toHaveBeenCalled()
+  })
+
+  it('cancelling the confirmation dialog signs out nothing', async () => {
+    await mountSettings()
+    await act(async () => { getByText('Sign out').closest('button').click() })
+    await act(async () => { getByText('Cancel').click() })
+
+    const { signOut } = authContextMock.useAuth.mock.results.at(-1).value
+    expect(signOut).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain('Sign out?')
+  })
+
+  it('confirming sign-out clears private caches before calling context signOut', async () => {
+    const signOut = vi.fn().mockResolvedValue(undefined)
+    authContextMock.useAuth.mockReturnValue({
+      session: { user: { email: 'owner@example.com' } },
+      signOut,
+    })
+    await mountSettings()
+
+    await act(async () => { getByText('Sign out').closest('button').click() })
+    await act(async () => {
+      const confirmButtons = [...container.querySelectorAll('button')].filter((b) => b.textContent === 'Sign out')
+      confirmButtons.at(-1).click()
+    })
+
+    expect(watchingCacheMock.clearWatchingCache).toHaveBeenCalledOnce()
+    expect(detailCacheMock.clearAllDetailCaches).toHaveBeenCalledOnce()
+    expect(statsMock.clearStatsCache).toHaveBeenCalledOnce()
+    expect(signOut).toHaveBeenCalledOnce()
+  })
+
+  it('does not touch push subscription/notification preference state on sign-out', async () => {
+    const signOut = vi.fn().mockResolvedValue(undefined)
+    authContextMock.useAuth.mockReturnValue({
+      session: { user: { email: 'owner@example.com' } },
+      signOut,
+    })
+    await mountSettings()
+
+    await act(async () => { getByText('Sign out').closest('button').click() })
+    await act(async () => {
+      const confirmButtons = [...container.querySelectorAll('button')].filter((b) => b.textContent === 'Sign out')
+      confirmButtons.at(-1).click()
+    })
+
+    expect(managementTokenMock.clearStoredManagementToken).not.toHaveBeenCalled()
+    expect(automaticActivationMock.setAutomaticNotificationsActivated).not.toHaveBeenCalled()
   })
 })
