@@ -107,14 +107,14 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
   return (
     <div
       ref={rowRef}
-      className="watching-row relative overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)"
+      className="watching-row content-row relative overflow-hidden"
     >
       <button
         type="button"
         onClick={() => onRemove(show)}
         disabled={isRemoving}
         aria-label={`Remove ${show.name}`}
-        className="motion-press absolute inset-y-0 right-0 flex w-[84px] items-center justify-center bg-red-500/90 text-sm font-medium text-white disabled:opacity-60"
+        className="motion-press watching-remove-surface absolute inset-y-0 right-0 flex w-[84px] items-center justify-center text-sm font-medium disabled:opacity-60"
       >
         {isRemoving ? '…' : 'Remove'}
       </button>
@@ -143,7 +143,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
             <p className="truncate text-sm font-medium text-(--color-text)">{show.name}</p>
 
             {show.loadError ? (
-              <p className="mt-1 text-xs text-red-400">Couldn't load episodes</p>
+              <p className="mt-1 text-xs text-(--color-destructive)">Couldn't load episodes</p>
             ) : show.status?.type === 'nextUp' ? (
               <p className="mt-1 text-xs text-(--color-accent)">
                 Up next: S{show.status.season_number}E{show.status.episode_number}
@@ -168,7 +168,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
           onClick={() => onRemove(show)}
           disabled={isRemoving}
           aria-label={`Remove ${show.name}`}
-          className="motion-press watching-row-hover-remove absolute top-1/2 right-3 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-(--color-text-muted) hover:text-red-400 disabled:opacity-60"
+          className="motion-press watching-row-hover-remove absolute top-1/2 right-3 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-(--color-text-muted) hover:text-(--color-destructive) disabled:opacity-60"
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
             <path

@@ -175,7 +175,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
   return (
     <div className="nested-page px-4 pb-4">
-      <div className="flex min-h-11 items-center gap-2">
+      <div className="nested-header">
         <Link
           to={`/watching/${numericTmdbId}`}
           aria-label="Back to show"
@@ -198,7 +198,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       {error && (
         <div
           role="alert"
-          className={`motion-banner mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${episodes ? 'border-amber-400/40 bg-amber-500/10 text-amber-300' : 'border-red-400/40 bg-red-500/10 text-red-400'}`}
+          className={`motion-banner mt-4 flex min-w-0 items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${episodes ? 'border-(--color-upcoming)/40 bg-(--color-upcoming-muted) text-(--color-upcoming)' : 'border-(--color-destructive)/40 bg-(--color-destructive-muted) text-(--color-destructive)'}`}
         >
           <span className="min-w-0 break-words">{error}</span>
           <button type="button" onClick={retryLoad} disabled={refreshing} className="motion-press min-h-11 shrink-0 rounded-md px-2 font-semibold underline disabled:opacity-60">
@@ -208,7 +208,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press min-h-11 min-w-11 shrink-0 text-(--color-destructive)/80 hover:text-(--color-destructive)"
           >
             ✕
           </button>)}
@@ -227,13 +227,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             return (
               <div
                 key={ep.episode_number}
-                className={`flex items-center gap-2 rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-1.5 ${episodeHasAired ? '' : 'opacity-50'}`}
+                className={`content-row flex items-center gap-2 px-3 py-1.5 ${episodeHasAired ? '' : 'opacity-50'}`}
               >
-                <div className={`min-w-0 flex-1 py-1 ${
-                  episodeHasAired
-                    ? 'transition-transform duration-75 active:translate-y-px motion-reduce:transform-none'
-                    : ''
-                }`}>
+                <div className="min-w-0 flex-1 py-1">
                   <p className="truncate text-sm text-(--color-text)">
                     {ep.episode_number}. {ep.name || 'Untitled'}
                   </p>

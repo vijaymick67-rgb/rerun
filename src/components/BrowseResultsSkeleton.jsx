@@ -6,7 +6,7 @@ export default function BrowseResultsSkeleton() {
       <div className="h-4 w-28 animate-pulse rounded bg-(--color-surface-raised)" />
       <div className="mt-2 grid grid-cols-2 gap-3">
         {PLACEHOLDER_CARDS.map((i) => (
-          <div key={i} className="animate-pulse overflow-hidden rounded-lg bg-(--color-surface)">
+          <div key={i} className="poster-card animate-pulse">
             <div className="aspect-2/3 w-full bg-(--color-surface-raised)" />
             <div className="p-2">
               <div className="h-3 w-4/5 rounded bg-(--color-surface-raised)" />

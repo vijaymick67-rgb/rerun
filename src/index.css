@@ -104,6 +104,56 @@ body {
   padding-top: calc(var(--safe-area-inset-top) + 1rem);
 }
 
+.content-surface {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--elevation-raised);
+}
+
+.poster-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-poster);
+  background: var(--color-surface);
+  box-shadow: var(--elevation-raised);
+}
+
+.content-row {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.progress-track {
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+}
+
+.empty-state {
+  margin-top: 2rem;
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  padding: 1.25rem 1rem;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.nested-header {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .progressive-image {
   position: relative;
   display: block;
@@ -423,6 +473,11 @@ body {
 .watching-row-hover-remove:focus-visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+.watching-remove-surface {
+  background: var(--color-destructive);
+  color: var(--color-canvas);
 }
 
 @media (hover: hover) and (pointer: fine) {

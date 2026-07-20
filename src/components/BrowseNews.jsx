@@ -21,7 +21,7 @@ function NewsImage({ article }) {
 
 export function NewsStoryCard({ article, onDismiss }) {
   return (
-    <article className="relative min-w-0 rounded-lg border border-(--color-border) bg-(--color-surface)">
+    <article className="content-surface relative min-w-0">
       <a href={article.url} target="_blank" rel="noopener noreferrer"
         aria-label={`Read ${article.title} from ${article.sourceName}`}
         className={`motion-press flex min-w-0 gap-3 rounded-lg p-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--color-accent) ${onDismiss ? 'pr-13' : ''}`}>

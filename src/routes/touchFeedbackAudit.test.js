@@ -65,6 +65,12 @@ describe('touch feedback: swipeable Watching row keeps its existing transform/ge
     expect(indexCss).toMatch(/\.motion-press:active[^{]*\{\s*scale: 0\.98;/)
   })
 
+  it('keeps episode rows free of unconditional touch active styling', () => {
+    expect(seasonDetail).not.toContain('active:translate-y-px')
+    expect(indexCss).toContain(".motion-press[data-pressed='true']:not(:disabled):not([aria-disabled='true'])")
+    expect(indexCss).toContain('@media (hover: hover) and (pointer: fine)')
+  })
+
   it('keeps passive/non-passive touch listener behavior untouched', () => {
     expect(watchingRow).toContain("addEventListener('touchstart', handleTouchStart, { passive: true })")
     expect(watchingRow).toContain("addEventListener('touchmove', handleTouchMove, { passive: false })")
@@ -81,10 +87,10 @@ describe('touch feedback: keyboard focus-visible improvements', () => {
 describe('touch feedback: minimum target sizing on icon-only and dialog buttons', () => {
   it('ShowDetail and SeasonDetail error-dismiss buttons meet the 44px minimum', () => {
     expect(showDetail).toContain(
-      'className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"',
+      'className="motion-press min-h-11 min-w-11 shrink-0 text-(--color-destructive)/80 hover:text-(--color-destructive)"',
     )
     expect(seasonDetail).toContain(
-      'className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"',
+      'className="motion-press min-h-11 min-w-11 shrink-0 text-(--color-destructive)/80 hover:text-(--color-destructive)"',
     )
   })
 
