@@ -64,6 +64,15 @@ vi.mock('../lib/AuthContext', () => ({
   useAuth: vi.fn(),
 }))
 
+const updateUserMock = vi.fn()
+vi.mock('../lib/supabase', () => ({
+  supabase: {
+    auth: {
+      updateUser: (...args) => updateUserMock(...args),
+    },
+  },
+}))
+
 import * as backupMock from '../lib/backup'
 import * as pushSupportMock from '../lib/push/pushSupport'
 import * as pushClientMock from '../lib/push/pushClient'
@@ -167,6 +176,9 @@ beforeEach(() => {
     session: { user: { email: 'owner@example.com' } },
     signOut: vi.fn().mockResolvedValue(undefined),
   })
+  updateUserMock.mockReset().mockResolvedValue({ error: null })
+  window.localStorage.clear()
+  window.sessionStorage.clear()
 })
 
 afterEach(async () => {
@@ -923,5 +935,148 @@ describe('Settings: Account section', () => {
 
     expect(managementTokenMock.clearStoredManagementToken).not.toHaveBeenCalled()
     expect(automaticActivationMock.setAutomaticNotificationsActivated).not.toHaveBeenCalled()
+  })
+})
+
+describe('Settings: Account section — recovery password', () => {
+  function openRecoveryForm() {
+    return act(async () => { getByText('Set recovery password').closest('button').click() })
+  }
+
+  function passwordInputs() {
+    return [...container.querySelectorAll('input[type="password"]')]
+  }
+
+  async function fillAndSubmit(password, confirmPassword) {
+    const [passwordInput, confirmInput] = passwordInputs()
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => {
+      setter.call(passwordInput, password)
+      passwordInput.dispatchEvent(new Event('input', { bubbles: true }))
+      setter.call(confirmInput, confirmPassword)
+      confirmInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+  }
+
+  it('reveals the recovery password form only after the action row is pressed', async () => {
+    await mountSettings()
+    expect(container.querySelector('input[type="password"]')).toBeNull()
+    await openRecoveryForm()
+    expect(passwordInputs()).toHaveLength(2)
+  })
+
+  it('successfully updates the recovery password', async () => {
+    await mountSettings()
+    await openRecoveryForm()
+    await fillAndSubmit('a-strong-password', 'a-strong-password')
+
+    expect(updateUserMock).toHaveBeenCalledWith({ password: 'a-strong-password' })
+    expect(container.textContent).toContain('Recovery password updated.')
+  })
+
+  it('rejects mismatched passwords without calling updateUser', async () => {
+    await mountSettings()
+    await openRecoveryForm()
+    await fillAndSubmit('a-strong-password', 'a-different-password')
+
+    expect(updateUserMock).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Passwords do not match.')
+  })
+
+  it('rejects a password shorter than the minimum length without calling updateUser', async () => {
+    await mountSettings()
+    await openRecoveryForm()
+    await fillAndSubmit('short1', 'short1')
+
+    expect(updateUserMock).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('at least 8 characters')
+  })
+
+  it('shows the Supabase error message on updateUser failure', async () => {
+    updateUserMock.mockResolvedValue({ error: new Error('Network error') })
+    await mountSettings()
+    await openRecoveryForm()
+    await fillAndSubmit('a-strong-password', 'a-strong-password')
+
+    expect(container.textContent).toContain('Network error')
+  })
+
+  it('disables the submit button while saving', async () => {
+    const deferredUpdate = deferred()
+    updateUserMock.mockReturnValue(deferredUpdate.promise)
+    await mountSettings()
+    await openRecoveryForm()
+
+    const [passwordInput, confirmInput] = passwordInputs()
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => {
+      setter.call(passwordInput, 'a-strong-password')
+      passwordInput.dispatchEvent(new Event('input', { bubbles: true }))
+      setter.call(confirmInput, 'a-strong-password')
+      confirmInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+
+    const submitButton = getByText('Saving…').closest('button')
+    expect(submitButton.disabled).toBe(true)
+
+    await act(async () => { deferredUpdate.resolve({ error: null }) })
+  })
+
+  it('clears both password fields after a successful update', async () => {
+    await mountSettings()
+    await openRecoveryForm()
+    await fillAndSubmit('a-strong-password', 'a-strong-password')
+
+    const [passwordInput, confirmInput] = passwordInputs()
+    expect(passwordInput.value).toBe('')
+    expect(confirmInput.value).toBe('')
+  })
+
+  it('clears both password fields on cancel', async () => {
+    await mountSettings()
+    await openRecoveryForm()
+
+    const [passwordInput, confirmInput] = passwordInputs()
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => {
+      setter.call(passwordInput, 'a-strong-password')
+      passwordInput.dispatchEvent(new Event('input', { bubbles: true }))
+      setter.call(confirmInput, 'a-strong-password')
+      confirmInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { getByText('Cancel').click() })
+
+    await openRecoveryForm()
+    const [reopenedPassword, reopenedConfirm] = passwordInputs()
+    expect(reopenedPassword.value).toBe('')
+    expect(reopenedConfirm.value).toBe('')
+  })
+
+  it('never writes the password value to localStorage or sessionStorage', async () => {
+    await mountSettings()
+    await openRecoveryForm()
+    await fillAndSubmit('a-strong-password', 'a-strong-password')
+
+    const allStorageValues = [
+      ...Object.values(window.localStorage),
+      ...Object.values(window.sessionStorage),
+    ]
+    const serialized = JSON.stringify(allStorageValues)
+    expect(serialized).not.toContain('a-strong-password')
+
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      expect(window.localStorage.getItem(key)).not.toContain('a-strong-password')
+    }
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const key = window.sessionStorage.key(i)
+      expect(window.sessionStorage.getItem(key)).not.toContain('a-strong-password')
+    }
   })
 })

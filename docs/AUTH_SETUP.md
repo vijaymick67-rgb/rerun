@@ -55,8 +55,9 @@ Production):
    Exposed schemas** (it should only ever contain `public`, and whatever
    else was already there — do not add `private`). This is what keeps
    `private.is_owner()` uncallable from the browser even though
-   `anon`/`authenticated` hold an EXECUTE grant on it at the SQL level (see
-   the migration's comments for why that grant exists at all).
+   `authenticated` holds an EXECUTE grant on it at the SQL level (`anon` and
+   `PUBLIC` do not — see the migration's comments for why the grant is
+   scoped this narrowly).
 
 ---
 
@@ -120,18 +121,17 @@ don't need to wait for Production:
    `current_user_is_owner()` now returns `true` for this UUID, and the
    normal app (TabBar, Watching, etc.) loads.
 6. **Set the recovery password on that same authenticated session** — while
-   still signed in as the owner from step 5, open the browser console on
-   the deployed app and run:
-   ```js
-   await window.supabase.auth.updateUser({ password: '<owner-recovery-password>' })
-   ```
-   (If `window.supabase` isn't exposed in the console, temporarily add
-   `window.supabase = supabase` next to the client export in
-   `src/lib/supabase.js`, run this step, then remove it — don't leave a
-   debug global in the shipped build.) This is the Supabase-documented way
-   to attach a password credential to an **already-authenticated** OAuth
-   user, and it's the only path that's guaranteed to land on the same
-   `auth.users` row rather than risking a second, Dashboard-created one.
+   still signed in as the owner from step 5, go to **Settings → Account →
+   Set recovery password** in the app and enter/confirm a password there.
+   That screen calls `supabase.auth.updateUser({ password })` directly —
+   the Supabase-documented way to attach a password credential to an
+   **already-authenticated** OAuth user, and the only path that's
+   guaranteed to land on the same `auth.users` row rather than risking a
+   second, Dashboard-created one. No browser console, no temporarily
+   exposing the Supabase client, no debug deploy — it's a normal owner-only
+   screen, reachable only once you're already past the ownership gate, and
+   you can return to it any time to change the recovery password again
+   later.
 7. **Verify recovery login** — sign out, choose "Use recovery login" on the
    Login screen, and sign in with the owner's email + the password from
    step 6. This must succeed and load the same authenticated app.
