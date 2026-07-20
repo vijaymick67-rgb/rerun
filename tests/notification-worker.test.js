@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createNotificationWorkerHandler } from '../api/notifications/run.js'
-import { EPISODE_NOTIFICATION_TYPE } from '../src/lib/notifications/episodeEligibility.js'
+import {
+  EPISODE_AIRTIME_NOTIFICATION_TYPE,
+  EPISODE_REMINDER_NOTIFICATION_TYPE,
+} from '../src/lib/notifications/episodeEligibility.js'
 
 const SECRET = 'test-worker-secret'
 const EVALUATION_TIME = new Date('2026-07-20T00:00:00.000Z')
@@ -56,7 +59,8 @@ function makeQueryBuilder(resolveResult) {
 // as long as the claim_token matches — mirroring the real
 // complete_episode_notification_deliveries RPC's WHERE clause closely enough
 // for these tests (the "delivered_at is null" guard doesn't need modeling
-// here since no test reuses an already-finalized identity).
+// here since no test reuses an already-finalized identity through this
+// resolver directly — see realisticSupabase for tests that need that).
 function defaultComplete(args, record) {
   const claimedTokens = record.claimTokensByIdentity
   const finalized = args.p_identities.filter((identity) => claimedTokens.get(identity) === args.p_claim_token)
@@ -94,12 +98,11 @@ function makeSupabaseStub({
     },
     rpc(name, args) {
       record.rpcCalls.push([name, args])
-      if (name === 'claim_episode_notification_deliveries') {
+      if (name === 'claim_episode_notifications') {
         const result = claim(args)
-        for (const identity of args.p_episodes.map((e) =>
-          `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`,
-        )) {
-          if ((result.data ?? []).length > 0) record.claimTokensByIdentity.set(identity, args.p_claim_token)
+        for (const row of result.data ?? []) {
+          const identity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${row.season_number}:${row.episode_number}:${row.notification_type}`
+          record.claimTokensByIdentity.set(identity, args.p_claim_token)
         }
         return Promise.resolve(result)
       }
@@ -111,6 +114,128 @@ function makeSupabaseStub({
   }
 }
 
+// Full claim -> deliver round trip against a single shared, lease-aware
+// store — not just "delivered or not" but the same claimed-and-not-yet-
+// delivered lease state the real claim_episode_notifications RPC enforces (a
+// 10-minute window during which a fresh, undelivered claim blocks anyone
+// else from winning the same identity). This is what lets a test simulate
+// two genuinely *overlapping* worker invocations racing the same identity,
+// not just repeated sequential runs.
+const CLAIM_LEASE_MS = 10 * 60 * 1000
+
+function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows = [] } = {}) {
+  // identity -> { claimToken, claimedAtMs, delivered }
+  const store = new Map()
+
+  function isFreeToClaim(identity, claimToken, claimedAtMs) {
+    const existing = store.get(identity)
+    if (!existing) return true
+    if (existing.delivered) return false
+    if (existing.claimToken === claimToken) return true
+    return existing.claimedAt < claimedAtMs - CLAIM_LEASE_MS
+  }
+
+  // Mirrors the three-state airtime classification the real RPC does (see
+  // 20260720120000_distinguish_in_flight_airtime_claim.sql): 'delivered'
+  // (past run genuinely sent it), 'in-flight' (someone else holds a fresh,
+  // undelivered claim and is about to send it), or 'claimable' (no row, a
+  // stale claim, or our own claim). The 'in-flight' state is the one the old
+  // two-state freedom check collapsed into 'delivered', which let a
+  // both-types request downgrade to a standalone reminder next to another
+  // worker's imminent airtime send.
+  function airtimeState(identity, claimToken, claimedAtMs) {
+    const existing = store.get(identity)
+    if (!existing) return 'claimable'
+    if (existing.delivered) return 'delivered'
+    if (existing.claimToken === claimToken) return 'claimable'
+    if (existing.claimedAt < claimedAtMs - CLAIM_LEASE_MS) return 'claimable'
+    return 'in-flight'
+  }
+
+  function setClaim(identity, claimToken, claimedAtMs) {
+    store.set(identity, { claimToken, claimedAt: claimedAtMs, delivered: false })
+  }
+
+  return makeSupabaseStub({
+    subscriptions,
+    trackedShows,
+    watchedRows,
+    // Mirrors claim_episode_notifications: per episode, if
+    // episode_reminder was requested it must be free or nothing is reserved
+    // for the episode at all; episode_airtime is classified into
+    // delivered / in-flight / claimable. A both-types request backs off
+    // entirely when airtime is in-flight (a second worker's fresh, unsent
+    // claim), so a standalone reminder never goes out next to that imminent
+    // airtime send. Every caller — airtime-only, reminder-only, or both —
+    // goes through this exact same function/state, the same way the real
+    // RPC's shared advisory lock key serializes every claim type together.
+    claim: (args) => {
+      const claimedAtMs = Date.parse(args.p_claimed_at)
+      const rows = []
+      for (const ep of args.p_episodes) {
+        const types = ep.notification_types ?? []
+        const wantsReminder = types.includes('episode_reminder')
+        const wantsAirtime = types.includes('episode_airtime')
+        const reminderIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_reminder`
+        const airtimeIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_airtime`
+
+        if (wantsReminder && !isFreeToClaim(reminderIdentity, args.p_claim_token, claimedAtMs)) continue
+
+        let attemptAirtime = false
+        if (wantsAirtime) {
+          const state = airtimeState(airtimeIdentity, args.p_claim_token, claimedAtMs)
+          // Reminder + airtime request, but airtime is being sent right now by
+          // another worker: claim nothing at all for this episode.
+          if (wantsReminder && state === 'in-flight') continue
+          attemptAirtime = state === 'claimable'
+        }
+        if (!wantsReminder && !attemptAirtime) continue
+
+        if (wantsReminder) {
+          setClaim(reminderIdentity, args.p_claim_token, claimedAtMs)
+          rows.push({ season_number: ep.season_number, episode_number: ep.episode_number, notification_type: 'episode_reminder' })
+        }
+        if (attemptAirtime) {
+          setClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+          rows.push({ season_number: ep.season_number, episode_number: ep.episode_number, notification_type: 'episode_airtime' })
+        }
+      }
+      return { data: rows, error: null }
+    },
+    complete: (args) => {
+      const finalized = []
+      for (const identity of args.p_identities) {
+        const existing = store.get(identity)
+        if (existing && existing.claimToken === args.p_claim_token && !existing.delivered) {
+          existing.delivered = true
+          finalized.push(identity)
+        }
+      }
+      return { data: finalized.map((identity) => ({ identity })), error: null }
+    },
+  })
+}
+
+// Lets a test deterministically pause one worker invocation mid-flight (after
+// it has already committed a claim, before it sends/finalizes) and run a
+// second, fully-concurrent invocation to completion in between — simulating
+// two overlapping Vercel Cron invocations without relying on incidental
+// microtask-ordering luck.
+function makeGate() {
+  let release
+  const promise = new Promise((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+// A single macrotask tick lets every already-scheduled microtask (including
+// chains of them, e.g. several sequential `await`s over stub promises) run
+// to completion before returning — enough to let a handler run all the way
+// up to a genuinely blocking await (like makeGate's promise), since nothing
+// else in the stubbed pipeline does real async I/O.
+async function flushAsync() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function subscriptionRow(overrides = {}) {
   return {
     id: 1,
@@ -118,6 +243,7 @@ function subscriptionRow(overrides = {}) {
     p256dh: 'p256dh-key',
     auth: 'auth-key',
     automatic_notifications_enabled_at: '2026-07-17T00:00:00.000Z',
+    airtime_notifications_enabled_at: '2026-07-17T00:00:00.000Z',
     preferred_notification_hour_ist: 20,
     ...overrides,
   }
@@ -127,9 +253,6 @@ function trackedShow(overrides = {}) {
   return { tmdb_id: 1, name: 'Test Show', ...overrides }
 }
 
-// One season, one already-aired (well before EVALUATION_TIME and the
-// watermark) episode, on a mapped platform so classifyReleasePlatform
-// resolves deterministically instead of falling to the 'unknown' default.
 function tmdbStubClient({ showsById = {} } = {}) {
   return {
     getShowDetails: vi.fn(async (tmdbId) => {
@@ -157,11 +280,11 @@ function tvmazeStubClient() {
   return { getShowReleaseMap: vi.fn(async () => ({})) }
 }
 
-function makeHandler({ env = baseEnv(), supabase, showsById = {}, sendNotification, ...rest } = {}) {
+function makeHandler({ env = baseEnv(), supabase, showsById = {}, sendNotification, now = () => EVALUATION_TIME, ...rest } = {}) {
   return createNotificationWorkerHandler({
     env,
     supabase,
-    now: () => EVALUATION_TIME,
+    now,
     createTmdbClient: () => tmdbStubClient({ showsById }),
     createTvmazeClient: () => tvmazeStubClient(),
     sendNotification: sendNotification ?? vi.fn(async () => undefined),
@@ -170,7 +293,13 @@ function makeHandler({ env = baseEnv(), supabase, showsById = {}, sendNotificati
   })
 }
 
+// Releases at 2026-07-18T08:30:00Z (14:00 IST, the mapped Netflix platform
+// threshold — tmdbStubClient always reports networks: ['Netflix']). With the
+// default 8 PM IST preferred hour, the reminder instant is
+// max(release, 20:00 IST same day) = 2026-07-18T14:30:00Z.
 const AIRED_EPISODE = { episode_number: 1, name: 'Pilot', air_date: '2026-07-18', runtime: 50 }
+const RELEASE_INSTANT = Date.parse('2026-07-18T08:30:00.000Z')
+const DEFAULT_REMINDER_INSTANT = Date.parse('2026-07-18T14:30:00.000Z') // 8 PM IST same day
 
 describe('notification worker: request handling', () => {
   it('rejects non-POST methods', async () => {
@@ -225,462 +354,67 @@ describe('notification worker: no active subscriptions', () => {
   })
 })
 
-describe('notification worker: happy path', () => {
-  it('claims, sends, and marks a newly-eligible episode delivered', async () => {
+describe('notification worker: airtime alert', () => {
+  it('is eligible on the first evaluation after release and sends immediately', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000), // 5 minutes after release
+    })
     const res = response()
     await handler(request(), res)
 
-    expect(res.statusCode).toBe(200)
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 1, skipped: 0, staleRemoved: 0, failed: 0 })
+    expect(res.body.sent).toBe(1)
     expect(sendNotification).toHaveBeenCalledTimes(1)
-    const [target, payload] = sendNotification.mock.calls[0]
-    expect(target).toEqual({ endpoint: subscriptionRow().endpoint, keys: { p256dh: 'p256dh-key', auth: 'auth-key' } })
-    const parsed = JSON.parse(payload)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
     expect(parsed).toEqual({
       title: 'Test Show - New Episode',
       url: '/watching/1',
-      tag: 'rerun-episode-1-s1e1',
+      tag: 'rerun-episode-airtime-1-s1e1',
       omitBody: true,
     })
-    expect(parsed).not.toHaveProperty('body')
-    expect(parsed.title).not.toMatch(/rerun/i)
-    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
-    expect(completeCall).toBeTruthy()
-    const [, completeArgs] = completeCall
-    expect(completeArgs.p_delivered_at).toBe(EVALUATION_TIME.toISOString())
-    expect(completeArgs.p_identities).toEqual([`1:1:1:1:${EPISODE_NOTIFICATION_TYPE}`])
-    expect(completeArgs.p_claim_token).toBeTruthy()
+    const claimCall = supabase.record.rpcCalls.find((c) => c[0] === 'claim_episode_notifications')
+    expect(claimCall[1].p_episodes[0].notification_types).toEqual([EPISODE_AIRTIME_NOTIFICATION_TYPE])
   })
 
-  it('an episode released before the subscription watermark is not eligible (no backfill)', async () => {
-    const showsById = { 1: { name: 'Test Show', episodes: [{ ...AIRED_EPISODE, air_date: '2026-01-01' }] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow({ automatic_notifications_enabled_at: '2026-07-19T00:00:00.000Z' })],
-      trackedShows: [trackedShow()],
-    })
+  it('is not eligible before release', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT - 5 * 60 * 1000), // 5 minutes before release
+    })
     const res = response()
     await handler(request(), res)
     expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 0, sent: 0, skipped: 0, staleRemoved: 0, failed: 0 })
     expect(sendNotification).not.toHaveBeenCalled()
-    expect(supabase.record.rpcCalls).toHaveLength(0)
   })
 
-  it('groups multiple same-season episodes into one batch notification', async () => {
-    const showsById = {
-      1: {
-        name: 'Test Show',
-        episodes: [AIRED_EPISODE, { episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 }],
-      },
-    }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
+  it('the preferred reminder hour never delays airtime', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    // 11 PM preferred — airtime must still send minutes after release, not
+    // wait for anything close to 11 PM IST.
+    const supabase = realisticSupabase({
+      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 23 })], trackedShows: [trackedShow()],
     })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000),
+    })
     const res = response()
     await handler(request(), res)
     expect(res.body.sent).toBe(1)
-    expect(res.body.eligibleEpisodes).toBe(2)
     const parsed = JSON.parse(sendNotification.mock.calls[0][1])
-    expect(parsed.title).toBe('Test Show - New Episode')
-    expect(parsed).not.toHaveProperty('body')
-    expect(parsed.tag).toBe('rerun-episode-1-batch')
+    expect(parsed.tag).toBe('rerun-episode-airtime-1-s1e1')
   })
 
-  it('eight episodes released together for one show still send exactly one notification', async () => {
-    const episodes = Array.from({ length: 8 }, (_, i) => ({
-      episode_number: i + 1, name: `Ep ${i + 1}`, air_date: '2026-07-18', runtime: 30,
-    }))
-    const showsById = { 1: { name: 'The Bear', episodes } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow({ name: 'The Bear' })],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.sent).toBe(1)
-    expect(res.body.eligibleEpisodes).toBe(8)
-    expect(sendNotification).toHaveBeenCalledTimes(1)
-    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
-    expect(parsed.title).toBe('The Bear - New Episode')
-    expect(parsed).not.toHaveProperty('body')
-    // Every one of the 8 grouped episode identities was claimed and
-    // finalized, even though only one push was sent.
-    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
-    expect(completeCall[1].p_identities).toHaveLength(8)
-  })
-
-  it('three different shows with new episodes in the same window send three separate notifications', async () => {
-    const showsById = {
-      1: { name: 'House of the Dragon', episodes: [AIRED_EPISODE] },
-      2: { name: 'Sugar', episodes: [AIRED_EPISODE] },
-      3: { name: 'The Bear', episodes: [AIRED_EPISODE] },
-    }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [
-        trackedShow({ tmdb_id: 1, name: 'House of the Dragon' }),
-        trackedShow({ tmdb_id: 2, name: 'Sugar' }),
-        trackedShow({ tmdb_id: 3, name: 'The Bear' }),
-      ],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.sent).toBe(3)
-    expect(sendNotification).toHaveBeenCalledTimes(3)
-    const titles = sendNotification.mock.calls.map(([, payload]) => JSON.parse(payload).title).sort()
-    expect(titles).toEqual(['House of the Dragon - New Episode', 'Sugar - New Episode', 'The Bear - New Episode'])
-  })
-
-  it('a transient send failure for a multi-episode batch finalizes none of the grouped episodes', async () => {
-    const episodes = [AIRED_EPISODE, { episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 }]
-    const showsById = { 1: { name: 'Test Show', episodes } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => { throw new Error('temporary network blip') })
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.sent).toBe(0)
-    expect(res.body.failed).toBe(1)
-    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
-    expect(completeCall).toBeUndefined()
-  })
-})
-
-describe('notification worker: preferred delivery hour', () => {
-  // AIRED_EPISODE resolves to 2026-07-18T12:30:00Z (18:00 IST, the default
-  // 'unknown' platform threshold) — well before EVALUATION_TIME
-  // (2026-07-20T00:00:00Z), so these fixtures isolate the *scheduling* gate
-  // from ordinary release-instant eligibility.
-  it('holds an episode released before the preferred hour until the worker run at or after it', async () => {
-    // 11 PM IST preferred: release resolves to 2026-07-18T12:30:00Z (18:00
-    // IST) -> scheduled for 2026-07-18T17:30:00Z (23:00 IST same day).
-    // Evaluate partway between the two to prove the hold.
+  it('a repeated worker run at the same evaluation time does not resend airtime', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 23 })],
-      trackedShows: [trackedShow()],
-    })
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = createNotificationWorkerHandler({
-      env: baseEnv(),
-      supabase,
-      now: () => new Date('2026-07-18T13:00:00.000Z'), // 18:30 IST — after release, before 23:00 IST cutoff
-      createTmdbClient: () => tmdbStubClient({ showsById }),
-      createTvmazeClient: () => tvmazeStubClient(),
-      sendNotification,
-      setVapidDetails: vi.fn(),
-    })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.eligibleEpisodes).toBe(0)
-    expect(sendNotification).not.toHaveBeenCalled()
-  })
-
-  it('sends on the first worker run at or after the preferred hour', async () => {
-    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 23 })],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = createNotificationWorkerHandler({
-      env: baseEnv(),
-      supabase,
-      now: () => new Date('2026-07-18T17:30:00.000Z'), // exactly 23:00 IST
-      createTmdbClient: () => tmdbStubClient({ showsById }),
-      createTvmazeClient: () => tvmazeStubClient(),
-      sendNotification,
-      setVapidDetails: vi.fn(),
-    })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.sent).toBe(1)
-    expect(sendNotification).toHaveBeenCalledTimes(1)
-  })
-
-  it('sends immediately for a release after the preferred hour, without waiting for the next day', async () => {
-    // Episode releases at 21:15 IST (after an 8 PM preferred hour) —
-    // scheduledDeliveryInstant is the release instant itself.
-    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 } // 21:15 IST
-    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow({ preferred_notification_hour_ist: 20 })],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = createNotificationWorkerHandler({
-      env: baseEnv(),
-      supabase,
-      now: () => new Date('2026-07-18T15:50:00.000Z'), // 5 minutes after release, well before 8 PM IST
-      createTmdbClient: () => tmdbStubClient({ showsById }),
-      createTvmazeClient: () => tvmazeStubClient(),
-      sendNotification,
-      setVapidDetails: vi.fn(),
-    })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.sent).toBe(1)
-    expect(sendNotification).toHaveBeenCalledTimes(1)
-  })
-
-  it('the activation watermark still filters on the raw release instant, not the delayed scheduled instant', async () => {
-    // Episode released before the subscription's watermark — even with a
-    // preferred hour that would make "now" a valid scheduled-delivery time,
-    // it must never become eligible (no backfill).
-    const showsById = { 1: { name: 'Test Show', episodes: [{ ...AIRED_EPISODE, air_date: '2026-01-01' }] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow({
-        automatic_notifications_enabled_at: '2026-07-19T00:00:00.000Z',
-        preferred_notification_hour_ist: 18,
-      })],
-      trackedShows: [trackedShow()],
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.eligibleEpisodes).toBe(0)
-    expect(sendNotification).not.toHaveBeenCalled()
-  })
-
-  it('a subscription row missing the preferred-hour column falls back to the 8 PM default', async () => {
-    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const { preferred_notification_hour_ist: _unused, ...rowWithoutHour } = subscriptionRow()
-    const supabase = makeSupabaseStub({
-      subscriptions: [rowWithoutHour],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    // EVALUATION_TIME (2026-07-20) is well after an 8 PM IST cutoff on
-    // 2026-07-18, so the default-hour fallback still sends.
-    expect(res.body.sent).toBe(1)
-  })
-})
-
-describe('notification worker: later episode from an already-notified show', () => {
-  it('a newly available episode from a show that already notified earlier can still notify separately', async () => {
-    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-
-    // First run: episode 1 is claimed and delivered.
-    const first = response()
-    await handler(request(), first)
-    expect(first.body.sent).toBe(1)
-
-    // A second episode of the same show becomes available later — a fresh
-    // worker invocation (same evaluation time, new episode in the pool)
-    // must send a new notification for it, not suppress it merely because
-    // the show already notified earlier.
-    showsById[1].episodes.push({ episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 })
-    const second = response()
-    await handler(request(), second)
-    expect(second.body.sent).toBe(1)
-    expect(sendNotification).toHaveBeenCalledTimes(2)
-  })
-})
-
-describe('notification worker: delivery finalization', () => {
-  function claimingSupabase({ complete }) {
-    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-      complete,
-    })
-    return { showsById, supabase }
-  }
-
-  it('a database error finalizing after a successful push counts as failed, not sent', async () => {
-    const { showsById, supabase } = claimingSupabase({
-      complete: () => ({ data: null, error: { message: 'connection reset' } }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-
-    expect(sendNotification).toHaveBeenCalledTimes(1)
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 0, staleRemoved: 0, failed: 1 })
-  })
-
-  it('a stale worker whose claim was reclaimed under a newer token cannot finalize those rows', async () => {
-    // Simulates: this worker's claim_token no longer matches the row (a
-    // second invocation reclaimed it after the 10-minute staleness window),
-    // so the completion RPC's claim_token filter finds nothing to update.
-    const { showsById, supabase } = claimingSupabase({
-      complete: () => ({ data: [], error: null }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-
-    expect(sendNotification).toHaveBeenCalledTimes(1)
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 0, staleRemoved: 0, failed: 1 })
-  })
-
-  it('a partial finalization (row count mismatch) does not count as sent', async () => {
-    const { showsById, supabase } = claimingSupabase({
-      // This fixture only ever claims one identity, so any resolver that
-      // returns fewer than requested exercises the mismatch path.
-      complete: () => ({ data: [], error: null }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body.sent).toBe(0)
-    expect(res.body.failed).toBe(1)
-  })
-
-  it('sent increments only after the finalization RPC durably confirms every claimed episode', async () => {
-    const { showsById, supabase } = claimingSupabase({
-      complete: (args) => ({ data: args.p_identities.map((identity) => ({ identity })), error: null }),
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 1, skipped: 0, staleRemoved: 0, failed: 0 })
-  })
-
-  it('the completion RPC is scoped to the exact claim_token the worker was issued', async () => {
-    let capturedArgs
-    const { showsById, supabase } = claimingSupabase({
-      complete: (args) => {
-        capturedArgs = args
-        return { data: args.p_identities.map((identity) => ({ identity })), error: null }
-      },
-    })
-    const handler = makeHandler({ supabase, showsById })
-    const res = response()
-    await handler(request(), res)
-    const claimCall = supabase.record.rpcCalls.find((c) => c[0] === 'claim_episode_notification_deliveries')
-    expect(capturedArgs.p_claim_token).toBe(claimCall[1].p_claim_token)
-    expect(res.body.sent).toBe(1)
-  })
-})
-
-describe('notification worker: dedup / concurrency safety', () => {
-  it('a claim already taken by another invocation is counted as skipped, never sent', async () => {
-    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: () => ({ data: [], error: null }), // nothing returned = already claimed/delivered
-    })
-    const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
-    const res = response()
-    await handler(request(), res)
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 1, staleRemoved: 0, failed: 0 })
-    expect(sendNotification).not.toHaveBeenCalled()
-  })
-
-  it('rerunning the worker at the same evaluation time produces no duplicate sends', async () => {
-    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    let delivered = false
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => {
-        if (delivered) return { data: [], error: null }
-        return {
-          data: args.p_episodes.map((e) => ({
-            season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-          })),
-          error: null,
-        }
-      },
-    })
-    const sendNotification = vi.fn(async () => { delivered = true })
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const now = () => new Date(RELEASE_INSTANT + 5 * 60 * 1000)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now })
 
     const first = response()
     await handler(request(), first)
@@ -692,48 +426,640 @@ describe('notification worker: dedup / concurrency safety', () => {
     expect(second.body.skipped).toBe(1)
     expect(sendNotification).toHaveBeenCalledTimes(1)
   })
+
+  it('multiple episodes released together from one show produce exactly one airtime push', async () => {
+    const episodes = Array.from({ length: 8 }, (_, i) => ({
+      episode_number: i + 1, name: `Ep ${i + 1}`, air_date: '2026-07-18', runtime: 30,
+    }))
+    const showsById = { 1: { name: 'The Bear', episodes } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow({ name: 'The Bear' })] })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.tag).toBe('rerun-episode-airtime-1-batch')
+    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCall[1].p_identities).toHaveLength(8)
+  })
+
+  it('multiple shows with new episodes in the same window each get their own airtime push', async () => {
+    const showsById = {
+      1: { name: 'House of the Dragon', episodes: [AIRED_EPISODE] },
+      2: { name: 'Sugar', episodes: [AIRED_EPISODE] },
+      3: { name: 'The Bear', episodes: [AIRED_EPISODE] },
+    }
+    const supabase = realisticSupabase({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [
+        trackedShow({ tmdb_id: 1, name: 'House of the Dragon' }),
+        trackedShow({ tmdb_id: 2, name: 'Sugar' }),
+        trackedShow({ tmdb_id: 3, name: 'The Bear' }),
+      ],
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(3)
+    expect(sendNotification).toHaveBeenCalledTimes(3)
+    const tags = sendNotification.mock.calls.map(([, payload]) => JSON.parse(payload).tag).sort()
+    expect(tags).toEqual(['rerun-episode-airtime-1-s1e1', 'rerun-episode-airtime-2-s1e1', 'rerun-episode-airtime-3-s1e1'])
+  })
+})
+
+describe('notification worker: custom-time reminder', () => {
+  it('holds a reminder until the worker run at or after the preferred hour', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT - 60 * 60 * 1000), // 1 hour before 8 PM IST
+    })
+    const res = response()
+    await handler(request(), res)
+    // Airtime fires this run (first evaluation after release); the reminder
+    // does not, since the preferred hour hasn't arrived yet.
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(sendNotification.mock.calls[0][1]).tag).toBe('rerun-episode-airtime-1-s1e1')
+  })
+
+  it('sends a standalone reminder on the first run at or after the preferred hour, once airtime already went out earlier', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
+
+    // Run 1: shortly after release — airtime only.
+    const first = response()
+    await handler(request(), first)
+    expect(first.body.sent).toBe(1)
+    expect(JSON.parse(sendNotification.mock.calls[0][1]).tag).toBe('rerun-episode-airtime-1-s1e1')
+
+    // Run 2: still before the preferred hour — nothing new.
+    const secondHandler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT - 30 * 60 * 1000),
+    })
+    const second = response()
+    await secondHandler(request(), second)
+    expect(second.body.sent).toBe(0)
+
+    // Run 3: at the preferred hour — a genuine, separate reminder push.
+    const thirdHandler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+    const third = response()
+    await thirdHandler(request(), third)
+    expect(third.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(2)
+    const parsed = JSON.parse(sendNotification.mock.calls[1][1])
+    expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e1')
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    const reminderFinalize = completeCalls.find((c) => c[1].p_identities[0].endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE))
+    expect(reminderFinalize).toBeTruthy()
+  })
+
+  it('a watched-before-reminder episode never gets a reminder', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const watchedRows = [{ tmdb_show_id: 1, season_number: 1, episode_number: 1 }]
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()], watchedRows })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 0, sent: 0, skipped: 0, staleRemoved: 0, failed: 0 })
+    expect(sendNotification).not.toHaveBeenCalled()
+  })
+
+  it('a partially-watched batch reminds only for what remains unwatched', async () => {
+    const episodes = [AIRED_EPISODE, { episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 }]
+    const showsById = { 1: { name: 'Test Show', episodes } }
+    // Episode 1 already watched before the reminder time; episode 2 is not.
+    const watchedRows = [{ tmdb_show_id: 1, season_number: 1, episode_number: 1 }]
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()], watchedRows })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
+
+    // Airtime run: only episode 2 is unwatched, so only it goes out (as
+    // airtime — this test only cares about the later reminder stage).
+    const first = response()
+    await handler(request(), first)
+
+    const secondHandler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+    const second = response()
+    await secondHandler(request(), second)
+    expect(second.body.sent).toBe(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[1][1])
+    expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e2')
+  })
+
+  it('a repeated run at the same evaluation time does not resend the reminder', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => undefined)
+    const now = () => new Date(DEFAULT_REMINDER_INSTANT)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const first = response()
+    await handler(request(), first)
+    const second = response()
+    await handler(request(), second)
+
+    // First run: airtime + reminder collide (release long before the
+    // watermark check matters here, both instants already passed) — only
+    // one push goes out. Second run at the identical instant must resend
+    // nothing at all.
+    expect(first.body.sent).toBe(1)
+    expect(second.body.sent).toBe(0)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('notification worker: same-evaluation collision', () => {
+  it('an episode released after the preferred hour sends exactly one push (airtime), not two', async () => {
+    // Releases at 21:15 IST, after the 8 PM preferred hour — the reminder
+    // instant collapses to the release instant itself, so both stages
+    // become eligible in the very same evaluation.
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 } // 21:15 IST
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(res.body.sent).toBe(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.tag).toBe('rerun-episode-airtime-1-s1e1')
+  })
+
+  it('the successful airtime delivery also durably satisfies the reminder — a later run never sends it', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    await handler(request(), response())
+
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    const reminderFinalize = completeCalls.find((c) => c[1].p_identities.some((id) => id.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE)))
+    expect(reminderFinalize).toBeTruthy() // reminder identity finalized without a second push
+    // The same call also finalized the airtime identity — one combined
+    // finalize, not two separate ones.
+    expect(reminderFinalize[1].p_identities.some((id) => id.endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE))).toBe(true)
+
+    // A later run (well after this evaluation) must not resend anything.
+    const laterHandler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-20T00:00:00.000Z')),
+    })
+    const later = response()
+    await laterHandler(request(), later)
+    expect(later.body.sent).toBe(0)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed airtime send finalizes neither type', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => { throw new Error('temporary network blip') })
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(0)
+    expect(res.body.failed).toBeGreaterThan(0)
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(0)
+  })
+
+  it('a failed combined finalize (push already sent) is reported as failed, not silently dropped, and leaves both identities retryable', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    let combinedCompleteCalls = 0
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow()],
+      claim: (args) => ({
+        data: args.p_episodes.flatMap((e) =>
+          (e.notification_types ?? []).map((notificationType) => ({
+            season_number: e.season_number, episode_number: e.episode_number, notification_type: notificationType,
+          })),
+        ),
+        error: null,
+      }),
+      complete: () => {
+        combinedCompleteCalls += 1
+        // The push already went out; the finalize write itself fails once,
+        // simulating a transient database error right after a successful
+        // combined send.
+        return { data: null, error: { message: 'connection reset' } }
+      },
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const res = response()
+    await handler(request(), res)
+
+    // A push already fired, but since the finalize RPC never durably
+    // confirmed it, this run must not credit it as sent — exactly the same
+    // contract a non-collision send/finalize failure already has.
+    expect(res.body.sent).toBe(0)
+    expect(res.body.failed).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(combinedCompleteCalls).toBe(1)
+    const completeCall = supabase.record.rpcCalls.find((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCall[1].p_identities).toHaveLength(2) // one call, both identities together
+  })
+})
+
+describe('notification worker: cross-invocation collision race', () => {
+  it('two overlapping workers racing the same airtime+reminder collision send exactly one combined push, and both identities finalize together', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const now = () => new Date(Date.parse('2026-07-18T15:50:00.000Z'))
+
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) await gate.promise // Worker A: claimed, paused before actually sending.
+    })
+
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync() // let A run candidate computation + claim, then block on the send gate
+
+    const resB = response()
+    await handlerB(request(), resB) // fully concurrent worker B, starting before A has sent/finalized anything
+
+    // Worker B must not have won or sent anything — the reminder must not go
+    // out standalone just because B lost the airtime side of the race.
+    expect(resB.body.sent).toBe(0)
+    expect(sendCallCount).toBe(1) // B never called sendNotification at all
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1) // only ever one push, total, across both workers
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.tag).toBe('rerun-episode-airtime-1-s1e1')
+
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(1)
+    expect(completeCalls[0][1].p_identities).toHaveLength(2)
+    expect(completeCalls[0][1].p_identities.some((id) => id.endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE))).toBe(true)
+    expect(completeCalls[0][1].p_identities.some((id) => id.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE))).toBe(true)
+  })
+
+  it('a failed combined send while a second worker was mid-race finalizes neither identity, and both stay retryable', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const now = () => new Date(Date.parse('2026-07-18T15:50:00.000Z'))
+
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) {
+        await gate.promise
+        throw new Error('temporary network blip') // Worker A's send ultimately fails.
+      }
+    })
+
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync()
+
+    const resB = response()
+    await handlerB(request(), resB)
+    expect(resB.body.sent).toBe(0) // B still must not send standalone while A's claim is live
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(0)
+    expect(resA.body.failed).toBeGreaterThan(0)
+    expect(sendNotification).toHaveBeenCalledTimes(1) // B never sent; A's single attempt failed
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(0) // never reached — a failed send never finalizes
+
+    // A later, non-overlapping run picks the same episode back up and
+    // succeeds — nothing was left permanently stuck.
+    const laterHandler = makeHandler({
+      supabase, showsById, sendNotification: vi.fn(async () => undefined),
+      now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z') + 11 * 60 * 1000), // past the 10-minute lease
+    })
+    const later = response()
+    await laterHandler(request(), later)
+    expect(later.body.sent).toBe(1)
+  })
+
+  it('a reminder due after airtime already delivered on an earlier run still sends for real, even when two workers race the reminder claim', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+
+    // Run 1: airtime alone, well before the preferred hour — no collision.
+    const firstHandler = makeHandler({
+      supabase, showsById, sendNotification: vi.fn(async () => undefined), now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000),
+    })
+    const first = response()
+    await firstHandler(request(), first)
+    expect(first.body.sent).toBe(1)
+
+    // Run 2 (later, separate): two workers race the now-due standalone
+    // reminder for the same episode — airtime is already fully delivered,
+    // so neither worker should treat this as a fresh collision.
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) await gate.promise
+    })
+    const now = () => new Date(DEFAULT_REMINDER_INSTANT)
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync()
+
+    const resB = response()
+    await handlerB(request(), resB)
+    expect(resB.body.sent).toBe(0)
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e1') // a real, standalone reminder — not folded into airtime
+  })
+
+  it('a worker requesting both types while another worker holds an in-flight airtime claim sends nothing — the reminder waits until airtime is actually delivered, so the boundary race yields exactly one push', async () => {
+    // Worker A evaluates one millisecond before the reminder becomes due, so
+    // it only ever asks for episode_airtime. Worker B evaluates at the instant
+    // the reminder becomes due and asks for both types together, for the very
+    // same episode — but A has already claimed airtime and hasn't sent yet.
+    // Before 20260720120000, B treated that fresh, unsent airtime claim the
+    // same as an already-delivered airtime and downgraded to a standalone
+    // reminder, so B's reminder push went out right next to A's imminent
+    // airtime push — two near-identical notifications for one episode. Now B
+    // sees airtime as in-flight and backs off entirely: nothing is sent for B,
+    // and the reminder only goes out on a later run once airtime is delivered.
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) await gate.promise // Worker A: claimed airtime-only, paused before sending.
+    })
+
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT - 1) })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync() // A computes airtime-only, claims it, then blocks on the send gate
+
+    const resB = response()
+    await handlerB(request(), resB) // fully concurrent Worker B, requesting a combined claim
+
+    // B must see airtime as in-flight (freshly claimed by A, not yet
+    // delivered) and claim nothing at all — no phantom combined win, and no
+    // standalone reminder alongside A's imminent airtime send.
+    expect(resB.body.sent).toBe(0)
+    expect(resB.body.failed).toBe(0)
+    expect(sendCallCount).toBe(1) // B never called sendNotification — only A's gated send is outstanding
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(1)
+    expect(resA.body.failed).toBe(0)
+    expect(sendNotification).toHaveBeenCalledTimes(1) // exactly one push across both workers — the airtime alert
+    const parsedA = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsedA.tag).toBe('rerun-episode-airtime-1-s1e1')
+
+    // Only the airtime identity was finalized so far — the reminder was never
+    // falsely reported as won by B.
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(1)
+    expect(completeCalls[0][1].p_identities).toHaveLength(1)
+    expect(completeCalls[0][1].p_identities[0].endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE)).toBe(true)
+
+    // A later run, once airtime is genuinely delivered, finally sends the
+    // standalone reminder — nothing was permanently swallowed by the back-off.
+    const laterSend = vi.fn(async () => undefined)
+    const laterHandler = makeHandler({ supabase, showsById, sendNotification: laterSend, now: () => new Date(DEFAULT_REMINDER_INSTANT + 60 * 1000) })
+    const later = response()
+    await laterHandler(request(), later)
+    expect(later.body.sent).toBe(1)
+    expect(laterSend).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(laterSend.mock.calls[0][1]).tag).toBe('rerun-episode-reminder-1-s1e1')
+  })
+
+  it('if an in-flight airtime claim goes stale instead of delivering, a later both-types worker reclaims both airtime and reminder', async () => {
+    // Same starting shape as above — Worker A claims airtime-only and then its
+    // send fails, leaving an undelivered claim behind. Once that claim ages
+    // past the 10-minute lease, a later both-types worker must be able to
+    // reclaim airtime (not treat the stale row as delivered) and win the
+    // reminder too, producing a single combined push.
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+
+    const failingSend = vi.fn(async () => { throw new Error('temporary network blip') })
+    const firstHandler = makeHandler({ supabase, showsById, sendNotification: failingSend, now: () => new Date(DEFAULT_REMINDER_INSTANT - 1) })
+    const first = response()
+    await firstHandler(request(), first)
+    expect(first.body.sent).toBe(0)
+    expect(first.body.failed).toBeGreaterThan(0)
+
+    const laterSend = vi.fn(async () => undefined)
+    const laterHandler = makeHandler({
+      supabase, showsById, sendNotification: laterSend,
+      now: () => new Date(DEFAULT_REMINDER_INSTANT + 11 * 60 * 1000), // past the 10-minute lease
+    })
+    const later = response()
+    await laterHandler(request(), later)
+
+    // One combined push — airtime reclaimed and reminder won together, both
+    // finalized in a single call.
+    expect(later.body.sent).toBe(1)
+    expect(laterSend).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(laterSend.mock.calls[0][1]).tag).toBe('rerun-episode-airtime-1-s1e1')
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    const lastComplete = completeCalls[completeCalls.length - 1]
+    expect(lastComplete[1].p_identities).toHaveLength(2)
+    expect(lastComplete[1].p_identities.some((id) => id.endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE))).toBe(true)
+    expect(lastComplete[1].p_identities.some((id) => id.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE))).toBe(true)
+  })
+
+  it('a claim RPC error for one worker sends nothing and reports failed, without disturbing the other worker’s legitimate claim', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    let claimCallCount = 0
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow()],
+      // The first claim call (Worker A) fails outright — simulating a
+      // dropped connection mid-transaction, before ownership could even be
+      // verified. The second (Worker B) succeeds normally and wins the
+      // combined claim.
+      claim: (args) => {
+        claimCallCount += 1
+        if (claimCallCount === 1) return { data: null, error: { message: 'connection reset' } }
+        return {
+          data: args.p_episodes.flatMap((e) =>
+            (e.notification_types ?? []).map((notificationType) => ({
+              season_number: e.season_number, episode_number: e.episode_number, notification_type: notificationType,
+            })),
+          ),
+          error: null,
+        }
+      },
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handlerA = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const resA = response()
+    await handlerA(request(), resA)
+
+    expect(resA.body.sent).toBe(0)
+    expect(resA.body.failed).toBeGreaterThan(0)
+    expect(sendNotification).not.toHaveBeenCalled()
+
+    const handlerB = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const resB = response()
+    await handlerB(request(), resB)
+    expect(resB.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('notification worker: watermarks and rollout', () => {
+  it('an episode substantially older than the airtime rollout never gets a retroactive airtime alert, but still reminds', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [{ ...AIRED_EPISODE, air_date: '2026-01-01' }] } }
+    const supabase = realisticSupabase({
+      subscriptions: [subscriptionRow({
+        automatic_notifications_enabled_at: '2025-12-01T00:00:00.000Z', // long-active subscription
+        airtime_notifications_enabled_at: '2026-07-19T00:00:00.000Z', // airtime rolled out well after this old episode aired
+      })],
+      trackedShows: [trackedShow()],
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => EVALUATION_TIME })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    const parsed = JSON.parse(sendNotification.mock.calls[0][1])
+    // Reminder only — never an airtime tag for pre-rollout backlog.
+    expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e1')
+  })
+
+  it('an episode released just inside the rollout grace window is still airtime-eligible', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    // Airtime watermark backdated by the same 30-minute grace window used at
+    // activation — an episode releasing 10 minutes before that watermark's
+    // nominal "rollout instant" is still strictly after the (backdated)
+    // watermark, so it's eligible, not swallowed as backlog.
+    const supabase = realisticSupabase({
+      subscriptions: [subscriptionRow({ airtime_notifications_enabled_at: new Date(RELEASE_INSTANT - 10 * 60 * 1000).toISOString() })],
+      trackedShows: [trackedShow()],
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    expect(JSON.parse(sendNotification.mock.calls[0][1]).tag).toBe('rerun-episode-airtime-1-s1e1')
+  })
+
+  it('an episode released exactly at the airtime watermark is backlog, not new (airtime), but can still remind', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({
+      subscriptions: [subscriptionRow({ airtime_notifications_enabled_at: new Date(RELEASE_INSTANT).toISOString() })],
+      trackedShows: [trackedShow()],
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+    const res = response()
+    await handler(request(), res)
+    expect(res.body.sent).toBe(1)
+    expect(JSON.parse(sendNotification.mock.calls[0][1]).tag).toBe('rerun-episode-reminder-1-s1e1')
+  })
+})
+
+describe('notification worker: later episode from an already-notified show', () => {
+  it('a newly available episode from a show that already notified earlier can still notify separately', async () => {
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const sendNotification = vi.fn(async () => undefined)
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
+
+    const first = response()
+    await handler(request(), first)
+    expect(first.body.sent).toBe(1)
+
+    showsById[1].episodes.push({ episode_number: 2, name: 'Second', air_date: '2026-07-18', runtime: 50 })
+    const second = response()
+    await handler(request(), second)
+    expect(second.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('notification worker: stale subscription cleanup', () => {
   it('removes a subscription on a 404/410 from web-push and continues the run', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow({ id: 9 })],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow({ id: 9 })], trackedShows: [trackedShow()] })
     const err = Object.assign(new Error('gone'), { statusCode: 410 })
     const sendNotification = vi.fn(async () => { throw err })
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
     const res = response()
     await handler(request(), res)
 
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 0, staleRemoved: 1, failed: 0 })
+    expect(res.body.staleRemoved).toBe(1)
+    expect(res.body.sent).toBe(0)
     expect(supabase.record.deletes).toEqual([['id', 9]])
   })
 
   it('a transient (non-404/410) send failure counts as failed, not staleRemoved, and the subscription is not deleted', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
-    })
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
     const sendNotification = vi.fn(async () => { throw new Error('temporary network blip') })
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
     const res = response()
     await handler(request(), res)
-    expect(res.body).toEqual({ checkedShows: 1, eligibleEpisodes: 1, sent: 0, skipped: 0, staleRemoved: 0, failed: 1 })
+    expect(res.body.staleRemoved).toBe(0)
+    expect(res.body.sent).toBe(0)
+    expect(res.body.failed).toBeGreaterThan(0)
     expect(supabase.record.deletes).toEqual([])
   })
 })
@@ -744,18 +1070,12 @@ describe('notification worker: isolation between shows and subscriptions', () =>
       1: { name: 'Broken Show', detailsError: true },
       2: { name: 'Good Show', episodes: [AIRED_EPISODE] },
     }
-    const supabase = makeSupabaseStub({
+    const supabase = realisticSupabase({
       subscriptions: [subscriptionRow()],
       trackedShows: [trackedShow({ tmdb_id: 1, name: 'Broken Show' }), trackedShow({ tmdb_id: 2, name: 'Good Show' })],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
     })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
     const res = response()
     await handler(request(), res)
     expect(res.body.sent).toBe(1)
@@ -764,21 +1084,15 @@ describe('notification worker: isolation between shows and subscriptions', () =>
 
   it("one subscription's unexpected failure does not prevent another subscription's notification", async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
+    const supabase = realisticSupabase({
       subscriptions: [
         subscriptionRow({ id: 1, automatic_notifications_enabled_at: 'not-a-real-date' }),
         subscriptionRow({ id: 2 }),
       ],
       trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
     })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
     const res = response()
     await handler(request(), res)
     // Subscription 1's malformed watermark fails at row validation, so only
@@ -789,21 +1103,15 @@ describe('notification worker: isolation between shows and subscriptions', () =>
 
   it('a malformed subscription row is skipped safely, without aborting the run', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
+    const supabase = realisticSupabase({
       subscriptions: [
         { id: 1, endpoint: '', p256dh: '', auth: '', automatic_notifications_enabled_at: null },
         subscriptionRow({ id: 2 }),
       ],
       trackedShows: [trackedShow()],
-      claim: (args) => ({
-        data: args.p_episodes.map((e) => ({
-          season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type,
-        })),
-        error: null,
-      }),
     })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
     const res = response()
     await handler(request(), res)
     expect(res.statusCode).toBe(200)
@@ -814,12 +1122,9 @@ describe('notification worker: isolation between shows and subscriptions', () =>
 describe('notification worker: dry run', () => {
   it('never claims or sends, and creates no delivery records', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({
-      subscriptions: [subscriptionRow()],
-      trackedShows: [trackedShow()],
-    })
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
     const sendNotification = vi.fn(async () => undefined)
-    const handler = makeHandler({ supabase, showsById, sendNotification })
+    const handler = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000) })
     const res = response()
     await handler(request({ body: { dryRun: true } }), res)
 
@@ -827,7 +1132,7 @@ describe('notification worker: dry run', () => {
     expect(res.body.sent).toBe(0)
     expect(res.body.eligibleEpisodes).toBe(1)
     expect(res.body.preview).toEqual([
-      { tmdbShowId: 1, title: 'Test Show - New Episode', episodeCount: 1 },
+      { tmdbShowId: 1, title: 'Test Show - New Episode', episodeCount: 1, notificationType: EPISODE_AIRTIME_NOTIFICATION_TYPE },
     ])
     expect(sendNotification).not.toHaveBeenCalled()
     expect(supabase.record.rpcCalls).toHaveLength(0)
@@ -835,12 +1140,50 @@ describe('notification worker: dry run', () => {
 
   it('dry run is deterministic across repeated calls', async () => {
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
-    const supabase = makeSupabaseStub({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
-    const handler = makeHandler({ supabase, showsById })
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+    const handler = makeHandler({ supabase, showsById, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
     const first = response()
     await handler(request({ body: { dryRun: true } }), first)
     const second = response()
     await handler(request({ body: { dryRun: true } }), second)
     expect(first.body).toEqual(second.body)
+  })
+
+  it('previews both an airtime and a reminder entry when both are independently eligible', async () => {
+    // Two shows: one only just released (airtime candidate only — its
+    // reminder instant hasn't arrived), one released long ago under an
+    // older watermark so only its reminder is still pending.
+    const showsById = {
+      1: { name: 'Fresh Show', episodes: [AIRED_EPISODE] },
+      2: { name: 'Old Show', episodes: [{ ...AIRED_EPISODE, air_date: '2026-01-01' }] },
+    }
+    const supabase = realisticSupabase({
+      subscriptions: [subscriptionRow({
+        automatic_notifications_enabled_at: '2025-12-01T00:00:00.000Z',
+        airtime_notifications_enabled_at: '2026-07-19T00:00:00.000Z',
+      })],
+      trackedShows: [trackedShow({ tmdb_id: 1, name: 'Fresh Show' }), trackedShow({ tmdb_id: 2, name: 'Old Show' })],
+    })
+    // "Fresh Show" needs its own subscription with an airtime watermark
+    // before its release — reuse the default one for it, and the
+    // rolled-out-later watermark above only for "Old Show"'s scenario.
+    const supabaseForFresh = realisticSupabase({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow({ tmdb_id: 1, name: 'Fresh Show' })],
+    })
+    const freshHandler = makeHandler({
+      supabase: supabaseForFresh, showsById: { 1: showsById[1] }, now: () => new Date(RELEASE_INSTANT + 5 * 60 * 1000),
+    })
+    const freshRes = response()
+    await freshHandler(request({ body: { dryRun: true } }), freshRes)
+    expect(freshRes.body.preview).toEqual([
+      { tmdbShowId: 1, title: 'Fresh Show - New Episode', episodeCount: 1, notificationType: EPISODE_AIRTIME_NOTIFICATION_TYPE },
+    ])
+
+    const handler = makeHandler({ supabase, showsById, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+    const res = response()
+    await handler(request({ body: { dryRun: true } }), res)
+    const types = res.body.preview.map((p) => `${p.tmdbShowId}:${p.notificationType}`).sort()
+    expect(types).toEqual(['1:episode_reminder', '2:episode_reminder'])
   })
 })

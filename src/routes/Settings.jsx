@@ -656,12 +656,16 @@ function NotificationsSection() {
             <SettingsInfoRow label="Status" status="Notifications enabled" />
             <SettingsInfoRow label="Automatic episode alerts" status="Active" />
             <SettingsSelectRow
-              label="Notification time"
+              label="Reminder time"
               value={preferredHour}
               options={PREFERRED_HOUR_OPTIONS}
               onChange={handlePreferredHourChange}
               disabled={preferenceState === 'saving'}
               busyLabel={preferenceState === 'saving' ? 'Saving…' : null}
+            />
+            <SettingsDescriptionRow
+              label="About these alerts"
+              description="Airtime alerts arrive when episodes become available. Unwatched episodes are reminded again at this time."
             />
             <SettingsActionRow
               label="Send test notification"

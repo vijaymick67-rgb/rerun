@@ -12,7 +12,20 @@
 import { isVisibleInWatching } from '../finishedShows.js'
 import { episodeKey, episodeReleaseInfo } from '../watchHelpers.js'
 
+// Legacy single-notification identity. No longer used by new deliveries —
+// kept only because migration 20260720080000 references the literal string
+// when reclassifying old delivered rows, and so historical call sites/tests
+// referring to it keep resolving. New deliveries always use one of the two
+// types below.
 export const EPISODE_NOTIFICATION_TYPE = 'episode_available'
+
+// Two-stage automatic episode notifications: an airtime alert shortly after
+// an episode becomes available, and a separate same-day reminder at the
+// subscription's preferred hour if it's still unwatched by then. Each has
+// its own delivery identity (see deliveryIdentity below) so they claim and
+// finalize completely independently of one another.
+export const EPISODE_AIRTIME_NOTIFICATION_TYPE = 'episode_airtime'
+export const EPISODE_REMINDER_NOTIFICATION_TYPE = 'episode_reminder'
 
 // Must match exactly what claim_episode_notification_deliveries builds
 // server-side in Postgres (p_push_subscription_id || ':' || p_tmdb_show_id ||
@@ -86,11 +99,22 @@ export function episodeNotificationUrl(tmdbShowId) {
 // A stable tag per show (single-episode notifications are further keyed by
 // season/episode) so a redelivered push for the same logical event replaces
 // the existing OS notification instead of stacking a visual duplicate.
-export function episodeNotificationTag(tmdbShowId, episodes) {
+// `notificationType` — when it's one of the two automatic delivery types —
+// is folded into the tag so an airtime alert and its later reminder never
+// share a tag: without that, the reminder would silently replace the
+// airtime alert in Notification Center instead of appearing alongside it.
+// Omitting notificationType (the synthetic verification push, which never
+// goes through real delivery identities) keeps the original untyped shape.
+export function episodeNotificationTag(tmdbShowId, episodes, notificationType) {
+  const kind =
+    notificationType === EPISODE_AIRTIME_NOTIFICATION_TYPE ? 'airtime'
+    : notificationType === EPISODE_REMINDER_NOTIFICATION_TYPE ? 'reminder'
+    : null
+  const prefix = kind ? `rerun-episode-${kind}-${tmdbShowId}` : `rerun-episode-${tmdbShowId}`
   if (episodes.length === 1) {
-    return `rerun-episode-${tmdbShowId}-s${episodes[0].seasonNumber}e${episodes[0].episodeNumber}`
+    return `${prefix}-s${episodes[0].seasonNumber}e${episodes[0].episodeNumber}`
   }
-  return `rerun-episode-${tmdbShowId}-batch`
+  return `${prefix}-batch`
 }
 
 // One show's eligible (and already-claimed, by the caller) episodes → one
@@ -104,12 +128,17 @@ export function episodeNotificationTag(tmdbShowId, episodes) {
 // opposed to a malformed/legacy payload that happens to have no body) so
 // the service worker's fallback text only ever applies to the latter — see
 // public/push-sw.js.
-export function buildEpisodeNotificationPayload(tmdbShowId, showName, episodes) {
+// `notificationType` only affects the tag (see episodeNotificationTag) — the
+// visible content is identical for every delivery type, deliberately: an
+// airtime alert and its later reminder must be indistinguishable to the
+// user, both `${showName} - New Episode` with no body and no mention of
+// "Airtime"/"Reminder"/episode metadata.
+export function buildEpisodeNotificationPayload(tmdbShowId, showName, episodes, notificationType) {
   return {
     title: `${showName} - New Episode`,
     omitBody: true,
     url: episodeNotificationUrl(tmdbShowId),
-    tag: episodeNotificationTag(tmdbShowId, episodes),
+    tag: episodeNotificationTag(tmdbShowId, episodes, notificationType),
     episodes,
   }
 }

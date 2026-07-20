@@ -1,5 +1,5 @@
-// Local cache of the last server-confirmed preferred notification hour
-// (Settings -> Notifications -> "Notification time"). The server
+// Local cache of the last server-confirmed preferred reminder hour
+// (Settings -> Notifications -> "Reminder time"). The server
 // (push_subscriptions.preferred_notification_hour_ist) is the source of
 // truth — this is only ever written from an actual server response
 // (/api/push/subscribe or /api/push/preferences), never fabricated, so
