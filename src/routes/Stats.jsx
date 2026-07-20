@@ -626,9 +626,7 @@ export default function Stats() {
 
   return (
     <div className="app-page px-4 pb-4">
-      <header className="nested-header mb-4">
-        <h1 className="type-page-title">Insights</h1>
-      </header>
+      <h1 className="sr-only">Insights</h1>
 
       {loading && (
         <div className="flex flex-col gap-3" aria-label="Loading insights" role="status">
@@ -678,23 +676,22 @@ export default function Stats() {
         <>
           <section className="stats-summary content-surface px-4 py-5" aria-labelledby="stats-summary-title">
             <p id="stats-summary-title" className="type-badge text-(--color-accent-strong)">
-              Total time watched
+              Time with your shows
             </p>
-            <p className="mt-1 text-3xl font-semibold text-(--color-text)">
+            <p className="stats-summary__duration mt-1 text-(--color-text)">
               {formatWatchTime(totalMinutes)}
             </p>
           </section>
 
           {insight && (
-            <section className="stats-insight content-surface mt-3 px-4 py-3" aria-labelledby="daily-insight-title">
-              <p id="daily-insight-title" className="type-badge text-(--color-accent-strong)">Daily insight</p>
-              <p className="mt-1.5 text-sm leading-6 text-(--color-text-secondary)">{insight}</p>
+            <section className="stats-insight content-surface mt-3 px-4 py-3 pl-5" aria-label="Personal insight">
+              <p className="stats-insight__copy text-(--color-text-secondary)">{insight}</p>
             </section>
           )}
 
           <section className="mt-6" aria-labelledby="show-history-title">
             <h2 id="show-history-title" className="type-section-title mb-3">Show history</h2>
-            <div className="grid grid-cols-3 gap-x-3 gap-y-5">
+            <div className="grid grid-cols-3 gap-x-3 gap-y-6">
             {shows.map((show) => {
               const isBusy = isStatsShowBusy(busyIds, show.tmdb_id)
               const actionsOpen = openActionId === show.tmdb_id
@@ -743,18 +740,6 @@ export default function Stats() {
                   <p className="mt-1.5 truncate text-xs font-semibold text-(--color-text)">
                     {show.name}
                   </p>
-                  <div className="mt-1 flex items-center justify-between gap-2 text-(--color-text-muted)">
-                    <span className="type-caption">{show.watched} of {show.total}</span>
-                    {show.total > 0 && show.watched >= show.total && (
-                      <span className="type-badge text-(--color-success)">Complete</span>
-                    )}
-                  </div>
-                  <div className="progress-track mt-1.5" aria-label={`${show.watched} of ${show.total} episodes watched`}>
-                    <div
-                      className="progress-fill"
-                      style={{ width: `${show.total > 0 ? Math.min(100, (show.watched / show.total) * 100) : 0}%` }}
-                    />
-                  </div>
                 </article>
               )
             })}
