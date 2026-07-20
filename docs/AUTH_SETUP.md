@@ -79,48 +79,71 @@ separately, later, in "Production rollout" below.
    (no `auth.uid()` in that context) — that's expected. The point of this
    check is just that the function exists and runs without error.
 
-3. **Create the Google-first canonical owner:**
-   - Go to the deployed app (or any page that can trigger
-     `supabase.auth.signInWithOAuth`) and sign in with the owner's Google
-     account. If the frontend PR isn't deployed yet, you can instead go to
-     **Authentication → Users → Add user** and manually trigger a Google
-     sign-in flow, or use the Supabase Dashboard's built-in "Invite" /
-     provider testing tools — whichever your project supports. The
-     important part is that the **first** identity created for the owner is
-     the Google one.
-   - In **Authentication → Users**, find the resulting user and copy its
-     **UUID** (the `id` column). This is the value the next step needs —
-     treat it like any other credential and don't paste it anywhere public.
+Registering the actual owner UUID happens later, in "Registering the
+canonical owner" below, once the auth frontend is deployed somewhere
+reachable (Preview or Production) — creating the Google identity is a
+frontend action (`supabase.auth.signInWithOAuth`), not a Dashboard one, so
+it has to happen in that order.
 
+---
+
+## Registering the canonical owner
+
+This is the one deterministic path — don't substitute Dashboard "Add user" /
+"Invite" flows or guess at whichever password option a given Supabase
+version's UI happens to expose; both are unreliable ways to guarantee a
+**single** `auth.users` row ends up owning both the Google and the
+email/password identity.
+
+Do this once Migration A is applied and the auth frontend (this PR) is
+deployed somewhere with working Google OAuth — a Vercel Preview is fine, you
+don't need to wait for Production:
+
+1. Open the deployed app and click **Continue with Google**, signing in with
+   the owner's Google account.
+2. You will be **rejected** — Login reappears showing "You're not the
+   owner." This is expected: no UUID is registered in `private.owner_config`
+   yet, so `public.current_user_is_owner()` correctly returns `false` for
+   everyone, including you. Supabase Auth has already created the
+   `auth.users` row for this Google identity even though the app rejected
+   it.
+3. In the Supabase Dashboard, **Authentication → Users**, find that new
+   user and copy its **UUID** (the `id` column). Treat it like any other
+   credential — don't paste it anywhere public.
 4. **Register the owner UUID** in the SQL Editor:
    ```sql
    insert into private.owner_config (id, owner_id)
    values (true, '<owner-auth-uuid>')
    on conflict (id) do update set owner_id = excluded.owner_id;
    ```
-
-5. **Add password recovery to that same identity** — in
-   **Authentication → Users**, open the owner's user record and set a
-   password for it directly (or use "Send password recovery" / "Reset
-   password" from the Dashboard, whichever your Supabase version offers).
-   This attaches an `email` identity to the **same** `auth.users` row the
-   Google identity is already on — it does not create a second user.
-
-6. **Verify one canonical UUID owns both login methods:**
+5. Sign in with Google again. This time the app should admit you —
+   `current_user_is_owner()` now returns `true` for this UUID, and the
+   normal app (TabBar, Watching, etc.) loads.
+6. **Set the recovery password on that same authenticated session** — while
+   still signed in as the owner from step 5, open the browser console on
+   the deployed app and run:
+   ```js
+   await window.supabase.auth.updateUser({ password: '<owner-recovery-password>' })
+   ```
+   (If `window.supabase` isn't exposed in the console, temporarily add
+   `window.supabase = supabase` next to the client export in
+   `src/lib/supabase.js`, run this step, then remove it — don't leave a
+   debug global in the shipped build.) This is the Supabase-documented way
+   to attach a password credential to an **already-authenticated** OAuth
+   user, and it's the only path that's guaranteed to land on the same
+   `auth.users` row rather than risking a second, Dashboard-created one.
+7. **Verify recovery login** — sign out, choose "Use recovery login" on the
+   Login screen, and sign in with the owner's email + the password from
+   step 6. This must succeed and load the same authenticated app.
+8. **Confirm one canonical UUID owns both methods:**
    ```sql
    select id, email, raw_app_meta_data->'providers' as providers
    from auth.users;
    ```
-   This must show **exactly one row**, its `id` matching what you registered
-   in step 4, and `providers` containing both `"google"` and `"email"`. If
-   you instead see two separate rows (one per provider), Google created a
-   second identity — delete the extra `auth.users` row and repeat from step
-   3, this time confirming the Dashboard is linking to the existing user
-   rather than creating a new one (Supabase's default same-email automatic
-   linking behavior handles this in most projects; if it doesn't, use
-   **Authentication → Providers → Google → "Enable automatic linking"**, or
-   the manual-linking equivalent your project version exposes, before
-   retrying).
+   This must show **exactly one row**, its `id` matching what you
+   registered in step 4, and `providers` containing both `"google"` and
+   `"email"`. If you ever see two separate rows instead, the extra one was
+   not created by this procedure — delete it and repeat from step 1.
 
 ---
 
@@ -163,9 +186,13 @@ Apply in this exact order. Steps 1–5 can happen well ahead of step 6 — the
 app keeps working for Vijay throughout, since Migration B is the only step
 that changes who can read/write `tracked_shows`/`watched_episodes`.
 
-1. **Apply Migration A** in Production (see "Migration A" above).
-2. **Configure and verify the canonical owner** in Production (steps 3–6 of
-   "Migration A" above, against the Production Supabase project).
+1. **Apply Migration A** (see "Migration A" above). Rerun has a single
+   Supabase project shared by Preview and Production (see CLAUDE.md), so
+   this only needs to happen once.
+2. **Register the canonical owner** — run "Registering the canonical
+   owner" above using whichever deployed frontend (Preview or Production)
+   is convenient; because both point at the same Supabase project, the
+   registration applies everywhere immediately.
 3. **Deploy/test the auth frontend in Preview** (see "Preview verification"
    above) — do this before merging to `main`.
 4. **Merge/deploy the frontend** to `main` → Production (Vercel
@@ -204,10 +231,10 @@ If the owner is ever locked out (wrong UUID registered, owner_config
 emptied, Google identity lost, etc.):
 
 - **Repair `owner_config`** directly in the SQL Editor — re-run the
-  `insert ... on conflict` from "Migration A" step 4 with the correct UUID.
-  This table is not reachable from the app or from PostgREST at all, so
-  the SQL Editor (or another trusted service-role/dashboard path) is the
-  only way to fix it.
+  `insert ... on conflict` from "Registering the canonical owner" step 4
+  with the correct UUID. This table is not reachable from the app or from
+  PostgREST at all, so the SQL Editor (or another trusted service-role/
+  dashboard path) is the only way to fix it.
 - **Repair the auth app** (frontend bug, bad deploy, etc.) via a normal
   Vercel rollback/redeploy — this doesn't require touching the database at
   all.

@@ -13,10 +13,13 @@
 -- canonical Supabase Auth UUID) and a SECURITY DEFINER helper,
 -- private.is_owner(), that consults it. `private` is never added to
 -- Supabase's "Exposed schemas" list, so nothing in it is reachable over
--- PostgREST/supabase.rpc() directly — anon/authenticated get EXECUTE on
+-- PostgREST/supabase.rpc() directly — `authenticated` gets EXECUTE on
 -- private.is_owner() only because RLS policy expressions (evaluated at the
 -- SQL level, not through the REST API) require it, not because it's
--- browser-callable. The browser's only way to ask "am I the owner?" is the
+-- browser-callable. `anon` gets no grant on it at all: Migration B's
+-- policies are scoped `to authenticated` only, so an anonymous request
+-- never evaluates an expression that needs it. The browser's only way to
+-- ask "am I the owner?" is the
 -- separate public.current_user_is_owner() wrapper below, which returns a
 -- boolean and nothing else — never the owner UUID, never the owner_config
 -- row. owner_config itself has RLS enabled with NO policies at all, so no
@@ -62,15 +65,21 @@ $$;
 comment on function private.is_owner() is
   'Private ownership helper used by RLS policies. SECURITY DEFINER so policy evaluation can consult private.owner_config, which otherwise has no grants of its own. Returns false (never an error) for anonymous callers and for any session once no owner_config row exists. Not meant to be called directly by the client — see public.current_user_is_owner().';
 
--- Every role that ever queries an RLS-protected table (including anon, for
--- an unauthenticated PostgREST request) must be able to invoke this
--- function, since it runs as part of evaluating a USING/WITH CHECK
--- expression. This grant does NOT make it browser-callable: PostgREST only
--- routes RPC calls to functions in schemas listed under "Exposed schemas"
--- (public by default), and `private` must never be added to that list —
--- see docs/AUTH_SETUP.md, "Before preview testing".
-grant usage on schema private to anon, authenticated;
-grant execute on function private.is_owner() to anon, authenticated;
+-- Postgres grants EXECUTE on every new function to PUBLIC by default.
+-- Revoke that first, then grant only to the role that actually needs it:
+-- `authenticated`, for RLS policy evaluation on 20260720140000's policies
+-- (which are all scoped `to authenticated`). `anon` never evaluates a
+-- policy that calls private.is_owner() — Migration B grants nothing to
+-- anon on tracked_shows/watched_episodes, so an anonymous request against
+-- either table simply has no applicable policy (implicit deny) and never
+-- needs to invoke this function at all. This grant does NOT make the
+-- function browser-callable either way: PostgREST only routes RPC calls to
+-- functions in schemas listed under "Exposed schemas" (public by default),
+-- and `private` must never be added to that list — see
+-- docs/AUTH_SETUP.md, "Before preview testing".
+grant usage on schema private to authenticated;
+revoke execute on function private.is_owner() from public;
+grant execute on function private.is_owner() to authenticated;
 
 create or replace function public.current_user_is_owner()
 returns boolean
@@ -85,4 +94,8 @@ $$;
 comment on function public.current_user_is_owner() is
   'Public boolean-only ownership check for the frontend auth gate (src/lib/AuthContext.jsx). Returns true only for the single registered owner session; false for every other caller, including anonymous or an authenticated non-owner — never an error, and never the owner UUID/email. This is a UX signal only: the real authorization boundary is the RLS policies in 20260720140000_owner_only_rls_tracked_watched.sql, which call private.is_owner() directly.';
 
-grant execute on function public.current_user_is_owner() to anon, authenticated;
+-- Only `authenticated` calls this RPC (AuthContext only invokes it once a
+-- session exists); `anon` has nothing to gain from it and PUBLIC's default
+-- grant is revoked explicitly rather than left implicit.
+revoke execute on function public.current_user_is_owner() from public;
+grant execute on function public.current_user_is_owner() to authenticated;

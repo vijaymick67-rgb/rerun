@@ -8,7 +8,7 @@ import { useAuth } from '../lib/AuthContext'
 // on this screen. Rendered by AuthGate whenever status is 'unauthenticated',
 // 'oauth-error', or 'unauthorized' — never inside the app shell/TabBar.
 export default function Login() {
-  const { message, clearMessage } = useAuth()
+  const { message, clearMessage, signOutError, clearSignOutError } = useAuth()
   const [showRecovery, setShowRecovery] = useState(false)
   const [googleSubmitting, setGoogleSubmitting] = useState(false)
   const [googleError, setGoogleError] = useState(null)
@@ -22,6 +22,7 @@ export default function Login() {
   async function handleGoogleLogin() {
     if (googleSubmitting) return
     clearMessage()
+    clearSignOutError()
     setGoogleError(null)
     setGoogleSubmitting(true)
     try {
@@ -43,6 +44,7 @@ export default function Login() {
 
   function openRecovery() {
     clearMessage()
+    clearSignOutError()
     setGoogleError(null)
     setRecoveryError(null)
     setShowRecovery(true)
@@ -146,6 +148,12 @@ export default function Login() {
               {topMessage && (
                 <p role="alert" aria-live="assertive" className="status-banner status-banner--destructive type-body">
                   {topMessage}
+                </p>
+              )}
+
+              {!topMessage && signOutError && (
+                <p role="status" aria-live="polite" className="status-banner status-banner--warning type-body">
+                  {signOutError}
                 </p>
               )}
 

@@ -17,7 +17,7 @@ vi.mock('../lib/supabase', () => ({
   },
 }))
 
-const authState = { message: null, clearMessage: vi.fn() }
+const authState = { message: null, clearMessage: vi.fn(), signOutError: null, clearSignOutError: vi.fn() }
 vi.mock('../lib/AuthContext', () => ({
   useAuth: () => authState,
 }))
@@ -60,6 +60,8 @@ beforeEach(() => {
   signInWithPasswordMock.mockReset().mockResolvedValue({ error: null })
   authState.message = null
   authState.clearMessage.mockReset()
+  authState.signOutError = null
+  authState.clearSignOutError.mockReset()
 })
 
 afterEach(async () => {
@@ -172,6 +174,33 @@ describe('Login', () => {
     await act(async () => { getByText('Back to Google sign-in').click() })
     expect(getByText('Continue with Google')).not.toBeNull()
     expect(container.querySelector('input[type="password"]')).toBeNull()
+  })
+
+  it('shows an informational (non-alert) notice when sign-out could not be confirmed with the server', async () => {
+    authState.signOutError =
+      'Sign-out could not be confirmed with the server, but local access has been revoked on this device.'
+    await mountLogin()
+    const notice = container.querySelector('[role="status"]')
+    expect(notice).not.toBeNull()
+    expect(notice.textContent).toContain('Sign-out could not be confirmed')
+    // This is informational, not a blocking error — it must not steal the
+    // role="alert" region reserved for the rejection/OAuth-error message.
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('the rejection message takes priority over the sign-out notice when both are present', async () => {
+    authState.message = "You're not the owner."
+    authState.signOutError = 'Sign-out could not be confirmed with the server, but local access has been revoked on this device.'
+    await mountLogin()
+    expect(container.querySelector('[role="alert"]').textContent).toContain("You're not the owner.")
+    expect(container.querySelector('[role="status"]')).toBeNull()
+  })
+
+  it('clears the sign-out notice when starting a fresh Google sign-in attempt', async () => {
+    authState.signOutError = 'Sign-out could not be confirmed with the server, but local access has been revoked on this device.'
+    await mountLogin()
+    await act(async () => { getByText('Continue with Google').click() })
+    expect(authState.clearSignOutError).toHaveBeenCalled()
   })
 
   it('reserves an inert demo slot that renders nothing interactive', async () => {

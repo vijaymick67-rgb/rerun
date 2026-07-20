@@ -30,15 +30,25 @@ const AuthContext = createContext(undefined)
 
 const REJECTION_MESSAGE = "You're not the owner."
 
+const SIGN_OUT_WARNING =
+  'Sign-out could not be confirmed with the server, but local access has been revoked on this device.'
+
 export function AuthProvider({ children }) {
   const [status, setStatus] = useState('booting')
   const [session, setSession] = useState(null)
   const [message, setMessage] = useState(null)
+  const [signOutError, setSignOutError] = useState(null)
 
   const sessionRef = useRef(null)
   const lastProcessedTokenRef = useRef(null)
   const rejectionLatchRef = useRef(new Set())
   const processSessionRef = useRef(null)
+  // Bumped on every owner-check attempt (and on any event that supersedes
+  // one, e.g. a later SIGNED_IN/SIGNED_OUT). An in-flight RPC whose
+  // requestId no longer matches this ref is stale and must not touch state —
+  // otherwise a slow check for an old session could resolve after a newer
+  // session has already taken over and authenticate/reject the wrong one.
+  const requestIdRef = useRef(0)
 
   const updateSession = useCallback((next) => {
     sessionRef.current = next
@@ -73,8 +83,13 @@ export function AuthProvider({ children }) {
       updateSession(nextSession)
       setStatus('checking-owner')
 
+      const requestId = ++requestIdRef.current
       const { data, error } = await supabase.rpc('current_user_is_owner')
-      if (cancelled) return
+      // A newer processSession call (a different, later session) may have
+      // started and even finished while this RPC was in flight. If so, this
+      // result is stale — discard it rather than let it authenticate,
+      // reject, or sign out a session that is no longer current.
+      if (cancelled || requestId !== requestIdRef.current) return
 
       if (error) {
         // Cannot confirm ownership right now (most likely offline). Fail
@@ -96,15 +111,21 @@ export function AuthProvider({ children }) {
 
       setMessage(REJECTION_MESSAGE)
       setStatus('unauthorized')
+      let signOutFailed = false
       try {
-        await supabase.auth.signOut()
+        // Local scope only: rejecting this device must not terminate the
+        // owner's (or a mistaken visitor's) sessions on other devices.
+        const { error: signOutErr } = await supabase.auth.signOut({ scope: 'local' })
+        if (signOutErr) signOutFailed = true
       } catch {
-        // Sign-out failing must never leave the private app reachable —
-        // fall through to the same local-state clear below regardless.
+        signOutFailed = true
       }
-      if (cancelled) return
+      if (cancelled || requestId !== requestIdRef.current) return
       lastProcessedTokenRef.current = null
       updateSession(null)
+      setSignOutError(signOutFailed ? SIGN_OUT_WARNING : null)
+      // The rejection message takes priority over the sign-out warning on
+      // this screen; the warning is still available via context if needed.
       setStatus('unauthenticated')
     }
 
@@ -130,6 +151,9 @@ export function AuthProvider({ children }) {
       }
 
       if (event === 'SIGNED_OUT') {
+        // Invalidate any owner-check still in flight for the session that
+        // just ended — it must not resolve later and re-authenticate.
+        requestIdRef.current += 1
         lastProcessedTokenRef.current = null
         updateSession(null)
         setStatus('unauthenticated')
@@ -154,18 +178,34 @@ export function AuthProvider({ children }) {
 
   const signOut = useCallback(async () => {
     setMessage(null)
+    // Invalidate any owner-check still in flight — an ordinary sign-out
+    // (e.g. from Settings) must not let a slow, now-irrelevant RPC result
+    // re-authenticate the app afterward.
+    requestIdRef.current += 1
+    let signOutFailed = false
     try {
-      await supabase.auth.signOut()
+      // Local scope: this device's session only, not every device the
+      // owner is signed in on.
+      const { error } = await supabase.auth.signOut({ scope: 'local' })
+      if (error) signOutFailed = true
     } catch {
-      // Fail closed regardless of whether the network call succeeded.
+      signOutFailed = true
     }
+    // Fail closed regardless of whether the network call succeeded: the
+    // private app must unmount either way. `signOutError` records the
+    // uncertainty instead of silently treating the sign-out as confirmed.
     lastProcessedTokenRef.current = null
     updateSession(null)
+    setSignOutError(signOutFailed ? SIGN_OUT_WARNING : null)
     setStatus('unauthenticated')
   }, [updateSession])
 
+  const clearSignOutError = useCallback(() => setSignOutError(null), [])
+
   return (
-    <AuthContext.Provider value={{ status, session, message, clearMessage, retryOwnerCheck, signOut }}>
+    <AuthContext.Provider
+      value={{ status, session, message, clearMessage, retryOwnerCheck, signOut, signOutError, clearSignOutError }}
+    >
       {children}
     </AuthContext.Provider>
   )

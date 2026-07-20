@@ -34,9 +34,15 @@ describe('20260720130000_add_owner_auth_infrastructure.sql (structural checks, n
     expect(sql).toMatch(/from private\.owner_config/)
   })
 
-  it('grants private.is_owner() to anon and authenticated (required for RLS evaluation, not for direct REST calls)', () => {
-    expect(sql).toMatch(/grant usage on schema private to anon, authenticated/)
-    expect(sql).toMatch(/grant execute on function private\.is_owner\(\) to anon, authenticated/)
+  it('grants private.is_owner() to authenticated only, after explicitly revoking the PUBLIC default', () => {
+    expect(sql).toMatch(/grant usage on schema private to authenticated/)
+    expect(sql).toMatch(/revoke execute on function private\.is_owner\(\) from public/)
+    expect(sql).toMatch(/grant execute on function private\.is_owner\(\) to authenticated/)
+
+    // anon must not receive schema usage or execute on the private helper.
+    expect(code).not.toMatch(/grant usage on schema private to anon/)
+    expect(code).not.toMatch(/grant execute on function private\.is_owner\(\) to anon/)
+    expect(code).not.toMatch(/grant[^;]*private\.is_owner[^;]*,\s*anon\b/)
   })
 
   it('defines public.current_user_is_owner() as a boolean-only wrapper that delegates to the private helper', () => {
@@ -50,7 +56,9 @@ describe('20260720130000_add_owner_auth_infrastructure.sql (structural checks, n
     expect(wrapperMatch[1]).not.toMatch(/owner_config/)
     expect(wrapperMatch[1]).not.toMatch(/owner_id/)
 
-    expect(sql).toMatch(/grant execute on function public\.current_user_is_owner\(\) to anon, authenticated/)
+    expect(sql).toMatch(/revoke execute on function public\.current_user_is_owner\(\) from public/)
+    expect(sql).toMatch(/grant execute on function public\.current_user_is_owner\(\) to authenticated/)
+    expect(code).not.toMatch(/grant execute on function public\.current_user_is_owner\(\) to anon/)
   })
 
   it('returns boolean from both functions (never the owner UUID/email)', () => {
