@@ -3,10 +3,10 @@ import { Link } from 'react-router-dom'
 export default function NotFound() {
   return (
     <main className="app-page flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-(--color-border) bg-(--color-surface) text-xl font-semibold text-(--color-accent)">
+      <div className="system-state-mark surface-card flex h-14 w-14 items-center justify-center text-xl font-semibold text-(--color-accent-strong)">
         R
       </div>
-      <h1 className="mt-5 text-lg font-semibold text-(--color-text)">
+      <h1 className="type-section-title mt-5 text-(--color-text)">
         Page not found
       </h1>
       <p className="mt-2 max-w-xs text-sm leading-6 text-(--color-text-muted)">
@@ -14,7 +14,7 @@ export default function NotFound() {
       </p>
       <Link
         to="/"
-        className="motion-press mt-5 flex min-h-11 items-center rounded-lg bg-(--color-accent) px-5 text-sm font-semibold text-(--color-bg)"
+        className="motion-press focus-ring mt-5 flex min-h-11 items-center rounded-lg bg-(--color-accent) px-5 text-sm font-semibold text-(--color-canvas)"
       >
         Go to Watching
       </Link>
