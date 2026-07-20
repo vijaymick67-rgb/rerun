@@ -73,7 +73,6 @@ function makeSupabaseStub({
   trackedShows = [],
   watchedRows = [],
   claim = () => ({ data: [], error: null }),
-  claimCollision = () => ({ data: [], error: null }),
   complete,
   onDelete = () => {},
 } = {}) {
@@ -99,17 +98,13 @@ function makeSupabaseStub({
     },
     rpc(name, args) {
       record.rpcCalls.push([name, args])
-      if (name === 'claim_episode_notification_deliveries') {
+      if (name === 'claim_episode_notifications') {
         const result = claim(args)
-        for (const identity of args.p_episodes.map((e) =>
-          `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`,
-        )) {
-          if ((result.data ?? []).length > 0) record.claimTokensByIdentity.set(identity, args.p_claim_token)
+        for (const row of result.data ?? []) {
+          const identity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${row.season_number}:${row.episode_number}:${row.notification_type}`
+          record.claimTokensByIdentity.set(identity, args.p_claim_token)
         }
         return Promise.resolve(result)
-      }
-      if (name === 'claim_episode_reminder_with_airtime_collision') {
-        return Promise.resolve(claimCollision(args))
       }
       if (name === 'complete_episode_notification_deliveries') {
         return Promise.resolve((complete ?? defaultComplete)(args, record))
@@ -121,12 +116,11 @@ function makeSupabaseStub({
 
 // Full claim -> deliver round trip against a single shared, lease-aware
 // store — not just "delivered or not" but the same claimed-and-not-yet-
-// delivered lease state the real claim_episode_notification_deliveries /
-// claim_episode_reminder_with_airtime_collision RPCs enforce (a 10-minute
-// window during which a fresh, undelivered claim blocks anyone else from
-// winning the same identity). This is what lets a test simulate two
-// genuinely *overlapping* worker invocations racing the same identity, not
-// just repeated sequential runs.
+// delivered lease state the real claim_episode_notifications RPC enforces (a
+// 10-minute window during which a fresh, undelivered claim blocks anyone
+// else from winning the same identity). This is what lets a test simulate
+// two genuinely *overlapping* worker invocations racing the same identity,
+// not just repeated sequential runs.
 const CLAIM_LEASE_MS = 10 * 60 * 1000
 
 function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows = [] } = {}) {
@@ -149,40 +143,36 @@ function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows 
     subscriptions,
     trackedShows,
     watchedRows,
+    // Mirrors claim_episode_notifications: per episode, if
+    // episode_reminder was requested it must be free or nothing is reserved
+    // for the episode at all; episode_airtime (whether requested alone or
+    // alongside a reminder) is attempted only if it's independently free.
+    // Every caller — airtime-only, reminder-only, or both — goes through
+    // this exact same function/state, the same way the real RPC's shared
+    // advisory lock key serializes every claim type together.
     claim: (args) => {
-      const claimedAtMs = Date.parse(args.p_claimed_at)
-      const claimed = []
-      for (const e of args.p_episodes) {
-        const identity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${e.season_number}:${e.episode_number}:${e.notification_type}`
-        if (isFreeToClaim(identity, args.p_claim_token, claimedAtMs)) {
-          setClaim(identity, args.p_claim_token, claimedAtMs)
-          claimed.push({ season_number: e.season_number, episode_number: e.episode_number, notification_type: e.notification_type })
-        }
-      }
-      return { data: claimed, error: null }
-    },
-    // Mirrors claim_episode_reminder_with_airtime_collision: per episode,
-    // the reminder identity must be free; only if it is, and the episode is
-    // flagged airtime_also_due *and* the airtime identity is itself free, is
-    // the pair reserved together (combined: true). Otherwise only the
-    // reminder identity is reserved (combined: false).
-    claimCollision: (args) => {
       const claimedAtMs = Date.parse(args.p_claimed_at)
       const rows = []
       for (const ep of args.p_episodes) {
+        const types = ep.notification_types ?? []
+        const wantsReminder = types.includes('episode_reminder')
+        const wantsAirtime = types.includes('episode_airtime')
         const reminderIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_reminder`
-        if (!isFreeToClaim(reminderIdentity, args.p_claim_token, claimedAtMs)) continue
+        const airtimeIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_airtime`
 
-        let combined = false
-        let airtimeIdentity = null
-        if (ep.airtime_also_due) {
-          airtimeIdentity = `${args.p_push_subscription_id}:${args.p_tmdb_show_id}:${ep.season_number}:${ep.episode_number}:episode_airtime`
-          combined = isFreeToClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+        if (wantsReminder && !isFreeToClaim(reminderIdentity, args.p_claim_token, claimedAtMs)) continue
+
+        const attemptAirtime = wantsAirtime && isFreeToClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+        if (!wantsReminder && !attemptAirtime) continue
+
+        if (wantsReminder) {
+          setClaim(reminderIdentity, args.p_claim_token, claimedAtMs)
+          rows.push({ season_number: ep.season_number, episode_number: ep.episode_number, notification_type: 'episode_reminder' })
         }
-
-        setClaim(reminderIdentity, args.p_claim_token, claimedAtMs)
-        if (combined) setClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
-        rows.push({ season_number: ep.season_number, episode_number: ep.episode_number, combined })
+        if (attemptAirtime) {
+          setClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+          rows.push({ season_number: ep.season_number, episode_number: ep.episode_number, notification_type: 'episode_airtime' })
+        }
       }
       return { data: rows, error: null }
     },
@@ -358,8 +348,8 @@ describe('notification worker: airtime alert', () => {
       tag: 'rerun-episode-airtime-1-s1e1',
       omitBody: true,
     })
-    const claimCall = supabase.record.rpcCalls.find((c) => c[0] === 'claim_episode_notification_deliveries')
-    expect(claimCall[1].p_episodes[0].notification_type).toBe(EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const claimCall = supabase.record.rpcCalls.find((c) => c[0] === 'claim_episode_notifications')
+    expect(claimCall[1].p_episodes[0].notification_types).toEqual([EPISODE_AIRTIME_NOTIFICATION_TYPE])
   })
 
   it('is not eligible before release', async () => {
@@ -633,8 +623,12 @@ describe('notification worker: same-evaluation collision', () => {
     const supabase = makeSupabaseStub({
       subscriptions: [subscriptionRow()],
       trackedShows: [trackedShow()],
-      claimCollision: (args) => ({
-        data: args.p_episodes.map((e) => ({ season_number: e.season_number, episode_number: e.episode_number, combined: e.airtime_also_due })),
+      claim: (args) => ({
+        data: args.p_episodes.flatMap((e) =>
+          (e.notification_types ?? []).map((notificationType) => ({
+            season_number: e.season_number, episode_number: e.episode_number, notification_type: notificationType,
+          })),
+        ),
         error: null,
       }),
       complete: () => {
@@ -795,6 +789,107 @@ describe('notification worker: cross-invocation collision race', () => {
     expect(sendNotification).toHaveBeenCalledTimes(1)
     const parsed = JSON.parse(sendNotification.mock.calls[0][1])
     expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e1') // a real, standalone reminder — not folded into airtime
+  })
+
+  it('a worker racing the reminder-eligibility boundary never reports a false combined win — airtime and reminder each deliver exactly once, under their own claim', async () => {
+    // Worker A evaluates one millisecond before the reminder becomes due:
+    // it only ever asks for episode_airtime. Worker B evaluates at the
+    // instant the reminder becomes due: it asks for both types together
+    // (a combined attempt), for the very same episode. Before this
+    // migration, A's plain airtime claim and B's collision claim used
+    // different (lock-free vs lock-protected) paths and could both believe
+    // they owned the airtime identity — see
+    // supabase/migrations/20260720110000_add_unified_episode_notification_claim.sql.
+    // Now both go through the same advisory-lock-protected RPC, so
+    // whichever commits first fully settles the episode before the other
+    // even reads its state.
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+
+    const gate = makeGate()
+    let sendCallCount = 0
+    const sendNotification = vi.fn(async () => {
+      sendCallCount += 1
+      if (sendCallCount === 1) await gate.promise // Worker A: claimed airtime-only, paused before sending.
+    })
+
+    const handlerA = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT - 1) })
+    const handlerB = makeHandler({ supabase, showsById, sendNotification, now: () => new Date(DEFAULT_REMINDER_INSTANT) })
+
+    const resA = response()
+    const runA = handlerA(request(), resA)
+    await flushAsync() // A computes airtime-only, claims it, then blocks on the send gate
+
+    const resB = response()
+    await handlerB(request(), resB) // fully concurrent Worker B, requesting a combined claim
+
+    // B must correctly see the airtime identity as already (freshly) owned
+    // by A and fall back to a real, standalone reminder — never a false
+    // "combined" report, and never a second airtime-flavored push.
+    expect(resB.body.sent).toBe(1)
+    expect(resB.body.failed).toBe(0)
+
+    gate.release()
+    await runA
+
+    expect(resA.body.sent).toBe(1)
+    expect(resA.body.failed).toBe(0)
+    expect(sendNotification).toHaveBeenCalledTimes(2) // one airtime push (A), one reminder push (B) — never a duplicate airtime send
+    const tags = sendNotification.mock.calls.map(([, payload]) => JSON.parse(payload).tag).sort()
+    expect(tags).toEqual(['rerun-episode-airtime-1-s1e1', 'rerun-episode-reminder-1-s1e1'])
+
+    // Each identity finalized exactly once, under its own claim — never a
+    // phantom combined finalize call claiming ownership of a row it never
+    // actually won.
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    expect(completeCalls).toHaveLength(2)
+    for (const call of completeCalls) expect(call[1].p_identities).toHaveLength(1)
+    const finalizedTypes = completeCalls.map((c) => c[1].p_identities[0].split(':').pop()).sort()
+    expect(finalizedTypes).toEqual([EPISODE_AIRTIME_NOTIFICATION_TYPE, EPISODE_REMINDER_NOTIFICATION_TYPE])
+  })
+
+  it('a claim RPC error for one worker sends nothing and reports failed, without disturbing the other worker’s legitimate claim', async () => {
+    const lateEpisode = { episode_number: 1, name: 'Pilot', airstamp: '2026-07-18T15:45:00.000Z', runtime: 50 }
+    const showsById = { 1: { name: 'Test Show', episodes: [lateEpisode] } }
+    let claimCallCount = 0
+    const supabase = makeSupabaseStub({
+      subscriptions: [subscriptionRow()],
+      trackedShows: [trackedShow()],
+      // The first claim call (Worker A) fails outright — simulating a
+      // dropped connection mid-transaction, before ownership could even be
+      // verified. The second (Worker B) succeeds normally and wins the
+      // combined claim.
+      claim: (args) => {
+        claimCallCount += 1
+        if (claimCallCount === 1) return { data: null, error: { message: 'connection reset' } }
+        return {
+          data: args.p_episodes.flatMap((e) =>
+            (e.notification_types ?? []).map((notificationType) => ({
+              season_number: e.season_number, episode_number: e.episode_number, notification_type: notificationType,
+            })),
+          ),
+          error: null,
+        }
+      },
+    })
+    const sendNotification = vi.fn(async () => undefined)
+    const handlerA = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const resA = response()
+    await handlerA(request(), resA)
+
+    expect(resA.body.sent).toBe(0)
+    expect(resA.body.failed).toBeGreaterThan(0)
+    expect(sendNotification).not.toHaveBeenCalled()
+
+    const handlerB = makeHandler({
+      supabase, showsById, sendNotification, now: () => new Date(Date.parse('2026-07-18T15:50:00.000Z')),
+    })
+    const resB = response()
+    await handlerB(request(), resB)
+    expect(resB.body.sent).toBe(1)
+    expect(sendNotification).toHaveBeenCalledTimes(1)
   })
 })
 

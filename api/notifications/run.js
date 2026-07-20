@@ -127,74 +127,37 @@ export function createNotificationWorkerHandler({
     const summary = { checkedShows: 0, eligibleEpisodes: 0, sent: 0, skipped: 0, staleRemoved: 0, failed: 0 }
     const preview = dryRun ? [] : undefined
 
-    // Claims a batch of one show's episodes under one notification type for
-    // one subscription. Returns null (and bumps summary.skipped/failed as
-    // appropriate) when nothing was actually won — either every identity was
-    // already claimed/delivered elsewhere, or the claim RPC itself errored.
-    // Only ever used for episodes that are *not* reminder-due this run — an
-    // episode whose reminder is also due always goes through
-    // claimReminderWithCollision below instead, so this can never race a
-    // concurrent invocation over the same identity pair.
-    async function claimEpisodes(subscription, tmdbShowId, episodes, notificationType) {
-      const claimToken = randomUUID()
-      const { data: claimedRows, error: claimError } = await client.rpc(
-        'claim_episode_notification_deliveries',
-        {
-          p_push_subscription_id: subscription.id,
-          p_tmdb_show_id: tmdbShowId,
-          p_episodes: episodes.map((episode) => ({
-            season_number: episode.seasonNumber,
-            episode_number: episode.episodeNumber,
-            notification_type: notificationType,
-          })),
-          p_claim_token: claimToken,
-          p_claimed_at: evaluationInstant.toISOString(),
-        },
-      )
-      if (claimError) {
-        summary.failed += 1
-        console.error('notification_worker_claim_failed', { tmdbShowId, notificationType, message: claimError.message })
-        return null
-      }
-      const claimedKeys = new Set(
-        (claimedRows ?? []).map((row) => episodeKey(row.season_number, row.episode_number)),
-      )
-      const claimedEpisodes = episodes.filter(
-        (episode) => claimedKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
-      )
-      summary.skipped += episodes.length - claimedEpisodes.length
-      if (claimedEpisodes.length === 0) return null
-      return { claimToken, episodes: claimedEpisodes }
-    }
-
-    // Every episode whose reminder is due this run — whether or not it also
-    // looks airtime-due — goes through this single RPC instead of a plain
-    // claim. See
-    // supabase/migrations/20260720090000_add_collision_safe_reminder_claim.sql
-    // for why: two overlapping worker invocations evaluating the same
-    // subscription/show/episode at once must never be able to split
+    // Claims every notification-due episode for one show/subscription in a
+    // single call, so airtime-only, reminder-only, and same-evaluation
+    // combined claims can never disagree about live delivery state — see
+    // supabase/migrations/20260720110000_add_unified_episode_notification_claim.sql.
+    // Two overlapping worker invocations must never be able to split
     // ownership of an airtime+reminder pair between them (one sending
-    // airtime, the other independently sending the "collision" reminder).
-    // The database, not this process, is the one place both invocations
-    // actually share, so it's the only place that decision can be made
-    // atomically. `episodes` here each carry `airtimeAlsoDue` — a pure,
-    // time-based fact this worker already knows; the RPC itself checks live
-    // delivery state to decide whether airtime is genuinely still winnable
-    // too (never merely time-eligible), which is what correctly routes an
-    // episode whose airtime already went out on an earlier, separate run
-    // through the plain reminder-only path here rather than a phantom
-    // "collision".
-    async function claimReminderWithCollision(subscription, tmdbShowId, episodes) {
+    // airtime, the other independently sending a phantom "combined"
+    // reminder) — the database, not this process, is the one place both
+    // invocations actually share, and every claim of every type now goes
+    // through the exact same advisory-lock-protected decision point there.
+    // `episodes` here each carry `wantsAirtime`/`wantsReminder` — pure,
+    // time-based facts this worker already knows; the RPC checks live
+    // delivery state to decide which of those are genuinely still winnable
+    // (never merely time-eligible) and returns one row per identity
+    // actually won. Grouping those rows by episode below is what turns this
+    // into airtime-only / combined / reminder-only buckets — never
+    // something this process decides in advance.
+    async function claimEpisodeNotifications(subscription, tmdbShowId, episodes) {
       const claimToken = randomUUID()
       const { data: rows, error } = await client.rpc(
-        'claim_episode_reminder_with_airtime_collision',
+        'claim_episode_notifications',
         {
           p_push_subscription_id: subscription.id,
           p_tmdb_show_id: tmdbShowId,
           p_episodes: episodes.map((episode) => ({
             season_number: episode.seasonNumber,
             episode_number: episode.episodeNumber,
-            airtime_also_due: episode.airtimeAlsoDue,
+            notification_types: [
+              ...(episode.wantsAirtime ? [EPISODE_AIRTIME_NOTIFICATION_TYPE] : []),
+              ...(episode.wantsReminder ? [EPISODE_REMINDER_NOTIFICATION_TYPE] : []),
+            ],
           })),
           p_claim_token: claimToken,
           p_claimed_at: evaluationInstant.toISOString(),
@@ -202,22 +165,34 @@ export function createNotificationWorkerHandler({
       )
       if (error) {
         summary.failed += 1
-        console.error('notification_worker_collision_claim_failed', { tmdbShowId, message: error.message })
-        return { claimToken, combined: [], reminderOnly: [] }
+        console.error('notification_worker_claim_failed', { tmdbShowId, message: error.message })
+        return { claimToken, airtimeOnly: [], combined: [], reminderOnly: [] }
       }
       const byKey = new Map(
         episodes.map((episode) => [episodeKey(episode.seasonNumber, episode.episodeNumber), episode]),
       )
+      const wonTypesByKey = new Map()
+      for (const row of rows ?? []) {
+        const key = episodeKey(row.season_number, row.episode_number)
+        if (!wonTypesByKey.has(key)) wonTypesByKey.set(key, new Set())
+        wonTypesByKey.get(key).add(row.notification_type)
+      }
+      const airtimeOnly = []
       const combined = []
       const reminderOnly = []
-      for (const row of rows ?? []) {
-        const episode = byKey.get(episodeKey(row.season_number, row.episode_number))
-        if (!episode) continue
-        if (row.combined) combined.push(episode)
-        else reminderOnly.push(episode)
+      let wonCount = 0
+      for (const [key, episode] of byKey) {
+        const won = wonTypesByKey.get(key)
+        if (!won) continue
+        wonCount += 1
+        const hasAirtime = won.has(EPISODE_AIRTIME_NOTIFICATION_TYPE)
+        const hasReminder = won.has(EPISODE_REMINDER_NOTIFICATION_TYPE)
+        if (hasAirtime && hasReminder) combined.push(episode)
+        else if (hasAirtime) airtimeOnly.push(episode)
+        else if (hasReminder) reminderOnly.push(episode)
       }
-      summary.skipped += episodes.length - combined.length - reminderOnly.length
-      return { claimToken, combined, reminderOnly }
+      summary.skipped += episodes.length - wonCount
+      return { claimToken, airtimeOnly, combined, reminderOnly }
     }
 
     // Finalizes exactly the identities this claim_token owns — see
@@ -294,9 +269,9 @@ export function createNotificationWorkerHandler({
     }
 
     // Sends one push for a batch of episodes whose airtime and reminder were
-    // reserved *together* by claimReminderWithCollision (row.combined ===
-    // true). Content is identical to an airtime alert (per spec: "send only
-    // the airtime alert"), but a single successful send finalizes *both*
+    // both won together by claimEpisodeNotifications in the same call.
+    // Content is identical to an airtime alert (per spec: "send only the
+    // airtime alert"), but a single successful send finalizes *both*
     // delivery identities in one call — the reminder is satisfied without a
     // second push. A failed send, or a failed finalize, leaves both
     // identities exactly as unfinalized/reclaimable as sendClaim's contract.
@@ -404,13 +379,11 @@ export function createNotificationWorkerHandler({
             : DEFAULT_PREFERRED_HOUR_IST
 
           // Pass 1: for every show with a candidate under either stage,
-          // split airtime candidates into "reminder isn't due yet" (claimed
-          // immediately, the same uncontested plain claim as before this
-          // migration — no collision is possible) and everything else. Every
-          // reminder-due episode — whether or not it also looks airtime-due
-          // — is claimed via claimReminderWithCollision, which is what makes
-          // the combined/reminder-only decision atomic and DB-coordinated
-          // rather than something this process decides on its own.
+          // merge its airtime and reminder candidates into one request per
+          // show and claim them together in a single call — see
+          // claimEpisodeNotifications above for why this must be one call
+          // covering every type, not separate airtime-only and
+          // reminder/collision calls.
           const airtimeClaims = []
           const combinedClaims = []
           const reminderOnlyClaims = []
@@ -452,23 +425,25 @@ export function createNotificationWorkerHandler({
             const reminderKeys = new Set(
               reminderCandidates.map((episode) => episodeKey(episode.seasonNumber, episode.episodeNumber)),
             )
-            const airtimeOnlyCandidates = airtimeCandidates.filter(
-              (episode) => !reminderKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
-            )
-
-            if (airtimeOnlyCandidates.length > 0) {
-              const claimed = await claimEpisodes(subscription, tmdbShowId, airtimeOnlyCandidates, EPISODE_AIRTIME_NOTIFICATION_TYPE)
-              if (claimed) airtimeClaims.push({ tmdbShowId, showName: entry.showName, ...claimed })
+            const requestedByKey = new Map()
+            for (const episode of airtimeCandidates) {
+              requestedByKey.set(episodeKey(episode.seasonNumber, episode.episodeNumber), episode)
             }
+            for (const episode of reminderCandidates) {
+              requestedByKey.set(episodeKey(episode.seasonNumber, episode.episodeNumber), episode)
+            }
+            const requestedEpisodes = [...requestedByKey.values()].map((episode) => {
+              const key = episodeKey(episode.seasonNumber, episode.episodeNumber)
+              return { ...episode, wantsAirtime: airtimeKeys.has(key), wantsReminder: reminderKeys.has(key) }
+            })
 
-            if (reminderCandidates.length > 0) {
-              const episodesWithFlag = reminderCandidates.map((episode) => ({
-                ...episode,
-                airtimeAlsoDue: airtimeKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
-              }))
-              const { claimToken, combined, reminderOnly } = await claimReminderWithCollision(
-                subscription, tmdbShowId, episodesWithFlag,
+            if (requestedEpisodes.length > 0) {
+              const { claimToken, airtimeOnly, combined, reminderOnly } = await claimEpisodeNotifications(
+                subscription, tmdbShowId, requestedEpisodes,
               )
+              if (airtimeOnly.length > 0) {
+                airtimeClaims.push({ tmdbShowId, showName: entry.showName, claimToken, episodes: airtimeOnly })
+              }
               if (combined.length > 0) {
                 combinedClaims.push({ tmdbShowId, showName: entry.showName, claimToken, episodes: combined })
               }
