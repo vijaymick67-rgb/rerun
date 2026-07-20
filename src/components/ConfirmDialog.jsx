@@ -29,10 +29,11 @@ export default function ConfirmDialog({
       <div
         role="alertdialog"
         aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
         className="surface-card w-full max-w-sm p-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-sm font-semibold text-(--color-text)">{title}</h2>
+        <h2 id="confirm-dialog-title" className="text-sm font-semibold text-(--color-text)">{title}</h2>
         {message && (
           <p className="mt-2 text-sm text-(--color-text-muted)">{message}</p>
         )}

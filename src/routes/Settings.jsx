@@ -49,10 +49,10 @@ function Chevron() {
 function SettingsSection({ title, children }) {
   return (
     <section className="mt-6 first:mt-0">
-      <h2 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-(--color-text-muted)">
+      <h2 className="type-badge px-1 pb-2 text-(--color-text-secondary)">
         {title}
       </h2>
-      <div className="divide-y divide-(--color-border) overflow-hidden rounded-xl border border-(--color-border) bg-(--color-surface)">
+      <div className="settings-group surface-group overflow-hidden divide-y divide-(--color-border-subtle)">
         {children}
       </div>
     </section>
@@ -65,7 +65,7 @@ function SettingsActionRow({ label, onPress, disabled, busyLabel }) {
       type="button"
       onClick={onPress}
       disabled={disabled}
-      className="motion-press flex min-h-11 w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm font-medium text-(--color-text) disabled:opacity-60"
+      className="settings-action-row surface-interactive motion-press flex min-h-11 w-full items-center justify-between gap-3 border-0 px-4 py-2.5 text-left text-sm font-medium text-(--color-text) disabled:opacity-60"
     >
       <span>{label}</span>
       {busyLabel ? (
@@ -86,7 +86,7 @@ function SettingsSecondaryActionRow({ label, onPress, disabled, ariaLabel }) {
       onClick={onPress}
       disabled={disabled}
       aria-label={ariaLabel}
-      className="motion-press flex min-h-11 w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-xs font-normal text-(--color-text-muted) disabled:opacity-60"
+      className="settings-action-row settings-action-row--secondary surface-interactive motion-press flex min-h-11 w-full items-center justify-between gap-3 border-0 px-4 py-2.5 text-left text-xs font-normal text-(--color-text-secondary) disabled:opacity-60"
     >
       <span>{label}</span>
     </button>
@@ -123,7 +123,7 @@ function SettingsSelectRow({ label, value, options, onChange, disabled, busyLabe
           value={value}
           onChange={onChange}
           disabled={disabled}
-          className="min-h-11 rounded-lg border border-(--color-border) bg-(--color-surface-raised) px-2.5 py-1.5 text-sm font-medium text-(--color-text) disabled:opacity-60"
+          className="surface-interactive focus-ring min-h-11 px-2.5 py-1.5 text-sm font-medium text-(--color-text) disabled:opacity-60"
         >
           {options.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
@@ -135,10 +135,16 @@ function SettingsSelectRow({ label, value, options, onChange, disabled, busyLabe
 }
 
 function SettingsInfoRow({ label, status }) {
+  const statusTone = /enabled|active/i.test(status)
+    ? 'settings-status--success'
+    : /denied|unsupported|home screen/i.test(status)
+      ? 'settings-status--warning'
+      : 'settings-status--neutral'
+
   return (
     <div className="flex min-h-11 items-center justify-between gap-3 px-4 py-2.5 text-sm">
-      <span className="font-medium text-(--color-text-muted)">{label}</span>
-      <span className="rounded-full bg-(--color-surface-raised) px-2.5 py-1 text-xs font-medium text-(--color-text-muted)">
+      <span className="font-medium text-(--color-text-secondary)">{label}</span>
+      <span className={`settings-status ${statusTone} min-w-0 max-w-[62%] break-words rounded-full px-2.5 py-1 text-right text-xs font-medium`}>
         {status}
       </span>
     </div>
@@ -157,11 +163,13 @@ function SettingsDescriptionRow({ label, description }) {
 function Banner({ tone, children, live }) {
   const toneClass =
     tone === 'error'
-      ? 'border-red-400/40 bg-red-400/10 text-red-400'
-      : 'border-(--color-accent) bg-(--color-accent-muted) text-(--color-text)'
+      ? 'status-banner--destructive'
+      : tone === 'warning'
+        ? 'status-banner--warning'
+        : 'status-banner--success'
   return (
     <p
-      className={`motion-banner mt-3 rounded-lg border px-3 py-2 text-sm ${toneClass}`}
+      className={`status-banner motion-banner mt-3 text-sm ${toneClass}`}
       aria-live={live ? 'polite' : undefined}
     >
       {children}
@@ -282,9 +290,9 @@ function BackupRestoreSection() {
         <div className="mt-3">
           <p className="text-sm text-(--color-text-muted)">{progress.label}</p>
           {progressPct !== null && (
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-(--color-surface-raised)">
+            <div className="progress-track mt-2 w-full">
               <div
-                className="h-full rounded-full bg-(--color-accent) transition-[width] duration-200"
+                className="progress-fill transition-[width] duration-200"
                 style={{ width: `${progressPct}%` }}
               />
             </div>
@@ -302,7 +310,7 @@ function BackupRestoreSection() {
 
 function NativeImportSummary({ summary }) {
   return (
-    <div className="motion-banner mt-3 rounded-lg border border-(--color-border) bg-(--color-surface) p-4">
+    <div className="content-surface motion-banner mt-3 p-4">
       <p className="text-sm font-semibold text-(--color-text)">Import complete</p>
 
       <dl className="mt-3 space-y-1.5 text-sm">
@@ -330,7 +338,7 @@ function NativeImportSummary({ summary }) {
 
       {summary.errors.length > 0 && (
         <div className="mt-3 text-sm">
-          <p className="font-medium text-red-400">
+          <p className="font-medium text-(--color-destructive)">
             {plural(summary.errors.length, 'issue')} (import continued):
           </p>
           <ul className="mt-1 list-inside list-disc text-(--color-text-muted)">
@@ -346,7 +354,7 @@ function NativeImportSummary({ summary }) {
 
 function ExternalImportSummary({ summary }) {
   return (
-    <div className="motion-banner mt-3 rounded-lg border border-(--color-border) bg-(--color-surface) p-4">
+    <div className="content-surface motion-banner mt-3 p-4">
       <p className="text-sm font-semibold text-(--color-text)">Import complete</p>
 
       <dl className="mt-3 space-y-1.5 text-sm">
@@ -378,7 +386,7 @@ function ExternalImportSummary({ summary }) {
 
       {summary.errors.length > 0 && (
         <div className="mt-3 text-sm">
-          <p className="font-medium text-red-400">
+          <p className="font-medium text-(--color-destructive)">
             {plural(summary.errors.length, 'issue')} (import continued):
           </p>
           <ul className="mt-1 list-inside list-disc text-(--color-text-muted)">

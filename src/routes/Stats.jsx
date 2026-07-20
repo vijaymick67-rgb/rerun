@@ -250,7 +250,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
 
   return (
     <div
-      className="safe-area-overlay fixed inset-0 z-40 flex items-end justify-center bg-black/60 px-4"
+      className="stats-action-sheet-backdrop safe-area-overlay fixed inset-0 z-40 flex items-end justify-center px-4"
       onClick={onClose}
     >
       <div
@@ -258,7 +258,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-h-[calc(100dvh-6rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-(--color-border) bg-(--color-surface) p-4 shadow-xl"
+        className="stats-action-sheet max-h-[calc(100dvh-6rem)] w-full max-w-md overflow-y-auto p-4"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -290,7 +290,7 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
                     }
                     onClose()
                   }}
-                  className="motion-press flex min-h-11 w-full items-center rounded-lg border border-(--color-border) px-3 text-left text-sm font-medium text-(--color-text)"
+                  className="surface-interactive motion-press flex min-h-11 w-full items-center px-3 text-left text-sm font-medium text-(--color-text)"
                 >
                   {item.label}
                 </Link>
@@ -320,8 +320,8 @@ function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
                   if (item.id === 'remove') onRemove()
                 }}
                 disabled={busy}
-                className={`motion-press min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
-                  item.destructive ? 'text-red-400' : 'text-(--color-text-muted)'
+                  className={`motion-press stats-action-${item.destructive ? 'destructive' : 'secondary'} min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
+                  item.destructive ? 'text-(--color-destructive)' : 'text-(--color-text-secondary)'
                 }`}
               >
                 {busy && item.id === 'restore' ? 'Restoring…' : item.label}
@@ -626,17 +626,21 @@ export default function Stats() {
 
   return (
     <div className="app-page px-4 pb-4">
+      <header className="nested-header mb-4">
+        <h1 className="type-page-title">Insights</h1>
+      </header>
+
       {loading && (
-        <div className="flex flex-col gap-3">
-          <div className="h-24 animate-pulse rounded-xl bg-(--color-surface-raised)" />
-          <div className="h-12 animate-pulse rounded-lg bg-(--color-surface)" />
-          <div className="mt-1 h-16 animate-pulse rounded-lg bg-(--color-surface)" />
-          <div className="h-16 animate-pulse rounded-lg bg-(--color-surface)" />
+        <div className="flex flex-col gap-3" aria-label="Loading insights" role="status">
+          <div className="skeleton-block h-24 rounded-xl" />
+          <div className="skeleton-block h-12 rounded-lg" />
+          <div className="skeleton-block mt-1 h-16 rounded-lg" />
+          <div className="skeleton-block h-16 rounded-lg" />
         </div>
       )}
 
       {error && (
-        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="status-banner status-banner--destructive motion-banner mt-4 flex items-center justify-between gap-3 text-sm">
           <span>{error.message} <span className="whitespace-nowrap">({error.code})</span></span>
           <button
             type="button"
@@ -644,7 +648,7 @@ export default function Stats() {
               setLoading(cached === null)
               setLoadAttempt((attempt) => attempt + 1)
             }}
-            className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-red-300"
+            className="focus-ring motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-(--color-destructive)"
           >
             Retry
           </button>
@@ -652,47 +656,51 @@ export default function Stats() {
       )}
 
       {actionError && (
-        <div role="alert" className="motion-banner mt-4 min-w-0 break-words rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div role="alert" className="status-banner status-banner--destructive motion-banner mt-4 min-w-0 break-words text-sm">
           {actionError}
         </div>
       )}
 
       {actionSuccess && (
-        <div role="status" className="motion-banner mt-4 min-w-0 break-words rounded-lg border border-(--color-accent)/30 bg-(--color-accent-muted) px-3 py-2 text-sm text-(--color-accent)">
+        <div role="status" className="status-banner status-banner--success motion-banner mt-4 min-w-0 break-words text-sm">
           {actionSuccess}
         </div>
       )}
 
       {!loading && !error && !hasData && (
-        <p className="mt-8 text-center text-(--color-text-muted)">
-          No watched episodes yet. Mark some watched, or log a finished show from Discover.
-        </p>
+        <div className="empty-state">
+          <h2 className="type-section-title text-(--color-text)">Your viewing journal is empty</h2>
+          <p className="mt-2 text-sm leading-6">No watched episodes yet. Mark some watched, or log a finished show from Discover.</p>
+        </div>
       )}
 
       {!loading && hasData && (
         <>
-          <div className="rounded-xl border border-(--color-accent)/30 bg-(--color-accent-muted) px-4 py-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-(--color-accent)">
+          <section className="stats-summary content-surface px-4 py-5" aria-labelledby="stats-summary-title">
+            <p id="stats-summary-title" className="type-badge text-(--color-accent-strong)">
               Total time watched
             </p>
             <p className="mt-1 text-3xl font-semibold text-(--color-text)">
               {formatWatchTime(totalMinutes)}
             </p>
-          </div>
+          </section>
 
           {insight && (
-            <div className="mt-3 rounded-lg border border-(--color-border) bg-(--color-surface) px-4 py-3">
-              <p className="text-sm text-(--color-text-muted)">{insight}</p>
-            </div>
+            <section className="stats-insight content-surface mt-3 px-4 py-3" aria-labelledby="daily-insight-title">
+              <p id="daily-insight-title" className="type-badge text-(--color-accent-strong)">Daily insight</p>
+              <p className="mt-1.5 text-sm leading-6 text-(--color-text-secondary)">{insight}</p>
+            </section>
           )}
 
-          <div className="mt-6 grid grid-cols-3 gap-3">
+          <section className="mt-6" aria-labelledby="show-history-title">
+            <h2 id="show-history-title" className="type-section-title mb-3">Show history</h2>
+            <div className="grid grid-cols-3 gap-x-3 gap-y-5">
             {shows.map((show) => {
               const isBusy = isStatsShowBusy(busyIds, show.tmdb_id)
               const actionsOpen = openActionId === show.tmdb_id
 
               return (
-                <div key={show.tmdb_id} className="min-w-0">
+                <article key={show.tmdb_id} className="stats-show-card min-w-0">
                   <div className="relative">
                     <Link
                       to={`/watching/${show.tmdb_id}`}
@@ -703,7 +711,7 @@ export default function Stats() {
                         src={show.poster_path ? POSTER_BASE + show.poster_path : null}
                         alt={show.name}
                         fallbackLabel="No poster"
-                        className="aspect-[2/3] w-full rounded-lg border border-(--color-border)"
+                        className="poster-card aspect-[2/3] w-full"
                       />
                     </Link>
 
@@ -732,14 +740,26 @@ export default function Stats() {
                     </button>
                   </div>
 
-                  <p className="mt-1.5 truncate text-xs font-medium text-(--color-text)">
+                  <p className="mt-1.5 truncate text-xs font-semibold text-(--color-text)">
                     {show.name}
                   </p>
-
-                </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-(--color-text-muted)">
+                    <span className="type-caption">{show.watched} of {show.total}</span>
+                    {show.total > 0 && show.watched >= show.total && (
+                      <span className="type-badge text-(--color-success)">Complete</span>
+                    )}
+                  </div>
+                  <div className="progress-track mt-1.5" aria-label={`${show.watched} of ${show.total} episodes watched`}>
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${show.total > 0 ? Math.min(100, (show.watched / show.total) * 100) : 0}%` }}
+                    />
+                  </div>
+                </article>
               )
             })}
-          </div>
+            </div>
+          </section>
         </>
       )}
 
