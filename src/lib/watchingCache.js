@@ -1,4 +1,8 @@
-const CACHE_KEY = 'watching_cache:v4'
+// v5: rows now carry releasedEpisodeCount/releasedWatchedCount/releasedProgress
+// and nextReleasedUnwatchedEpisode (released-only progress bar + Watching
+// quick mark). Bumped so a stale v4 entry never renders a bar or a quick-mark
+// control from data it doesn't actually have.
+const CACHE_KEY = 'watching_cache:v5'
 
 export function loadWatchingCache() {
   try {

@@ -6,9 +6,11 @@ import { episodeKey } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import { isHiddenShow, isVisibleInWatching } from '../lib/finishedShows'
 import {
+  deriveWatchingFields,
   enrichTrackedShowsForWatching,
   selectTrackedShowsForWatching,
 } from '../lib/watchingShows'
+import { createWatchMutationQueue, toggleEpisodeOptimistically } from '../lib/seasonWatchMutations'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
 import { getWatchingInteractionState } from '../lib/watchingNavigation'
@@ -61,6 +63,40 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
   const [openSwipeId, setOpenSwipeId] = useState(null)
+  const [quickMarkingIds, setQuickMarkingIds] = useState(new Set())
+  const [quickMarkError, setQuickMarkError] = useState(null)
+
+  // Show IDs (tmdb_id) whose in-memory mutation context (below) is populated
+  // and ready. A cached row can render with a `nextReleasedUnwatchedEpisode`
+  // long before this load's enrichment for that show has settled — without
+  // this gate, a tap in that window would silently no-op (handleQuickMark
+  // bails out when the context isn't there yet), which reads as a broken
+  // button. WatchingRow hides the quick-mark control entirely until a show's
+  // id is in this set.
+  const [readyShowIds, setReadyShowIds] = useState(() => new Set())
+
+  // Per-show episode/watched context kept in memory only (never persisted to
+  // the cache — see watchingCache.js) so a quick-mark tap can re-derive the
+  // row's status/progress/next-up locally, through the exact same
+  // deriveWatchingFields() a fresh fetch uses, without a network round-trip
+  // or remounting the route. Populated on every enrichment pass.
+  const showContextRef = useRef(new Map())
+  const quickMarkQueuesRef = useRef(new Map())
+
+  // Per-show (by tracked_shows row id) local-mutation revision counters.
+  // Bumped every time a quick mark commits (optimistically or on rollback).
+  // A load's final commit stamps the revision it saw when each show settled
+  // and, if the live revision has moved on since, keeps the live row instead
+  // of overwriting it with that load's now-stale captured snapshot — this is
+  // what stops a slow-finishing background refresh from silently reverting a
+  // quick mark that landed on an already-settled row while other shows were
+  // still loading.
+  const localRevisionRef = useRef(new Map())
+  function bumpLocalRevision(showId) {
+    const next = (localRevisionRef.current.get(showId) ?? 0) + 1
+    localRevisionRef.current.set(showId, next)
+    return next
+  }
   const interactionState = getWatchingInteractionState(
     active,
     openSwipeId,
@@ -138,23 +174,92 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         const seedShows = showsRef.current?.length ? showsRef.current : (cachedShows ?? [])
         const renderedById = new Map(seedShows.map((show) => [show.tmdb_id, show]))
         const freshById = new Map()
+        // Revision each show's local-mutation counter was at when this load
+        // captured it into renderedById/freshById — see localRevisionRef above.
+        const capturedRevisionById = new Map()
+        // Revision each show's local-mutation counter was at when this load
+        // batch began — stamped at the very top of loadCandidateBatch, before
+        // the watched_episodes request even starts, and read in
+        // mergeRenderedShow. It marks the mutation state the whole load's
+        // watched snapshot reflects. If a quick mark lands on a show any time
+        // after this point — while the watched fetch is in flight, or while
+        // that show's own detail/season enrichment is — the snapshot baked
+        // into `loaded` is stale relative to the tap. capturedRevisionById
+        // alone can't catch this because it's stamped at settle time, after
+        // the tap already bumped the counter; capturing before the fetch
+        // begins is what makes the mismatch detectable.
+        const startingRevisionById = new Map()
         let renderedAny = renderedById.size > 0
         let partialFailureCount = 0
         let refreshHadFailure = false
 
-        const mergeRenderedShow = (show) => {
+        // If a quick mark commits for `showId` after this load already
+        // captured that show, the captured copy in `list` is stale — keep
+        // whatever's live in showsRef.current instead of reverting it.
+        const reconcileWithLiveMutations = (list) => {
+          const currentById = new Map(showsRef.current.map((s) => [s.id, s]))
+          return list.map((show) => {
+            const capturedRevision = capturedRevisionById.get(show.id) ?? 0
+            const liveRevision = localRevisionRef.current.get(show.id) ?? 0
+            if (liveRevision !== capturedRevision) return currentById.get(show.id) ?? show
+            return show
+          })
+        }
+
+        const mergeRenderedShow = (show, loaded) => {
           if (ignore) return
           renderedAny = true
-          renderedById.set(show.tmdb_id, show)
-          freshById.set(show.tmdb_id, show)
+
+          const startingRevision = startingRevisionById.get(show.id) ?? 0
+          const liveRevision = localRevisionRef.current.get(show.id) ?? 0
+          let finalShow = show
+          let finalLoaded = loaded
+          if (liveRevision !== startingRevision) {
+            // A quick mark landed on this exact show while its own
+            // enrichment was still in flight — `loaded.watched` is this
+            // show's pre-tap snapshot. Keep the freshly loaded metadata
+            // (episodes/details) but re-derive against the show's current
+            // live watched set instead of reverting the tap.
+            const liveContext = showContextRef.current.get(show.tmdb_id)
+            const latestWatched = liveContext?.watched ?? loaded?.watched ?? new Set()
+            const freshEpisodesBySeason = loaded?.episodesBySeason ?? {}
+            const freshDetails = loaded?.details ?? {}
+            finalShow = {
+              ...show,
+              ...deriveWatchingFields(freshEpisodesBySeason, latestWatched, freshDetails),
+            }
+            finalLoaded = {
+              ...loaded,
+              episodesBySeason: freshEpisodesBySeason,
+              details: freshDetails,
+              watched: latestWatched,
+            }
+          }
+
+          renderedById.set(finalShow.tmdb_id, finalShow)
+          freshById.set(finalShow.tmdb_id, finalShow)
+          capturedRevisionById.set(finalShow.id, localRevisionRef.current.get(finalShow.id) ?? 0)
+          if (finalLoaded?.episodesBySeason) {
+            showContextRef.current.set(finalShow.tmdb_id, {
+              episodesBySeason: finalLoaded.episodesBySeason,
+              details: finalLoaded.details ?? {},
+              watched: finalLoaded.watched ?? new Set(),
+            })
+            setReadyShowIds((prev) => {
+              if (prev.has(finalShow.tmdb_id)) return prev
+              const next = new Set(prev)
+              next.add(finalShow.tmdb_id)
+              return next
+            })
+          }
           const next = sortWatchingShows([...renderedById.values()])
           setShows(next)
           setLoading(false)
-          if (show.loadError) {
+          if (finalShow.loadError) {
             refreshHadFailure = true
             partialFailureCount += 1
             setPartialError({
-              code: show.loadDiagnostics?.[0]?.code ?? 'DATA-UNKNOWN',
+              code: finalShow.loadDiagnostics?.[0]?.code ?? 'DATA-UNKNOWN',
               count: partialFailureCount,
             })
           }
@@ -162,6 +267,19 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
 
         const loadCandidateBatch = async (candidates, preloadedById) => {
           if (candidates.length === 0) return []
+
+          // Stamp each candidate's starting revision now, before this batch's
+          // watched_episodes request even begins — the watched snapshot this
+          // load will bake into `loaded` reflects the mutation state as of
+          // right here. A quick mark that lands while the fetch below is in
+          // flight bumps the counter, and the returned snapshot is pre-tap;
+          // capturing after the fetch resolves would record the already-bumped
+          // revision and mask that staleness. See startingRevisionById above
+          // and mergeRenderedShow.
+          for (const candidate of candidates) {
+            startingRevisionById.set(candidate.id, localRevisionRef.current.get(candidate.id) ?? 0)
+          }
+
           const tmdbIds = candidates.map((show) => show.tmdb_id)
           let watchedRows
           try {
@@ -227,8 +345,8 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         if (!ignore) {
           const enriched = [...initialEnriched, ...finishedEnriched]
           const nextSource = refreshHadFailure
-            ? [...renderedById.values()]
-            : (enriched.length > 0 ? [...freshById.values()] : [])
+            ? reconcileWithLiveMutations([...renderedById.values()])
+            : (enriched.length > 0 ? reconcileWithLiveMutations([...freshById.values()]) : [])
           const next = sortWatchingShows(nextSource)
           setShows(next)
           saveWatchingCache(next)
@@ -285,6 +403,15 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         saveWatchingCache(next)
         return next
       })
+      showContextRef.current.delete(show.tmdb_id)
+      quickMarkQueuesRef.current.delete(show.tmdb_id)
+      localRevisionRef.current.delete(show.id)
+      setReadyShowIds((prev) => {
+        if (!prev.has(show.tmdb_id)) return prev
+        const next = new Set(prev)
+        next.delete(show.tmdb_id)
+        return next
+      })
     } catch {
       setRemoveError('Couldn\'t remove this show. Try again.')
     }
@@ -293,6 +420,67 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       next.delete(show.id)
       return next
     })
+  }
+
+  // Applies a locally-derived field set to one row in place: no full-list
+  // reconstruction, no remount, re-sorted with the same sortWatchingShows()
+  // the network load path uses, and immediately persisted to the cache so a
+  // tab switch away and back shows the result without waiting on the network.
+  function applyLocalShowFields(showId, fields) {
+    bumpLocalRevision(showId)
+    setShows((prev) => {
+      const next = sortWatchingShows(
+        prev.map((s) => (s.id === showId ? { ...s, ...fields } : s)),
+      )
+      saveWatchingCache(next)
+      return next
+    })
+  }
+
+  async function handleQuickMark(show) {
+    if (quickMarkingIds.has(show.id)) return
+    const episode = show.nextReleasedUnwatchedEpisode
+    const context = showContextRef.current.get(show.tmdb_id)
+    if (!episode || !context) return
+
+    setQuickMarkError(null)
+    setQuickMarkingIds((prev) => new Set(prev).add(show.id))
+
+    let queue = quickMarkQueuesRef.current.get(show.tmdb_id)
+    if (!queue) {
+      queue = createWatchMutationQueue()
+      quickMarkQueuesRef.current.set(show.tmdb_id, queue)
+    }
+
+    try {
+      await toggleEpisodeOptimistically({
+        queue,
+        supabase,
+        tmdbShowId: show.tmdb_id,
+        seasonNumber: episode.season_number,
+        episode: {
+          episode_number: episode.episode_number,
+          name: episode.name,
+          runtime: episode.runtime,
+        },
+        getWatched: () => context.watched,
+        commitWatched: (nextWatched) => {
+          context.watched = nextWatched
+          applyLocalShowFields(
+            show.id,
+            deriveWatchingFields(context.episodesBySeason, nextWatched, context.details),
+          )
+        },
+      })
+    } catch {
+      setQuickMarkError('Couldn\'t mark that episode watched. Try again.')
+    } finally {
+      setQuickMarkingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(show.id)
+        return next
+      })
+    }
   }
 
   const visibleShows = shows.filter((show) => isVisibleInWatching(show, show.status))
@@ -329,6 +517,12 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         </p>
       )}
 
+      {quickMarkError && (
+        <p role="alert" className="motion-banner mt-4 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
+          {quickMarkError}
+        </p>
+      )}
+
       {!error && (
         <WatchingPartialWarning
           error={partialError}
@@ -361,6 +555,9 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
               isOpen={interactionState.openSwipeId === show.id}
               onOpenChange={setOpenSwipeId}
               onRemove={handleRemove}
+              onQuickMark={handleQuickMark}
+              isQuickMarking={quickMarkingIds.has(show.id)}
+              canQuickMark={readyShowIds.has(show.tmdb_id)}
             />
           ))}
         </div>

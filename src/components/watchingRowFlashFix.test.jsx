@@ -155,7 +155,7 @@ describe('watching-row: sort/status/countdown semantics untouched', () => {
 describe('watching-row: PR #75 press feedback remains intact', () => {
   it('the navigation Link still carries motion-press', () => {
     expect(watchingRowSrc).toContain(
-      'className="motion-press flex flex-1 items-center gap-3 text-left"',
+      'className="motion-press flex min-w-0 flex-1 items-center gap-3 pr-14 text-left"',
     )
   })
 })

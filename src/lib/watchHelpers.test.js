@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  computeReleasedProgress,
   computeWatchingStatus,
   episodeReleaseDateInIST,
   formatReleaseDisplay,
@@ -308,6 +309,77 @@ describe('multi-episode release windows', () => {
     const episodes = [ep(4, '2026-07-10', prime), ep(5, '2026-07-17', prime), ep(6, '2026-07-17', prime)]
     expect(computeWatchingStatus({ 2: episodes }, new Set(['2:4']), {})).toMatchObject({ episode_number: 5 })
     expect(computeWatchingStatus({ 2: episodes }, new Set(['2:4', '2:5']), {})).toMatchObject({ episode_number: 6 })
+  })
+})
+
+describe('computeReleasedProgress — released-only progress', () => {
+  const prime = platform('prime', 14)
+
+  it('excludes future unreleased episodes from the denominator', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T08:30:00Z')) // exactly episode 3's threshold instant
+    const episodesBySeason = {
+      1: [
+        ep(1, '2026-07-01', prime),
+        ep(2, '2026-07-08', prime),
+        ep(3, '2026-07-17', prime),
+        ep(4, '2026-07-24', prime), // future — must not count
+      ],
+    }
+    const watched = new Set(['1:1', '1:2'])
+    expect(computeReleasedProgress(episodesBySeason, watched)).toEqual({
+      releasedCount: 3,
+      watchedCount: 2,
+      percent: (2 / 3) * 100,
+    })
+  })
+
+  it('matches the spec example: 22 watched, 23 released, 26 total in TMDB', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T08:30:00Z'))
+    const released = Array.from({ length: 23 }, (_, i) => ep(i + 1, '2026-06-01', prime))
+    const future = Array.from({ length: 3 }, (_, i) => ep(24 + i, '2026-08-01', prime))
+    const watched = new Set(released.slice(0, 22).map((episode) => `1:${episode.episode_number}`))
+    const { releasedCount, watchedCount } = computeReleasedProgress(
+      { 1: [...released, ...future] },
+      watched,
+    )
+    expect(releasedCount).toBe(23)
+    expect(watchedCount).toBe(22)
+  })
+
+  it('clamps at 100% and never divides by a padded denominator when watched rows are stale', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T08:30:00Z'))
+    const episodesBySeason = { 1: [ep(1, '2026-07-01', prime)] }
+    // Stale/corrupt watched rows for episodes that no longer exist in this
+    // show's episode list must never push the percentage past 100.
+    const watched = new Set(['1:1', '1:99', '9:1'])
+    expect(computeReleasedProgress(episodesBySeason, watched)).toEqual({
+      releasedCount: 1,
+      watchedCount: 1,
+      percent: 100,
+    })
+  })
+
+  it('returns a 0/0 zero percent (not NaN) before anything has released', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    const episodesBySeason = { 1: [ep(1, '2026-07-01', prime)] }
+    expect(computeReleasedProgress(episodesBySeason, new Set())).toEqual({
+      releasedCount: 0,
+      watchedCount: 0,
+      percent: 0,
+    })
+  })
+
+  it('shares the exact hasAired threshold instant — no parallel date/timezone logic', () => {
+    vi.useFakeTimers()
+    const episodesBySeason = { 1: [ep(1, '2026-07-20', prime)] }
+    vi.setSystemTime(new Date('2026-07-20T08:29:00Z'))
+    expect(computeReleasedProgress(episodesBySeason, new Set()).releasedCount).toBe(0)
+    vi.setSystemTime(new Date('2026-07-20T08:30:00Z'))
+    expect(computeReleasedProgress(episodesBySeason, new Set()).releasedCount).toBe(1)
   })
 })
 

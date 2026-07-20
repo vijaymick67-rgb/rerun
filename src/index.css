@@ -811,10 +811,6 @@ body {
   transition: opacity 150ms ease;
 }
 
-.watching-row-chevron {
-  transition: opacity 150ms ease;
-}
-
 .watching-row-hover-remove:focus-visible {
   opacity: 1;
   pointer-events: auto;
@@ -830,10 +826,67 @@ body {
     opacity: 1;
     pointer-events: auto;
   }
+}
 
-  .watching-row:hover .watching-row-chevron {
-    opacity: 0;
-  }
+/* Compact quick-mark control: a full 44px touch target via invisible padding
+   around a visually smaller, lighter soft-edged chip than WatchedCircle's
+   filled circular bulk-watch control. */
+.watching-quick-mark {
+  display: flex;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  outline: none;
+}
+
+.watching-quick-mark:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.watching-quick-mark__chip {
+  display: flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-compact);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  background: var(--color-accent-muted);
+  color: var(--color-accent-strong);
+}
+
+.watching-quick-mark:disabled .watching-quick-mark__chip {
+  opacity: 0.55;
+}
+
+/* Same footprint as the tick glyph it replaces while pending, so the chip
+   never changes size between idle/loading. */
+.watching-quick-mark__spinner {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid color-mix(in srgb, var(--color-accent-strong) 35%, transparent);
+  border-top-color: var(--color-accent-strong);
+  border-radius: 999px;
+  animation: watching-quick-mark-spin 700ms linear infinite;
+}
+
+@keyframes watching-quick-mark-spin {
+  to { transform: rotate(360deg); }
+}
+
+.watching-countdown-pill {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 34%, transparent);
+  background: color-mix(in srgb, var(--color-warning-muted) 90%, var(--color-surface-raised));
+  padding: 0.1875rem 0.5rem;
+  color: var(--color-warning);
+  font-weight: 560;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -14,7 +14,7 @@ const indexCss = src('../index.css')
 describe('touch feedback: interactive elements use the shared motion-press contract', () => {
   it('WatchingRow navigation link presses immediately', () => {
     expect(watchingRow).toContain(
-      'className="motion-press flex flex-1 items-center gap-3 text-left"',
+      'className="motion-press flex min-w-0 flex-1 items-center gap-3 pr-14 text-left"',
     )
   })
 

@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, getExternalIds, POSTER_BASE } from '../lib/tmdb'
 import { getShowReleaseMap } from '../lib/tvmaze'
-import { episodeKey, hasAired } from '../lib/watchHelpers'
+import { computeReleasedProgress, episodeKey, hasAired } from '../lib/watchHelpers'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { attachReleaseData } from '../lib/watchingShows'
 import { handleTapNavigateClick } from '../lib/pressIntent'
@@ -151,18 +151,14 @@ function ShowDetailInner({ tmdbId }) {
     setLoadAttempt((attempt) => attempt + 1)
   }
 
-  const totalEpisodeCount = seasons.reduce(
-    (sum, season) => sum + (episodesBySeason[season.season_number]?.length ?? 0),
-    0,
-  )
-  const totalWatchedCount = seasons.reduce((sum, season) => {
-    const episodes = episodesBySeason[season.season_number] ?? []
-    return (
-      sum +
-      episodes.filter((ep) => watched.has(episodeKey(season.season_number, ep.episode_number)))
-        .length
-    )
-  }, 0)
+  // Released-only progress: the denominator is episodes that have actually
+  // aired per the existing release/timezone engine (hasAired), never every
+  // TMDB row including future unaired episodes. See computeReleasedProgress.
+  const {
+    releasedCount: totalEpisodeCount,
+    watchedCount: totalWatchedCount,
+    percent: totalProgressPercent,
+  } = computeReleasedProgress(episodesBySeason, watched)
 
   function commitWatched(nextWatchedSet, seasonNumber) {
     const next = new Set(nextWatchedSet)
@@ -265,7 +261,7 @@ function ShowDetailInner({ tmdbId }) {
                   <div className="progress-track mt-3 w-full">
                     <div
                       className="progress-fill"
-                      style={{ width: `${(totalWatchedCount / totalEpisodeCount) * 100}%` }}
+                      style={{ width: `${totalProgressPercent}%` }}
                     />
                   </div>
                 </>

@@ -8,7 +8,10 @@ import ProgressiveImage from './ProgressiveImage'
 const REVEAL_WIDTH = 84
 const DRAG_THRESHOLD = 6
 
-export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, onRemove }) {
+export default function WatchingRow({
+  show, isRemoving, isOpen, onOpenChange, onRemove, onQuickMark, isQuickMarking,
+  canQuickMark = true,
+}) {
   const navigate = useNavigate()
   const rowRef = useRef(null)
   const frontRef = useRef(null)
@@ -104,6 +107,21 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
     handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)
   }
 
+  // A cached row can render nextReleasedUnwatchedEpisode long before this
+  // load's mutation context for it is ready (see Watching.jsx's
+  // readyShowIds) — the control must not appear tappable in that window,
+  // since tapping it before context exists would silently do nothing.
+  const quickMarkEpisode = canQuickMark ? (show.nextReleasedUnwatchedEpisode ?? null) : null
+  const showProgressBar = (show.releasedEpisodeCount ?? 0) > 0 &&
+    (show.releasedWatchedCount ?? 0) < (show.releasedEpisodeCount ?? 0)
+
+  function handleQuickMarkClick(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (isQuickMarking || !quickMarkEpisode) return
+    onQuickMark(show)
+  }
+
   return (
     <div
       ref={rowRef}
@@ -130,7 +148,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
         <Link
           to={`/watching/${show.tmdb_id}`}
           onClick={handleLinkClick}
-          className="motion-press flex flex-1 items-center gap-3 text-left"
+          className="motion-press flex min-w-0 flex-1 items-center gap-3 pr-14 text-left"
         >
           <ProgressiveImage
             src={show.poster_path ? POSTER_BASE + show.poster_path : null}
@@ -150,17 +168,22 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
                 {show.status.name ? ` · ${show.status.name}` : ''}
               </p>
             ) : show.status?.type === 'countdown' ? (
-              <span className="type-caption mt-1 inline-flex w-fit items-center rounded-full bg-(--color-upcoming-muted) px-2 py-0.5 text-(--color-upcoming)">
+              <span className="watching-countdown-pill type-caption mt-1">
                 {watchingStatusLabel(show.status)}
               </span>
             ) : (
               <p className="type-caption mt-1 text-(--color-text-muted)">Caught up</p>
             )}
-          </div>
 
-          <span aria-hidden="true" className="watching-row-chevron shrink-0 text-(--color-text-muted)">
-            ›
-          </span>
+            {showProgressBar && (
+              <div className="progress-track mt-2 w-full max-w-40">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${show.releasedProgress}%` }}
+                />
+              </div>
+            )}
+          </div>
         </Link>
 
         <button
@@ -168,7 +191,7 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
           onClick={() => onRemove(show)}
           disabled={isRemoving}
           aria-label={`Remove ${show.name}`}
-          className="motion-press watching-row-hover-remove absolute top-1/2 right-3 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-(--color-text-muted) hover:text-(--color-destructive) disabled:opacity-60"
+          className="motion-press watching-row-hover-remove absolute top-2 right-2 flex h-7 w-7 items-center justify-center rounded-full text-(--color-text-muted) hover:text-(--color-destructive) disabled:opacity-60"
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
             <path
@@ -179,6 +202,30 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
             />
           </svg>
         </button>
+
+        {quickMarkEpisode && (
+          <button
+            type="button"
+            onClick={handleQuickMarkClick}
+            disabled={isQuickMarking}
+            aria-busy={isQuickMarking}
+            aria-label={`Mark S${quickMarkEpisode.season_number}E${quickMarkEpisode.episode_number} of ${show.name} watched`}
+            className="motion-press watching-quick-mark absolute top-1/2 right-1 -translate-y-1/2 disabled:cursor-default"
+          >
+            <span className="watching-quick-mark__chip">
+              {isQuickMarking ? (
+                <span className="watching-quick-mark__spinner" aria-hidden="true" />
+              ) : (
+                <svg
+                  viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none"
+                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                >
+                  <path d="m5 12 4 4L19 6" />
+                </svg>
+              )}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   )
