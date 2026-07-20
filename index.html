@@ -13,7 +13,18 @@
     <title>Rerun</title>
     <style>
       /* Keep these first-paint literals synchronized with src/index.css tokens. */
-      :root, body { background: #080b14; }
+      :root {
+        --canvas-atmosphere:
+          radial-gradient(ellipse 80% 62% at 18% 0%, rgba(73, 117, 255, 0.13) 0%, transparent 72%),
+          radial-gradient(ellipse 70% 56% at 92% 8%, rgba(139, 120, 255, 0.09) 0%, transparent 70%),
+          radial-gradient(ellipse 100% 44% at 50% 100%, rgba(32, 56, 112, 0.08) 0%, transparent 72%),
+          linear-gradient(to bottom, transparent 0%, transparent 68%, rgba(3, 6, 14, 0.18) 100%),
+          #080b14;
+      }
+      :root, body {
+        background: #080b14;
+        background: var(--canvas-atmosphere);
+      }
       body { margin: 0; color: #f1f3f8; }
       .app-loading-shell {
         box-sizing: border-box;
@@ -21,10 +32,7 @@
         min-height: 100dvh;
         display: grid;
         place-items: center;
-        background:
-          radial-gradient(circle at 8% 0%, rgba(73, 117, 255, 0.12), transparent 42%),
-          radial-gradient(circle at 94% 14%, rgba(139, 120, 255, 0.07), transparent 38%),
-          #080b14;
+        background: var(--canvas-atmosphere);
         color: #f1f3f8;
         font: 600 1rem system-ui, -apple-system, sans-serif;
         letter-spacing: 0.06em;
