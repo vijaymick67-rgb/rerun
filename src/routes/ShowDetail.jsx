@@ -198,14 +198,16 @@ function ShowDetailInner({ tmdbId }) {
         <Link
           to="/watching"
           aria-label="Back to Watching"
-          className="motion-press flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-lg text-(--color-text-muted)"
+          className="nested-header__back motion-press min-h-11 min-w-11"
         >
-          ‹
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m15 5-7 7 7 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         </Link>
         {loading ? (
           <div className="h-5 w-40 animate-pulse rounded bg-(--color-surface-raised)" />
         ) : (
-          <h1 className="min-w-0 truncate text-xl font-semibold text-(--color-text)">
+          <h1 className="nested-header__copy nested-header__title type-nested-title text-(--color-text)">
             {show ? show.name : 'Show'}
           </h1>
         )}
@@ -300,10 +302,10 @@ function ShowDetailInner({ tmdbId }) {
                     )}
                     className="motion-press flex min-w-0 flex-1 items-center justify-between py-3 pr-2"
                   >
-                    <span className="text-sm font-medium text-(--color-text)">
+                    <span className="type-show-title text-(--color-text)">
                       Season {season.season_number}
                     </span>
-                    <span className="flex items-center gap-2 text-xs text-(--color-text-muted)">
+                    <span className="type-metadata flex items-center gap-2 text-(--color-text-muted)">
                       {watchedCount}/{episodes.length}
                       <span aria-hidden="true">›</span>
                     </span>

@@ -32,7 +32,7 @@
   --color-upcoming: var(--color-warning);
   --color-upcoming-muted: var(--color-warning-muted);
 
-  --font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Manrope Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 :root {
@@ -61,15 +61,31 @@
   --elevation-interactive: 0 4px 16px rgb(3 6 14 / 0.16);
   --elevation-overlay: 0 20px 60px rgb(3 6 14 / 0.32);
   --elevation-nav: 0 -8px 28px rgb(3 6 14 / 0.24), 0 -1px 0 var(--color-border-subtle);
-  --type-page-title-size: 1.5rem;
-  --type-section-title-size: 1.125rem;
-  --type-show-title-size: 1rem;
+  --space-micro: 0.25rem;
+  --space-compact: 0.5rem;
+  --space-related: 0.75rem;
+  --space-standard: 1rem;
+  --space-section: 1.25rem;
+  --space-major: 1.5rem;
+  --space-large: 2rem;
+  --type-display-size: clamp(2.25rem, 10vw, 3rem);
+  --type-page-title-size: 1.625rem;
+  --type-nested-title-size: 1.625rem;
+  --type-section-title-size: 1.1875rem;
+  --type-show-title-size: 0.9375rem;
   --type-episode-title-size: 0.9375rem;
   --type-body-size: 0.9375rem;
   --type-metadata-size: 0.8125rem;
   --type-caption-size: 0.75rem;
   --type-navigation-size: 0.75rem;
   --type-badge-size: 0.6875rem;
+  --weight-display: 700;
+  --weight-heading: 680;
+  --weight-section: 650;
+  --weight-show: 620;
+  --weight-body: 450;
+  --weight-metadata: 500;
+  --weight-navigation: 620;
 }
 
 html {
@@ -155,10 +171,6 @@ body {
 .stats-summary__duration {
   display: block;
   max-width: 100%;
-  font-size: clamp(2rem, 10vw, 3rem);
-  font-weight: 700;
-  line-height: 1.08;
-  letter-spacing: -0.045em;
   text-wrap: balance;
 }
 
@@ -186,8 +198,6 @@ body {
 
 .stats-insight__copy {
   max-width: 34rem;
-  font-size: 0.98rem;
-  line-height: 1.6;
 }
 
 .stats-show-card {
@@ -219,8 +229,124 @@ body {
 .nested-header {
   display: flex;
   min-height: 2.75rem;
+  align-items: flex-start;
+  gap: var(--space-related);
+}
+
+.nested-header__back {
+  display: inline-flex;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  flex: 0 0 2.75rem;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: center;
+  margin-top: -0.125rem;
+  border-radius: var(--radius-control);
+  color: var(--color-text-secondary);
+}
+
+.nested-header__back svg {
+  width: 1.375rem;
+  height: 1.375rem;
+  stroke-width: 2.25;
+}
+
+.nested-header__copy {
+  min-width: 0;
+  padding-top: var(--space-micro);
+}
+
+.nested-header__title {
+  overflow-wrap: anywhere;
+}
+
+.nested-header__subtitle {
+  margin-top: var(--space-micro);
+  color: var(--color-text-secondary);
+  font-size: var(--type-metadata-size);
+  font-weight: var(--weight-metadata);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.season-episodes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-compact);
+  margin-top: var(--space-section);
+}
+
+.season-episode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-compact);
+  padding: var(--space-compact) var(--space-related);
+}
+
+.season-episode-row--future {
+  opacity: 0.72;
+}
+
+.season-episode-copy {
+  min-width: 0;
+  flex: 1;
+  padding-block: var(--space-micro);
+}
+
+.season-episode-title {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.season-episode-meta {
+  margin-top: var(--space-micro);
+  color: var(--color-text-muted);
+  font-variant-numeric: proportional-nums;
+}
+
+.watched-circle {
+  display: flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-text-muted);
+  border-radius: 999px;
+}
+
+.watched-circle--checked {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-canvas);
+}
+
+.watched-circle--empty {
+  color: transparent;
+}
+
+.watched-circle--disabled {
+  opacity: 0.45;
+}
+
+.browse-search {
+  min-height: 2.75rem;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  padding-inline: var(--space-related);
+  color: var(--color-text);
+  font-size: var(--type-body-size);
+  outline: none;
+}
+
+.browse-search::placeholder {
+  color: var(--color-text-muted);
+}
+
+.browse-search:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 
 .progressive-image {
@@ -351,7 +477,7 @@ body {
   justify-content: center;
   border-radius: var(--radius-control);
   font-size: var(--type-navigation-size);
-  font-weight: 600;
+  font-weight: var(--weight-navigation);
   letter-spacing: 0.01em;
 }
 
@@ -525,22 +651,48 @@ body {
 
 .type-page-title {
   font-size: var(--type-page-title-size);
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: var(--weight-heading);
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+}
+
+.type-display {
+  font-size: var(--type-display-size);
+  font-weight: var(--weight-display);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.type-nested-title {
+  font-size: var(--type-nested-title-size);
+  font-weight: var(--weight-heading);
+  line-height: 1.14;
+  letter-spacing: -0.025em;
 }
 
 .type-section-title {
   font-size: var(--type-section-title-size);
-  font-weight: 650;
+  font-weight: var(--weight-section);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
 }
 
-.type-show-title { font-size: var(--type-show-title-size); font-weight: 650; }
-.type-episode-title { font-size: var(--type-episode-title-size); font-weight: 600; }
-.type-body { font-size: var(--type-body-size); line-height: 1.5; }
-.type-metadata { font-size: var(--type-metadata-size); color: var(--color-text-secondary); }
-.type-caption { font-size: var(--type-caption-size); color: var(--color-text-muted); }
-.type-navigation { font-size: var(--type-navigation-size); font-weight: 600; }
-.type-badge { font-size: var(--type-badge-size); font-weight: 650; letter-spacing: 0.04em; }
+.type-show-title { font-size: var(--type-show-title-size); font-weight: var(--weight-show); line-height: 1.35; }
+.type-episode-title { font-size: var(--type-episode-title-size); font-weight: var(--weight-show); line-height: 1.4; }
+.type-body { font-size: var(--type-body-size); font-weight: var(--weight-body); line-height: 1.55; }
+.type-metadata { font-size: var(--type-metadata-size); font-weight: var(--weight-metadata); line-height: 1.4; color: var(--color-text-secondary); }
+.type-caption { font-size: var(--type-caption-size); font-weight: var(--weight-metadata); line-height: 1.35; color: var(--color-text-muted); }
+.type-navigation { font-size: var(--type-navigation-size); font-weight: var(--weight-navigation); }
+.type-badge { font-size: var(--type-badge-size); font-weight: var(--weight-metadata); letter-spacing: 0.035em; }
+
+.type-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-summary__duration {
+  font-variant-numeric: proportional-nums;
+}
 
 .motion-press {
   transition-property: transform, scale, opacity, background-color, border-color, color;

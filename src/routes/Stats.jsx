@@ -668,7 +668,7 @@ export default function Stats() {
       {!loading && !error && !hasData && (
         <div className="empty-state">
           <h2 className="type-section-title text-(--color-text)">Your viewing journal is empty</h2>
-          <p className="mt-2 text-sm leading-6">No watched episodes yet. Mark some watched, or log a finished show from Discover.</p>
+          <p className="type-body mt-2">No watched episodes yet. Mark some watched, or log a finished show from Discover.</p>
         </div>
       )}
 
@@ -678,14 +678,14 @@ export default function Stats() {
             <p id="stats-summary-title" className="type-badge text-(--color-accent-strong)">
               Time with your shows
             </p>
-            <p className="stats-summary__duration mt-1 text-(--color-text)">
+            <p className="stats-summary__duration type-display mt-1 text-(--color-text)">
               {formatWatchTime(totalMinutes)}
             </p>
           </section>
 
           {insight && (
             <section className="stats-insight content-surface mt-3 px-4 py-3 pl-5" aria-label="Personal insight">
-              <p className="stats-insight__copy text-(--color-text-secondary)">{insight}</p>
+              <p className="stats-insight__copy type-body text-(--color-text-secondary)">{insight}</p>
             </section>
           )}
 
@@ -737,7 +737,7 @@ export default function Stats() {
                     </button>
                   </div>
 
-                  <p className="mt-1.5 truncate text-xs font-semibold text-(--color-text)">
+                  <p className="type-show-title mt-1.5 truncate text-(--color-text)">
                     {show.name}
                   </p>
                 </article>

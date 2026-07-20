@@ -179,16 +179,18 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         <Link
           to={`/watching/${numericTmdbId}`}
           aria-label="Back to show"
-          className="motion-press flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-lg text-(--color-text-muted)"
+          className="nested-header__back motion-press min-h-11 min-w-11"
         >
-          ‹
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m15 5-7 7 7 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         </Link>
-        <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold text-(--color-text)">
+        <div className="nested-header__copy">
+          <h1 className="nested-header__title type-nested-title text-(--color-text)">
             Season {numericSeasonNumber}
           </h1>
           {showName && (
-            <p className="truncate text-xs text-(--color-text-muted)">{showName}</p>
+            <p className="nested-header__subtitle">{showName}</p>
           )}
         </div>
       </div>
@@ -216,7 +218,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       )}
 
       {!loading && episodes && (
-        <div className="mt-4 flex flex-col gap-2">
+        <div className="season-episodes">
           {episodes.map((ep) => {
             const epKey = episodeKey(numericSeasonNumber, ep.episode_number)
             const isWatched = watched.has(epKey)
@@ -227,13 +229,13 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             return (
               <div
                 key={ep.episode_number}
-                className={`content-row flex items-center gap-2 px-3 py-1.5 ${episodeHasAired ? '' : 'opacity-50'}`}
+                className={`content-row season-episode-row flex items-center gap-2 px-3 py-1.5 ${episodeHasAired ? '' : 'season-episode-row--future'}`}
               >
-                <div className="min-w-0 flex-1 py-1">
-                  <p className="truncate text-sm text-(--color-text)">
+                <div className="season-episode-copy min-w-0 flex-1 py-1">
+                  <p className="season-episode-title type-episode-title">
                     {ep.episode_number}. {ep.name || 'Untitled'}
                   </p>
-                  <p className="text-xs text-(--color-text-muted)">
+                  <p className="season-episode-meta type-metadata">
                     {releaseLabel
                       ? episodeHasAired ? releaseLabel : `Airs ${releaseLabel}`
                       : 'No air date'}

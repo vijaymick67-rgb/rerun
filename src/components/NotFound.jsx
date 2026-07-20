@@ -9,7 +9,7 @@ export default function NotFound() {
       <h1 className="type-section-title mt-5 text-(--color-text)">
         Page not found
       </h1>
-      <p className="mt-2 max-w-xs text-sm leading-6 text-(--color-text-muted)">
+      <p className="type-body mt-2 max-w-xs text-(--color-text-muted)">
         That Rerun page does not exist.
       </p>
       <Link
