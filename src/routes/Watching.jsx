@@ -177,6 +177,16 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         // Revision each show's local-mutation counter was at when this load
         // captured it into renderedById/freshById — see localRevisionRef above.
         const capturedRevisionById = new Map()
+        // Revision each show's local-mutation counter was at right before
+        // this load started fetching that show's own per-show data
+        // (details/seasons) — populated in loadCandidateBatch, read in
+        // mergeRenderedShow. If a quick mark lands on a show while that
+        // show's own enrichment is still in flight, the watched snapshot
+        // baked into `loaded` is stale relative to the tap even though
+        // nothing else in the batch is racing — capturedRevisionById alone
+        // can't catch this because it's stamped at settle time, after the
+        // tap already bumped the counter.
+        const startingRevisionById = new Map()
         let renderedAny = renderedById.size > 0
         let partialFailureCount = 0
         let refreshHadFailure = false
@@ -197,30 +207,57 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         const mergeRenderedShow = (show, loaded) => {
           if (ignore) return
           renderedAny = true
-          renderedById.set(show.tmdb_id, show)
-          freshById.set(show.tmdb_id, show)
-          capturedRevisionById.set(show.id, localRevisionRef.current.get(show.id) ?? 0)
-          if (loaded?.episodesBySeason) {
-            showContextRef.current.set(show.tmdb_id, {
-              episodesBySeason: loaded.episodesBySeason,
-              details: loaded.details ?? {},
-              watched: loaded.watched ?? new Set(),
+
+          const startingRevision = startingRevisionById.get(show.id) ?? 0
+          const liveRevision = localRevisionRef.current.get(show.id) ?? 0
+          let finalShow = show
+          let finalLoaded = loaded
+          if (liveRevision !== startingRevision) {
+            // A quick mark landed on this exact show while its own
+            // enrichment was still in flight — `loaded.watched` is this
+            // show's pre-tap snapshot. Keep the freshly loaded metadata
+            // (episodes/details) but re-derive against the show's current
+            // live watched set instead of reverting the tap.
+            const liveContext = showContextRef.current.get(show.tmdb_id)
+            const latestWatched = liveContext?.watched ?? loaded?.watched ?? new Set()
+            const freshEpisodesBySeason = loaded?.episodesBySeason ?? {}
+            const freshDetails = loaded?.details ?? {}
+            finalShow = {
+              ...show,
+              ...deriveWatchingFields(freshEpisodesBySeason, latestWatched, freshDetails),
+            }
+            finalLoaded = {
+              ...loaded,
+              episodesBySeason: freshEpisodesBySeason,
+              details: freshDetails,
+              watched: latestWatched,
+            }
+          }
+
+          renderedById.set(finalShow.tmdb_id, finalShow)
+          freshById.set(finalShow.tmdb_id, finalShow)
+          capturedRevisionById.set(finalShow.id, localRevisionRef.current.get(finalShow.id) ?? 0)
+          if (finalLoaded?.episodesBySeason) {
+            showContextRef.current.set(finalShow.tmdb_id, {
+              episodesBySeason: finalLoaded.episodesBySeason,
+              details: finalLoaded.details ?? {},
+              watched: finalLoaded.watched ?? new Set(),
             })
             setReadyShowIds((prev) => {
-              if (prev.has(show.tmdb_id)) return prev
+              if (prev.has(finalShow.tmdb_id)) return prev
               const next = new Set(prev)
-              next.add(show.tmdb_id)
+              next.add(finalShow.tmdb_id)
               return next
             })
           }
           const next = sortWatchingShows([...renderedById.values()])
           setShows(next)
           setLoading(false)
-          if (show.loadError) {
+          if (finalShow.loadError) {
             refreshHadFailure = true
             partialFailureCount += 1
             setPartialError({
-              code: show.loadDiagnostics?.[0]?.code ?? 'DATA-UNKNOWN',
+              code: finalShow.loadDiagnostics?.[0]?.code ?? 'DATA-UNKNOWN',
               count: partialFailureCount,
             })
           }
@@ -261,6 +298,14 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
             watchedByShowId
               .get(row.tmdb_show_id)
               .add(episodeKey(row.season_number, row.episode_number))
+          }
+
+          // Stamp each candidate's starting revision now, right before its
+          // own per-show enrichment (details/season fetches) begins below —
+          // this is the watched snapshot's effective capture point. See
+          // startingRevisionById above and mergeRenderedShow.
+          for (const candidate of candidates) {
+            startingRevisionById.set(candidate.id, localRevisionRef.current.get(candidate.id) ?? 0)
           }
 
           return enrichTrackedShowsForWatching(

@@ -323,4 +323,66 @@ describe('Watching quick mark — one episode at a time', () => {
     expect(cachedShow.releasedWatchedCount).toBe(7)
     expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })
   })
+
+  it('does not let a same-show quiet refresh revert a quick mark that landed while that refresh was still fetching fresh details', async () => {
+    await mountWatching()
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).not.toBeNull()
+
+    // Trigger a quiet background refresh for the same show (mirrors the
+    // refreshSignal bump the router does on returning from a detail route),
+    // and gate its getShowDetails call so the refresh's own watched_episodes
+    // snapshot (captured just before this) resolves — stale, pre-tap —
+    // before this show's per-show enrichment finishes.
+    let showDetailsCallCount = 0
+    let releaseRefreshDetails
+    const refreshDetailsGate = new Promise((resolve) => { releaseRefreshDetails = resolve })
+    getShowDetails.mockImplementation(async () => {
+      showDetailsCallCount += 1
+      if (showDetailsCallCount === 2) await refreshDetailsGate
+      return { seasons: [{ season_number: 1 }, { season_number: 2 }], status: 'Returning Series' }
+    })
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <Watching active refreshSignal={1} />
+        </MemoryRouter>,
+      )
+    })
+    await flush()
+
+    // The refresh's per-show details fetch is still gated — the row must
+    // stay on the previously settled, still-actionable state (no flash, no
+    // remount, no premature control removal).
+    expect(container.querySelectorAll('.watching-row')).toHaveLength(1)
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).not.toBeNull()
+
+    const button = container.querySelector('.watching-quick-mark')
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    await flush()
+    expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0].episode_number).toBe(5)
+
+    // Now let the stale same-show refresh finish. It must not revert the tap.
+    await act(async () => { releaseRefreshDetails() })
+    await flush()
+
+    expect(container.querySelectorAll('.watching-row')).toHaveLength(1)
+    expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
+
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cachedShow = cached.find((show) => show.tmdb_id === 900)
+    expect(cachedShow.releasedWatchedCount).toBe(7)
+    expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })
+
+    // The next tap must mark only S2E6 — proof the merged context still
+    // carries S2E5 as watched rather than the refresh's stale snapshot.
+    const nextButton = container.querySelector('.watching-quick-mark')
+    await act(async () => { nextButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    await flush()
+    expect(upsertCalls).toHaveLength(2)
+    expect(upsertCalls[1].episode_number).toBe(6)
+  })
 })
