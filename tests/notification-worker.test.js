@@ -135,6 +135,23 @@ function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows 
     return existing.claimedAt < claimedAtMs - CLAIM_LEASE_MS
   }
 
+  // Mirrors the three-state airtime classification the real RPC does (see
+  // 20260720120000_distinguish_in_flight_airtime_claim.sql): 'delivered'
+  // (past run genuinely sent it), 'in-flight' (someone else holds a fresh,
+  // undelivered claim and is about to send it), or 'claimable' (no row, a
+  // stale claim, or our own claim). The 'in-flight' state is the one the old
+  // two-state freedom check collapsed into 'delivered', which let a
+  // both-types request downgrade to a standalone reminder next to another
+  // worker's imminent airtime send.
+  function airtimeState(identity, claimToken, claimedAtMs) {
+    const existing = store.get(identity)
+    if (!existing) return 'claimable'
+    if (existing.delivered) return 'delivered'
+    if (existing.claimToken === claimToken) return 'claimable'
+    if (existing.claimedAt < claimedAtMs - CLAIM_LEASE_MS) return 'claimable'
+    return 'in-flight'
+  }
+
   function setClaim(identity, claimToken, claimedAtMs) {
     store.set(identity, { claimToken, claimedAt: claimedAtMs, delivered: false })
   }
@@ -145,11 +162,13 @@ function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows 
     watchedRows,
     // Mirrors claim_episode_notifications: per episode, if
     // episode_reminder was requested it must be free or nothing is reserved
-    // for the episode at all; episode_airtime (whether requested alone or
-    // alongside a reminder) is attempted only if it's independently free.
-    // Every caller — airtime-only, reminder-only, or both — goes through
-    // this exact same function/state, the same way the real RPC's shared
-    // advisory lock key serializes every claim type together.
+    // for the episode at all; episode_airtime is classified into
+    // delivered / in-flight / claimable. A both-types request backs off
+    // entirely when airtime is in-flight (a second worker's fresh, unsent
+    // claim), so a standalone reminder never goes out next to that imminent
+    // airtime send. Every caller — airtime-only, reminder-only, or both —
+    // goes through this exact same function/state, the same way the real
+    // RPC's shared advisory lock key serializes every claim type together.
     claim: (args) => {
       const claimedAtMs = Date.parse(args.p_claimed_at)
       const rows = []
@@ -162,7 +181,14 @@ function realisticSupabase({ subscriptions = [], trackedShows = [], watchedRows 
 
         if (wantsReminder && !isFreeToClaim(reminderIdentity, args.p_claim_token, claimedAtMs)) continue
 
-        const attemptAirtime = wantsAirtime && isFreeToClaim(airtimeIdentity, args.p_claim_token, claimedAtMs)
+        let attemptAirtime = false
+        if (wantsAirtime) {
+          const state = airtimeState(airtimeIdentity, args.p_claim_token, claimedAtMs)
+          // Reminder + airtime request, but airtime is being sent right now by
+          // another worker: claim nothing at all for this episode.
+          if (wantsReminder && state === 'in-flight') continue
+          attemptAirtime = state === 'claimable'
+        }
         if (!wantsReminder && !attemptAirtime) continue
 
         if (wantsReminder) {
@@ -791,18 +817,17 @@ describe('notification worker: cross-invocation collision race', () => {
     expect(parsed.tag).toBe('rerun-episode-reminder-1-s1e1') // a real, standalone reminder — not folded into airtime
   })
 
-  it('a worker racing the reminder-eligibility boundary never reports a false combined win — airtime and reminder each deliver exactly once, under their own claim', async () => {
-    // Worker A evaluates one millisecond before the reminder becomes due:
-    // it only ever asks for episode_airtime. Worker B evaluates at the
-    // instant the reminder becomes due: it asks for both types together
-    // (a combined attempt), for the very same episode. Before this
-    // migration, A's plain airtime claim and B's collision claim used
-    // different (lock-free vs lock-protected) paths and could both believe
-    // they owned the airtime identity — see
-    // supabase/migrations/20260720110000_add_unified_episode_notification_claim.sql.
-    // Now both go through the same advisory-lock-protected RPC, so
-    // whichever commits first fully settles the episode before the other
-    // even reads its state.
+  it('a worker requesting both types while another worker holds an in-flight airtime claim sends nothing — the reminder waits until airtime is actually delivered, so the boundary race yields exactly one push', async () => {
+    // Worker A evaluates one millisecond before the reminder becomes due, so
+    // it only ever asks for episode_airtime. Worker B evaluates at the instant
+    // the reminder becomes due and asks for both types together, for the very
+    // same episode — but A has already claimed airtime and hasn't sent yet.
+    // Before 20260720120000, B treated that fresh, unsent airtime claim the
+    // same as an already-delivered airtime and downgraded to a standalone
+    // reminder, so B's reminder push went out right next to A's imminent
+    // airtime push — two near-identical notifications for one episode. Now B
+    // sees airtime as in-flight and backs off entirely: nothing is sent for B,
+    // and the reminder only goes out on a later run once airtime is delivered.
     const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
     const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
 
@@ -823,29 +848,74 @@ describe('notification worker: cross-invocation collision race', () => {
     const resB = response()
     await handlerB(request(), resB) // fully concurrent Worker B, requesting a combined claim
 
-    // B must correctly see the airtime identity as already (freshly) owned
-    // by A and fall back to a real, standalone reminder — never a false
-    // "combined" report, and never a second airtime-flavored push.
-    expect(resB.body.sent).toBe(1)
+    // B must see airtime as in-flight (freshly claimed by A, not yet
+    // delivered) and claim nothing at all — no phantom combined win, and no
+    // standalone reminder alongside A's imminent airtime send.
+    expect(resB.body.sent).toBe(0)
     expect(resB.body.failed).toBe(0)
+    expect(sendCallCount).toBe(1) // B never called sendNotification — only A's gated send is outstanding
 
     gate.release()
     await runA
 
     expect(resA.body.sent).toBe(1)
     expect(resA.body.failed).toBe(0)
-    expect(sendNotification).toHaveBeenCalledTimes(2) // one airtime push (A), one reminder push (B) — never a duplicate airtime send
-    const tags = sendNotification.mock.calls.map(([, payload]) => JSON.parse(payload).tag).sort()
-    expect(tags).toEqual(['rerun-episode-airtime-1-s1e1', 'rerun-episode-reminder-1-s1e1'])
+    expect(sendNotification).toHaveBeenCalledTimes(1) // exactly one push across both workers — the airtime alert
+    const parsedA = JSON.parse(sendNotification.mock.calls[0][1])
+    expect(parsedA.tag).toBe('rerun-episode-airtime-1-s1e1')
 
-    // Each identity finalized exactly once, under its own claim — never a
-    // phantom combined finalize call claiming ownership of a row it never
-    // actually won.
+    // Only the airtime identity was finalized so far — the reminder was never
+    // falsely reported as won by B.
     const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
-    expect(completeCalls).toHaveLength(2)
-    for (const call of completeCalls) expect(call[1].p_identities).toHaveLength(1)
-    const finalizedTypes = completeCalls.map((c) => c[1].p_identities[0].split(':').pop()).sort()
-    expect(finalizedTypes).toEqual([EPISODE_AIRTIME_NOTIFICATION_TYPE, EPISODE_REMINDER_NOTIFICATION_TYPE])
+    expect(completeCalls).toHaveLength(1)
+    expect(completeCalls[0][1].p_identities).toHaveLength(1)
+    expect(completeCalls[0][1].p_identities[0].endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE)).toBe(true)
+
+    // A later run, once airtime is genuinely delivered, finally sends the
+    // standalone reminder — nothing was permanently swallowed by the back-off.
+    const laterSend = vi.fn(async () => undefined)
+    const laterHandler = makeHandler({ supabase, showsById, sendNotification: laterSend, now: () => new Date(DEFAULT_REMINDER_INSTANT + 60 * 1000) })
+    const later = response()
+    await laterHandler(request(), later)
+    expect(later.body.sent).toBe(1)
+    expect(laterSend).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(laterSend.mock.calls[0][1]).tag).toBe('rerun-episode-reminder-1-s1e1')
+  })
+
+  it('if an in-flight airtime claim goes stale instead of delivering, a later both-types worker reclaims both airtime and reminder', async () => {
+    // Same starting shape as above — Worker A claims airtime-only and then its
+    // send fails, leaving an undelivered claim behind. Once that claim ages
+    // past the 10-minute lease, a later both-types worker must be able to
+    // reclaim airtime (not treat the stale row as delivered) and win the
+    // reminder too, producing a single combined push.
+    const showsById = { 1: { name: 'Test Show', episodes: [AIRED_EPISODE] } }
+    const supabase = realisticSupabase({ subscriptions: [subscriptionRow()], trackedShows: [trackedShow()] })
+
+    const failingSend = vi.fn(async () => { throw new Error('temporary network blip') })
+    const firstHandler = makeHandler({ supabase, showsById, sendNotification: failingSend, now: () => new Date(DEFAULT_REMINDER_INSTANT - 1) })
+    const first = response()
+    await firstHandler(request(), first)
+    expect(first.body.sent).toBe(0)
+    expect(first.body.failed).toBeGreaterThan(0)
+
+    const laterSend = vi.fn(async () => undefined)
+    const laterHandler = makeHandler({
+      supabase, showsById, sendNotification: laterSend,
+      now: () => new Date(DEFAULT_REMINDER_INSTANT + 11 * 60 * 1000), // past the 10-minute lease
+    })
+    const later = response()
+    await laterHandler(request(), later)
+
+    // One combined push — airtime reclaimed and reminder won together, both
+    // finalized in a single call.
+    expect(later.body.sent).toBe(1)
+    expect(laterSend).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(laterSend.mock.calls[0][1]).tag).toBe('rerun-episode-airtime-1-s1e1')
+    const completeCalls = supabase.record.rpcCalls.filter((c) => c[0] === 'complete_episode_notification_deliveries')
+    const lastComplete = completeCalls[completeCalls.length - 1]
+    expect(lastComplete[1].p_identities).toHaveLength(2)
+    expect(lastComplete[1].p_identities.some((id) => id.endsWith(EPISODE_AIRTIME_NOTIFICATION_TYPE))).toBe(true)
+    expect(lastComplete[1].p_identities.some((id) => id.endsWith(EPISODE_REMINDER_NOTIFICATION_TYPE))).toBe(true)
   })
 
   it('a claim RPC error for one worker sends nothing and reports failed, without disturbing the other worker’s legitimate claim', async () => {

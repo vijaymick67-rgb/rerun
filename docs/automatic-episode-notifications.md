@@ -79,6 +79,13 @@ See "Cross-invocation collision safety" below for both fixes.
   `claim_episode_notification_deliveries` and
   `claim_episode_reminder_with_airtime_collision` in `run.js`. See
   "Cross-invocation collision safety" below.
+- `supabase/migrations/20260720120000_distinguish_in_flight_airtime_claim.sql`
+  (Phase 3 follow-up #3) — `create or replace`s `claim_episode_notifications`
+  in place (same signature) so its airtime freedom check distinguishes an
+  already-delivered airtime from one that's freshly claimed but not yet sent
+  by another concurrent worker. Closes the post-commit send window Fix 2 left
+  open (the RPC's advisory lock is transaction-scoped and released before the
+  push is sent). See "Cross-invocation collision safety" → Fix 3 below.
 - `src/lib/notifications/episodeEligibility.js` — pure, synchronous
   eligibility + payload-grouping logic (no fetching, no Supabase, no
   web-push). Consumes the same `status`/`episodesBySeason` shape
@@ -197,11 +204,11 @@ subscription:
 
 ### Cross-invocation collision safety
 
-Two fixes, layered on top of each other, address two different
-cross-invocation races. Both are superseded in practice by the final state
-described in step 3 below — `claim_episode_notifications` is the only claim
-path `run.js` calls today — but both are described here since the second
-fix only makes sense in light of what the first one didn't cover.
+Three fixes, layered on top of each other, address three different
+cross-invocation races. The earlier ones are superseded in practice by the
+final state — `claim_episode_notifications` (in its Fix 3 form) is the only
+claim path `run.js` calls today — but all three are described here since
+each fix only makes sense in light of what the previous one didn't cover.
 
 **Fix 1 — the in-process collision race.** The in-process version of the
 combined/reminder-only decision (tracking "which episodes did *this run's*
@@ -276,7 +283,8 @@ other, not just against requests of the same shape. Per requested episode:
    behavior exactly.
 3. If `episode_airtime` was requested (alone, or alongside a reminder
    request), it's attempted only if it's independently free by that same
-   test.
+   test. (Fix 3 below refines exactly what "free" means for airtime, to
+   close a window this two-state check left open.)
 4. Every attempted reservation is written via the same upsert-with-lease
    pattern every claim RPC in this project uses, and then — never assumed —
    the row is read back and only reported as won if its `claim_token` now
@@ -298,25 +306,73 @@ identities, so a combined win is finalized by passing both identities
 (bound to the one `claim_token` the claim RPC wrote onto both rows) in a
 single call.
 
-**A residual, structurally-different case is not "fixed" by this, on
-purpose.** If two invocations evaluate at genuinely different instants
-straddling the reminder-eligibility boundary — one still believes the
-reminder isn't due, the other believes it is — `claim_episode_notifications`
-correctly prevents any false/duplicate report, but the two invocations can
-still legitimately produce two separate deliveries: the earlier invocation
-sends a real, standalone airtime push (it never asked for a reminder at
-all), and the later invocation, finding airtime already taken, sends a
-real, standalone reminder push. This is not a duplicate — the two pushes
-are different types with different content triggers — and it's the exact
-same "earlier airtime, later reminder" behavior the product already
-guarantees when the two stages are minutes or hours apart (see "Two-stage
-delivery" above), just compressed into two overlapping runs instead of two
-separate ones. Forcing this into a single combined push would require
-letting a later caller silently reassign a still-live, unsent claim away
-from the invocation that currently owns it — undermining the exact
-lease/ownership guarantee this fix relies on to prevent a real duplicate
-send. See the "reminder-eligibility boundary" test in
-`tests/notification-worker.test.js` for the concrete, asserted behavior.
+**Fix 3 — the post-commit send window Fix 2 still left open.** Fix 2's
+advisory lock is a *transaction* lock (`pg_advisory_xact_lock`): it's
+released the instant the claim RPC's transaction commits. But the Web Push
+send happens afterwards, back in `run.js`, entirely outside any database
+transaction. So a freshly-claimed-but-not-yet-sent airtime row was
+unprotected in the gap between the claim commit and the send:
+
+1. Worker A, evaluating just before reminder time, requests airtime-only,
+   wins the `episode_airtime` row, and its RPC returns (lock released).
+2. A has *not* sent or finalized yet — the row is claimed, unsent,
+   `delivered_at` still null, `claimed_at` fresh.
+3. Worker B, evaluating just after reminder time, requests both types for
+   the same episode, takes the same lock (A already released it), and checks
+   airtime freedom.
+4. Fix 2's freedom check treated "already delivered" and "freshly claimed by
+   someone else" identically — both simply made airtime "not free". So B
+   silently downgraded to a standalone reminder and sent it.
+5. A then sent its airtime push. Two near-identical pushes for one episode —
+   exactly what the combined path exists to prevent.
+
+`claim_episode_notifications`
+(`supabase/migrations/20260720120000_distinguish_in_flight_airtime_claim.sql`)
+closes this by replacing the two-state airtime freedom check with a
+three-state classification of the airtime identity, for any request that
+wants airtime:
+
+- **delivered** — a past run genuinely sent airtime. A reminder now is a
+  separate, legitimate, later notification, so a both-types request claims
+  reminder only (this is what preserves "reminder after a previously
+  completed airtime").
+- **in-flight** — claimed by someone else within the 10-minute lease and not
+  yet delivered: another worker is about to send airtime for this episode
+  *right now*. A both-types request claims **nothing** for this episode —
+  sending a reminder alongside that imminent airtime send is the double
+  push. It backs off; a later run claims reminder-only once airtime has
+  actually been delivered, or reclaims both if that in-flight claim goes
+  stale.
+- **free or stale** — no live claim (no row, or a `delivered_at`-null row
+  whose claim is older than the lease): (re)claim airtime, plus reminder if
+  requested — the combined case.
+
+The behavior table for a request wanting **both** airtime and reminder:
+
+| airtime state | outcome |
+| --- | --- |
+| free / stale | claim both (combined) |
+| delivered | claim reminder only |
+| in-flight (fresh, unsent) | claim nothing this episode |
+| reminder delivered or in-flight | claim nothing this episode |
+
+An airtime-only request is unaffected (free/stale → claim, delivered or
+in-flight → nothing — it never had a reminder to downgrade to), and a
+reminder-only request is unchanged. Only the both-types request gains the
+in-flight back-off. Everything else — the single shared lock key, the
+10-minute lease/reclaim window, the read-back ownership verification, the
+one-row-per-identity-won return shape, and the untouched finalization — is
+preserved verbatim from Fix 2.
+
+The upshot: the reminder-eligibility boundary race now yields **exactly one
+push**. The earlier invocation sends its real airtime alert; the later
+invocation, seeing that airtime is in-flight, sends nothing and the reminder
+simply waits for a subsequent run once airtime is actually delivered. See
+the two "in-flight airtime claim" tests in
+`tests/notification-worker.test.js` for the concrete, asserted behavior
+(one covers the exactly-one-push boundary race and the deferred reminder;
+the other covers reclaiming both types after a stale, never-delivered
+airtime claim).
 
 ### Delivery identity, per type
 
@@ -740,8 +796,9 @@ different endpoint, not a revival of that system).
    `20260719160000_add_complete_episode_notification_deliveries.sql`,
    `20260719170000_add_preferred_notification_hour.sql`,
    `20260720080000_add_two_stage_episode_notifications.sql`,
-   `20260720090000_add_collision_safe_reminder_claim.sql`, and
-   `20260720110000_add_unified_episode_notification_claim.sql` in the
+   `20260720090000_add_collision_safe_reminder_claim.sql`,
+   `20260720110000_add_unified_episode_notification_claim.sql`, and
+   `20260720120000_distinguish_in_flight_airtime_claim.sql` in the
    Supabase SQL Editor. The scheduling migration is safe to run even before
    the Vault secrets above exist — the job just fails (harmlessly, into
    Cron's own run history) until they're set. The 17:00:00 and 08:00:00
@@ -750,13 +807,15 @@ different endpoint, not a revival of that system).
    scoped by `is null`/specific `notification_type` values) — neither
    recreates or reschedules the Cron job, and the 08:00:00 migration is
    forward-only: see "Rollout safety" and "Legacy delivery migration" above
-   for exactly what it backfills and why. The 09:00:00 and 11:00:00
-   migrations each only add a new function — they touch no existing rows
-   and are safe to apply exactly once, in either order relative to each
-   other or to a running worker (the worker simply starts using
-   `claim_episode_notifications` as soon as it's deployed and the function
-   exists; until then it keeps using whichever claim RPCs are already
-   live).
+   for exactly what it backfills and why. The 09:00:00, 11:00:00, and
+   12:00:00 migrations each only add or replace a function — they touch no
+   existing rows and are safe to apply exactly once. Apply 11:00:00 before
+   12:00:00 (12:00:00 `create or replace`s the function 11:00:00 first
+   creates); relative to a running worker either ordering is safe, since the
+   worker simply starts using `claim_episode_notifications` as soon as it's
+   deployed and the function exists (in whichever version is live at the
+   time), and until then it keeps using whichever claim RPCs are already
+   live.
 4. `TMDB_API_KEY` (already configured for `api/tmdb.js`) is reused as-is —
    the worker calls TMDB directly with it, server-side.
 
@@ -967,30 +1026,43 @@ double's claim handler was rewritten to a single function mirroring
 `claim_episode_notifications` exactly (one shared shape for airtime-only,
 reminder-only, and combined requests, rather than two separate handlers for
 two separate former RPCs), since a test double with two different handlers
-could no longer even represent the bug this fix closes. Two new scenarios:
-an invocation racing right at the reminder-eligibility boundary (one worker
-requesting airtime-only, the other requesting combined, for the same
-episode) never produces a false combined report or a duplicate
-airtime-flavored push — airtime and reminder each deliver exactly once,
-under their own claim, finalized in two separate single-identity calls, not
-one phantom two-identity call; and a claim RPC error for one worker sends
-nothing and reports failed without disturbing a second, independently
-successful worker's legitimate claim. The migration test asserts the new
-function's signature, that every request shape computes the identical
-advisory lock key (a single `lock_key := hashtextextended(...)` expression
-in the whole function, not one per claim type), the reminder/airtime
-freedom checks and the shared 10-minute lease window, that a win is only
-ever reported after reading the row back and confirming `claim_token`
-ownership (never merely because an `INSERT` ran), and that it leaves
-`complete_episode_notification_deliveries` and the two superseded RPCs
+could no longer even represent the bug this fix closes. Also added: a claim
+RPC error for one worker sends nothing and reports failed without disturbing
+a second, independently successful worker's legitimate claim. The migration
+test asserts the new function's signature, that every request shape computes
+the identical advisory lock key (a single `lock_key := hashtextextended(...)`
+expression in the whole function, not one per claim type), the
+reminder/airtime freedom checks and the shared 10-minute lease window, that
+a win is only ever reported after reading the row back and confirming
+`claim_token` ownership (never merely because an `INSERT` ran), and that it
+leaves `complete_episode_notification_deliveries` and the two superseded RPCs
 untouched.
+
+**Added by the third cross-invocation fix (the in-flight airtime window)**,
+in the same `notification worker: cross-invocation collision race` block and
+`tests/in-flight-airtime-claim-migration.test.js`: the test double's claim
+handler gained the same three-state airtime classification
+(delivered / in-flight / claimable) the real RPC uses, so it can represent a
+both-types request meeting another worker's fresh, unsent airtime claim. Two
+new scenarios replace the earlier "boundary race → two legitimate pushes"
+one, asserting the now-stronger guarantee: a worker requesting both types
+while another worker holds an in-flight airtime claim sends **nothing** —
+only the in-flight worker's single airtime push goes out (exactly one push
+across both workers), the reminder is never falsely reported as won, and the
+standalone reminder is delivered on a later run once airtime is genuinely
+delivered; and, separately, if that in-flight airtime claim goes stale
+instead of delivering, a later both-types worker reclaims *both* airtime and
+reminder in a single combined push rather than treating the stale row as
+delivered. The migration test asserts the same-signature `create or replace`,
+the single preserved advisory lock key, the split `airtime_delivered` /
+`airtime_in_flight` checks, the both-types-and-in-flight back-off, that the
+back-off is guarded on in-flight and never on delivered (so reminder-only
+after a delivered airtime still works), the retained ownership verification
+and lease window, and that no function is dropped and the finalize/superseded
+RPCs are untouched.
 
 Real concurrent Vercel Cron invocations, and Postgres's actual
 `pg_advisory_xact_lock` behavior under real concurrent connections, are not
 something a Vitest suite can exercise directly — the tests above verify the
 worker's use of the RPC's contract and the RPC's SQL shape, not genuine
-multi-connection Postgres concurrency itself. In particular, the
-"reminder-eligibility boundary" test's two legitimate, non-duplicate pushes
-(see the residual-case note under "Cross-invocation collision safety"
-above) reflect an intentional design tradeoff, not a gap the test suite is
-merely failing to catch.
+multi-connection Postgres concurrency itself.
