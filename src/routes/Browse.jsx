@@ -260,7 +260,7 @@ export default function Browse() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Find a show…"
-        className="w-full rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2 text-(--color-text) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-accent)"
+        className="min-h-11 w-full rounded-xl border border-(--color-border) bg-(--color-surface) px-3 text-(--color-text) outline-none placeholder:text-(--color-text-muted) focus:border-(--color-accent) focus:ring-2 focus:ring-(--color-accent)/25"
       />
 
       {loading && (
@@ -271,7 +271,7 @@ export default function Browse() {
       )}
 
       {error && (
-        <p role="alert" className="motion-banner mt-4 flex items-center justify-between gap-3 text-sm text-red-400">
+        <p role="alert" className="motion-banner mt-4 flex items-center justify-between gap-3 text-sm text-(--color-destructive)">
           <span>{error}</span>
           <button
             type="button"
@@ -302,10 +302,10 @@ export default function Browse() {
         </div>
       )}
 
-      {undoError && <p role="alert" className="mt-2 text-xs text-red-400">{undoError} <button type="button" onClick={handleUndoDelayedAdd} className="motion-press underline">Retry</button></p>}
+      {undoError && <p role="alert" className="mt-2 text-xs text-(--color-destructive)">{undoError} <button type="button" onClick={handleUndoDelayedAdd} className="motion-press underline">Retry</button></p>}
 
       {!loading && !error && searched && query.trim() && results.length === 0 && (
-        <p className="mt-8 text-center text-(--color-text-muted)">
+        <p className="empty-state">
           No results
         </p>
       )}
@@ -329,7 +329,7 @@ export default function Browse() {
             return (
               <div
                 key={show.id}
-                className="overflow-hidden rounded-lg bg-(--color-surface)"
+                className="poster-card"
               >
                 <ProgressiveImage
                   src={show.poster_path ? POSTER_BASE + show.poster_path : null}
@@ -350,16 +350,16 @@ export default function Browse() {
                     type="button"
                     onClick={() => handleTrackToggle(show)}
                     disabled={isAdding || isRemoving}
-                    className={`motion-press mt-2 w-full rounded-md py-1.5 text-sm font-medium ${
+                    className={`motion-press mt-2 min-h-11 w-full rounded-md py-1.5 text-sm font-medium ${
                       isTracked
-                        ? 'bg-(--color-surface-raised) text-(--color-text-muted)'
+                        ? 'border border-(--color-border) bg-(--color-surface-raised) text-(--color-text-muted)'
                         : 'bg-(--color-accent) text-(--color-bg) disabled:opacity-60'
                     }`}
                   >
                     {isRemoving ? 'Removing…' : isAdding ? 'Adding…' : isTracked ? 'Added' : 'Add'}
                   </button>
                   {trackErrors[show.id] && (
-                    <p role="alert" className="mt-1 text-xs text-red-400">
+                    <p role="alert" className="mt-1 text-xs text-(--color-destructive)">
                       {trackErrors[show.id]} <button type="button" onClick={() => handleTrackToggle(show)} className="motion-press underline">Retry</button>
                     </p>
                   )}
@@ -368,9 +368,9 @@ export default function Browse() {
                     type="button"
                     onClick={() => handleLogWatched(show)}
                     disabled={isLogged || isLogging}
-                    className={`motion-press mt-1.5 w-full rounded-md py-1.5 text-xs font-medium ${
+                    className={`motion-press mt-1.5 min-h-11 w-full rounded-md py-1.5 text-xs font-medium ${
                       isLogged
-                        ? 'bg-(--color-surface-raised) text-(--color-text-muted)'
+                        ? 'border border-(--color-border) bg-(--color-surface-raised) text-(--color-text-muted)'
                         : 'border border-(--color-border) text-(--color-text-muted) disabled:opacity-60'
                     }`}
                   >
@@ -380,7 +380,7 @@ export default function Browse() {
                     <p role="status" className="mt-1 text-xs text-(--color-text-muted)">Not aired yet</p>
                   )}
                   {logErrors[show.id] && (
-                    <p role="alert" className="mt-1 text-xs text-red-400">
+                    <p role="alert" className="mt-1 text-xs text-(--color-destructive)">
                       {logErrors[show.id]} <button type="button" onClick={() => handleLogWatched(show)} className="motion-press ml-1 underline">Retry</button>
                     </p>
                   )}

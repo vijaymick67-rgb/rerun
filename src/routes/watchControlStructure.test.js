@@ -20,7 +20,7 @@ describe('detail watch control structure', () => {
 
   it('leaves episode row bodies inert and disables unaired controls', () => {
     expect(seasonDetail).toContain('disabled={!episodeHasAired}')
-    expect(seasonDetail).toContain("? 'transition-transform duration-75 active:translate-y-px")
+    expect(seasonDetail).not.toContain('active:translate-y-px')
     expect(seasonDetail).not.toMatch(/key=\{ep\.episode_number\}[\s\S]{0,180}onClick=/)
   })
 })

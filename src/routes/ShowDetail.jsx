@@ -194,7 +194,7 @@ function ShowDetailInner({ tmdbId }) {
 
   return (
     <div className="nested-page px-4 pb-4">
-      <div className="flex min-h-11 items-center gap-2">
+      <div className="nested-header">
         <Link
           to="/watching"
           aria-label="Back to Watching"
@@ -214,7 +214,7 @@ function ShowDetailInner({ tmdbId }) {
       {loading && <ShowDetailSkeleton />}
 
       {error && (
-        <div className={`motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${show ? 'border-amber-400/40 bg-amber-500/10 text-amber-300' : 'border-red-400/40 bg-red-500/10 text-red-400'}`} role="alert">
+        <div className={`motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${show ? 'border-(--color-upcoming)/40 bg-(--color-upcoming-muted) text-(--color-upcoming)' : 'border-(--color-destructive)/40 bg-(--color-destructive-muted) text-(--color-destructive)'}`} role="alert">
           <span>{error}</span>
           <button type="button" onClick={retryLoad} disabled={refreshing} className="motion-press min-h-11 shrink-0 rounded-md px-2 font-semibold underline disabled:opacity-60">
             {refreshing ? 'Retrying...' : 'Retry'}
@@ -223,7 +223,7 @@ function ShowDetailInner({ tmdbId }) {
             type="button"
             onClick={() => setError(null)}
             aria-label="Dismiss"
-            className="motion-press min-h-11 min-w-11 shrink-0 text-red-400/80 hover:text-red-400"
+            className="motion-press min-h-11 min-w-11 shrink-0 text-(--color-destructive)/80 hover:text-(--color-destructive)"
           >
             ✕
           </button>)}
@@ -241,7 +241,7 @@ function ShowDetailInner({ tmdbId }) {
 
       {!loading && show && (
         <>
-          <div className="mt-4 flex gap-3">
+          <div className="content-surface mt-4 flex gap-3 p-3">
             <ProgressiveImage
               src={show.poster_path ? POSTER_BASE + show.poster_path : null}
               alt={show.name}
@@ -260,9 +260,9 @@ function ShowDetailInner({ tmdbId }) {
                   <p className="mt-1 text-sm text-(--color-text-muted)">
                     {totalWatchedCount}/{totalEpisodeCount} episodes watched
                   </p>
-                  <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-(--color-border)">
+                  <div className="progress-track mt-3 w-full">
                     <div
-                      className="h-full rounded-full bg-(--color-accent)"
+                      className="progress-fill"
                       style={{ width: `${(totalWatchedCount / totalEpisodeCount) * 100}%` }}
                     />
                   </div>
@@ -291,7 +291,7 @@ function ShowDetailInner({ tmdbId }) {
               return (
                 <div
                   key={season.season_number}
-                  className="flex items-center rounded-lg border border-(--color-border) bg-(--color-surface) pl-3 pr-1"
+                  className="content-row flex items-center pl-3 pr-1"
                 >
                   <Link
                     to={`/watching/${numericTmdbId}/season/${season.season_number}`}

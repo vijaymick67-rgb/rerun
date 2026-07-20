@@ -47,7 +47,7 @@ describe('watching-row: PR #76 compositor workarounds are removed', () => {
 
   it('the outer container still keeps its overflow-hidden/rounded clip', () => {
     expect(watchingRowSrc).toContain(
-      'className="watching-row relative overflow-hidden rounded-lg',
+      'className="watching-row content-row relative overflow-hidden',
     )
   })
 

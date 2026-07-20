@@ -32,12 +32,12 @@ function sortWatchingShows(shows) {
 export function WatchingPartialWarning({ error, onRetry }) {
   if (!error) return null
   return (
-    <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+    <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-upcoming)/40 bg-(--color-upcoming-muted) px-3 py-2 text-sm text-(--color-upcoming)">
       <span>Some show details couldn’t refresh. <span className="whitespace-nowrap">({error.code})</span></span>
       <button
         type="button"
         onClick={onRetry}
-        className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-amber-200"
+        className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-(--color-upcoming)"
       >
         Retry
       </button>
@@ -308,7 +308,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       )}
 
       {error && (
-        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
           <span>{error.message} <span className="whitespace-nowrap">({error.code})</span></span>
           <button
             type="button"
@@ -316,7 +316,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
               setLoading(cachedShows === null)
               setLoadAttempt((attempt) => attempt + 1)
             }}
-            className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-red-300"
+            className="motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-(--color-destructive)"
           >
             Retry
           </button>
@@ -324,7 +324,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       )}
 
       {removeError && (
-        <p role="alert" className="motion-banner mt-4 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <p role="alert" className="motion-banner mt-4 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
           {removeError}
         </p>
       )}
@@ -340,13 +340,13 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       )}
 
       {!loading && !error && shows.length === 0 && (
-        <p className="mt-8 text-center text-(--color-text-muted)">
+        <p className="empty-state">
           No shows yet. Add some from Discover.
         </p>
       )}
 
       {!loading && !error && shows.length > 0 && visibleShows.length === 0 && (
-        <p className="mt-8 text-center text-(--color-text-muted)">
+        <p className="empty-state">
           Nothing airing soon.
         </p>
       )}
