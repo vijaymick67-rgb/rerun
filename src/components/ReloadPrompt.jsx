@@ -9,7 +9,7 @@ import {
 
 export function UpdatePrompt({ onUpdate, onDismiss, updating = false }) {
   return (
-    <div className="update-prompt motion-banner" role="status" aria-live="polite">
+    <div className="update-prompt surface-card motion-banner" role="status" aria-live="polite">
       <p className="min-w-0 flex-1 text-sm text-(--color-text)">
         A new version of Rerun is ready.
       </p>
@@ -17,7 +17,7 @@ export function UpdatePrompt({ onUpdate, onDismiss, updating = false }) {
         type="button"
         onClick={onUpdate}
         disabled={updating}
-        className="motion-press min-h-11 shrink-0 rounded-md bg-(--color-accent) px-3 text-sm font-semibold text-(--color-bg) disabled:opacity-60"
+        className="focus-ring motion-press min-h-11 shrink-0 rounded-md bg-(--color-accent) px-3 text-sm font-semibold text-(--color-canvas) disabled:opacity-60"
       >
         {updating ? 'Updating...' : 'Update'}
       </button>
@@ -25,7 +25,7 @@ export function UpdatePrompt({ onUpdate, onDismiss, updating = false }) {
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss update"
-        className="motion-press min-h-11 min-w-11 shrink-0 rounded-md text-lg leading-none text-(--color-text-muted)"
+        className="focus-ring motion-press min-h-11 min-w-11 shrink-0 rounded-md text-lg leading-none text-(--color-text-muted)"
       >
         ×
       </button>

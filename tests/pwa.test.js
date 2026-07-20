@@ -36,8 +36,8 @@ describe('PWA foundation', () => {
       orientation: 'portrait-primary',
       start_url: '/',
       scope: '/',
-      theme_color: '#0f1115',
-      background_color: '#0f1115',
+      theme_color: '#080b14',
+      background_color: '#080b14',
     })
     expect(PWA_MANIFEST.icons).toEqual(expect.arrayContaining([
       expect.objectContaining({ sizes: '192x192', type: 'image/png' }),

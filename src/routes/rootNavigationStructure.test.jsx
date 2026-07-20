@@ -33,6 +33,8 @@ describe('root navigation polish', () => {
     )
 
     expect(html).toContain('href="/browse"')
+    expect(html).toMatch(/<a[^>]*(?:href="\/browse"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/browse")/)
+    expect((html.match(/aria-current="page"/g) ?? [])).toHaveLength(1)
     expect(html).toContain('>Discover</a>')
     expect(html).toContain('href="/watching"')
     expect(html).toContain('>Watching</a>')

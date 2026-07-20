@@ -1,4 +1,4 @@
-export const PWA_THEME_COLOR = '#0f1115'
+export const PWA_THEME_COLOR = '#080b14'
 
 export const PWA_MANIFEST = {
   name: 'Rerun',
