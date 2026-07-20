@@ -2,7 +2,15 @@
 // and nextReleasedUnwatchedEpisode (released-only progress bar + Watching
 // quick mark). Bumped so a stale v4 entry never renders a bar or a quick-mark
 // control from data it doesn't actually have.
-const CACHE_KEY = 'watching_cache:v5'
+//
+// v6: rows now also carry `nextScheduledEpisode` — a lightweight candidate
+// (season_number, episode_number, name, runtime, and an already-resolved
+// `release: { timestamp, istDate }`) used to synchronously advance a stale
+// cached countdown to `nextUp` before first render, when the real world has
+// already crossed that resolved instant (see watchingCacheTransition.js).
+// Bumped so a stale v5 entry — which has no such candidate — is never fed
+// into the transition helper as if it were shaped like a v6 row.
+const CACHE_KEY = 'watching_cache:v6'
 
 export function loadWatchingCache() {
   try {

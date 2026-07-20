@@ -185,7 +185,7 @@ describe('Watching quick mark — one episode at a time', () => {
     await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
     await flush()
 
-    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v6'))
     const cachedShow = cached.find((show) => show.tmdb_id === 900)
     expect(cachedShow.releasedWatchedCount).toBe(7)
     expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })
@@ -232,7 +232,7 @@ describe('Watching quick mark — one episode at a time', () => {
     // The show remains cached from the initial load, but its next-up episode
     // must still read S2E5 — the failed tap's optimistic S2E6 advance was
     // rolled back before it was ever persisted to the cache.
-    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v6'))
     const cachedShow = cached.find((show) => show.tmdb_id === 900)
     expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 5 })
   })
@@ -255,7 +255,7 @@ describe('Watching quick mark — one episode at a time', () => {
       releasedEpisodeCount: 9, releasedWatchedCount: 4, releasedProgress: (4 / 9) * 100,
       nextReleasedUnwatchedEpisode: { season_number: 2, episode_number: 5, name: 'S2E5', runtime: 40 },
     }
-    localStorage.setItem('watching_cache:v5', JSON.stringify([cachedShow]))
+    localStorage.setItem('watching_cache:v6', JSON.stringify([cachedShow]))
 
     let releaseGate
     watchedEpisodesGate = new Promise((resolve) => { releaseGate = resolve })
@@ -318,7 +318,7 @@ describe('Watching quick mark — one episode at a time', () => {
     expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
 
-    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v6'))
     const cachedShow = cached.find((show) => show.tmdb_id === 900)
     expect(cachedShow.releasedWatchedCount).toBe(7)
     expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })
@@ -372,7 +372,7 @@ describe('Watching quick mark — one episode at a time', () => {
     expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
 
-    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v6'))
     const cachedShow = cached.find((show) => show.tmdb_id === 900)
     expect(cachedShow.releasedWatchedCount).toBe(7)
     expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })
@@ -432,7 +432,7 @@ describe('Watching quick mark — one episode at a time', () => {
     expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
 
-    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v6'))
     const cachedShow = cached.find((show) => show.tmdb_id === 900)
     expect(cachedShow.releasedWatchedCount).toBe(7)
     expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })

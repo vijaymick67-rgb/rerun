@@ -27,8 +27,13 @@ const NEGATIVE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 // Episode airstamps shift while a season is airing → the same 6h staleness
 // window getShowDetails/getSeasonEpisodes use, revalidated in the background.
-const EPISODES_PREFIX = 'tvmaze_episodes:v2:'
-const EPISODES_TIME_PREFIX = 'tvmaze_episodes_time:v2:'
+//
+// v3: release records now also carry `tvmazeName` (the TVmaze episode title,
+// used as a title-fallback source — see episodeTitle.js). Bumped from v2 so a
+// stale v2 record — which has no title field at all — can never silently
+// render as a resolved-but-untitled episode; a v3 miss simply refetches.
+const EPISODES_PREFIX = 'tvmaze_episodes:v3:'
+const EPISODES_TIME_PREFIX = 'tvmaze_episodes_time:v3:'
 const EPISODES_MAX_AGE_MS = 6 * 60 * 60 * 1000
 
 function readJson(key) {
@@ -92,6 +97,10 @@ export async function fetchTvmazeEpisodes(tvmazeId, fetchImpl = fetch) {
 // map, keyed with Rerun's shared episodeKey scheme. The single place this
 // shape is built, so the client's cached lookup and the server worker's
 // uncached lookup can never subtly disagree on what a "release record" is.
+//
+// `tvmazeName` retains TVmaze's own episode title as a title-fallback source
+// (see episodeTitle.js) — it is never written back onto TMDB's raw `name`
+// field; callers decide the effective display title explicitly.
 export function buildEpisodeReleaseMap(episodes) {
   const map = {}
   if (!Array.isArray(episodes)) return map
@@ -106,6 +115,7 @@ export function buildEpisodeReleaseMap(episodes) {
         airdate: typeof ep.airdate === 'string' ? ep.airdate : null,
         airtime: typeof ep.airtime === 'string' ? ep.airtime : null,
         tvmazeEpisodeId: typeof ep.id === 'number' ? ep.id : null,
+        tvmazeName: typeof ep.name === 'string' && ep.name.trim() ? ep.name : null,
       }
     }
   }
