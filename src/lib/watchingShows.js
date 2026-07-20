@@ -1,4 +1,4 @@
-import { computeWatchingStatus, episodeKey } from './watchHelpers.js'
+import { computeReleasedProgress, computeWatchingStatus, episodeKey } from './watchHelpers.js'
 import { isHiddenShow, isPersonallyFinished, shouldFinishedShowReturn } from './finishedShows.js'
 import { classifyReleasePlatform } from './releasePlatforms.js'
 import { reportDataError, withTimeout } from './dataLoading.js'
@@ -116,26 +116,55 @@ export async function enrichTrackedShowsForWatching(
         loaded = {
           loadError: true,
           failures: [diagnostic],
-          status: computeWatchingStatus(
-            {},
-            watched,
-            preloadedById.get(show.tmdb_id)?.details ?? {},
-          ),
+          episodesBySeason: {},
+          details: preloadedById.get(show.tmdb_id)?.details ?? {},
+          watched,
+          ...deriveWatchingFields({}, watched, preloadedById.get(show.tmdb_id)?.details ?? {}),
         }
       }
       const enriched = {
         ...show,
         loadError: loaded.loadError,
         status: loaded.status,
+        releasedEpisodeCount: loaded.releasedEpisodeCount,
+        releasedWatchedCount: loaded.releasedWatchedCount,
+        releasedProgress: loaded.releasedProgress,
+        nextReleasedUnwatchedEpisode: loaded.nextReleasedUnwatchedEpisode,
         loadDiagnostics: loaded.failures ?? [],
       }
       for (const failure of loaded.failures ?? []) failures.push(failure)
-      onShowSettled?.(enriched)
+      onShowSettled?.(enriched, loaded)
       return enriched
     }),
   )
   Object.defineProperty(result, 'failures', { value: failures, enumerable: false })
   return result
+}
+
+// Single source for every Watching-row derived field, shared by the network
+// enrichment path below AND the quick-mark local recompute in Watching.jsx —
+// so a tap that marks one episode watched re-derives status/progress/next-up
+// through the exact same computeWatchingStatus/computeReleasedProgress calls
+// a fresh fetch would use, never a parallel reimplementation.
+export function deriveWatchingFields(episodesBySeason, watched, details) {
+  const status = computeWatchingStatus(episodesBySeason, watched, details)
+  const { releasedCount, watchedCount, percent } = computeReleasedProgress(episodesBySeason, watched)
+  const nextReleasedUnwatchedEpisode = status.type === 'nextUp'
+    ? {
+        season_number: status.season_number,
+        episode_number: status.episode_number,
+        name: status.name,
+        runtime: (episodesBySeason?.[status.season_number] ?? [])
+          .find((episode) => episode.episode_number === status.episode_number)?.runtime ?? null,
+      }
+    : null
+  return {
+    status,
+    releasedEpisodeCount: releasedCount,
+    releasedWatchedCount: watchedCount,
+    releasedProgress: percent,
+    nextReleasedUnwatchedEpisode,
+  }
 }
 
 export async function loadWatchingShowData(
@@ -216,8 +245,9 @@ export async function loadWatchingShowData(
     details,
     releaseMap,
     episodesBySeason,
+    watched,
     failures,
-    status: computeWatchingStatus(episodesBySeason, watched, details),
+    ...deriveWatchingFields(episodesBySeason, watched, details),
   }
 }
 

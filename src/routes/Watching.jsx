@@ -6,9 +6,11 @@ import { episodeKey } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import { isHiddenShow, isVisibleInWatching } from '../lib/finishedShows'
 import {
+  deriveWatchingFields,
   enrichTrackedShowsForWatching,
   selectTrackedShowsForWatching,
 } from '../lib/watchingShows'
+import { createWatchMutationQueue, toggleEpisodeOptimistically } from '../lib/seasonWatchMutations'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
 import { getWatchingInteractionState } from '../lib/watchingNavigation'
@@ -61,6 +63,16 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
   const [removingIds, setRemovingIds] = useState(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
   const [openSwipeId, setOpenSwipeId] = useState(null)
+  const [quickMarkingIds, setQuickMarkingIds] = useState(new Set())
+  const [quickMarkError, setQuickMarkError] = useState(null)
+
+  // Per-show episode/watched context kept in memory only (never persisted to
+  // the cache — see watchingCache.js) so a quick-mark tap can re-derive the
+  // row's status/progress/next-up locally, through the exact same
+  // deriveWatchingFields() a fresh fetch uses, without a network round-trip
+  // or remounting the route. Populated on every enrichment pass.
+  const showContextRef = useRef(new Map())
+  const quickMarkQueuesRef = useRef(new Map())
   const interactionState = getWatchingInteractionState(
     active,
     openSwipeId,
@@ -142,11 +154,18 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         let partialFailureCount = 0
         let refreshHadFailure = false
 
-        const mergeRenderedShow = (show) => {
+        const mergeRenderedShow = (show, loaded) => {
           if (ignore) return
           renderedAny = true
           renderedById.set(show.tmdb_id, show)
           freshById.set(show.tmdb_id, show)
+          if (loaded?.episodesBySeason) {
+            showContextRef.current.set(show.tmdb_id, {
+              episodesBySeason: loaded.episodesBySeason,
+              details: loaded.details ?? {},
+              watched: loaded.watched ?? new Set(),
+            })
+          }
           const next = sortWatchingShows([...renderedById.values()])
           setShows(next)
           setLoading(false)
@@ -285,6 +304,8 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         saveWatchingCache(next)
         return next
       })
+      showContextRef.current.delete(show.tmdb_id)
+      quickMarkQueuesRef.current.delete(show.tmdb_id)
     } catch {
       setRemoveError('Couldn\'t remove this show. Try again.')
     }
@@ -293,6 +314,66 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       next.delete(show.id)
       return next
     })
+  }
+
+  // Applies a locally-derived field set to one row in place: no full-list
+  // reconstruction, no remount, re-sorted with the same sortWatchingShows()
+  // the network load path uses, and immediately persisted to the cache so a
+  // tab switch away and back shows the result without waiting on the network.
+  function applyLocalShowFields(showId, fields) {
+    setShows((prev) => {
+      const next = sortWatchingShows(
+        prev.map((s) => (s.id === showId ? { ...s, ...fields } : s)),
+      )
+      saveWatchingCache(next)
+      return next
+    })
+  }
+
+  async function handleQuickMark(show) {
+    if (quickMarkingIds.has(show.id)) return
+    const episode = show.nextReleasedUnwatchedEpisode
+    const context = showContextRef.current.get(show.tmdb_id)
+    if (!episode || !context) return
+
+    setQuickMarkError(null)
+    setQuickMarkingIds((prev) => new Set(prev).add(show.id))
+
+    let queue = quickMarkQueuesRef.current.get(show.tmdb_id)
+    if (!queue) {
+      queue = createWatchMutationQueue()
+      quickMarkQueuesRef.current.set(show.tmdb_id, queue)
+    }
+
+    try {
+      await toggleEpisodeOptimistically({
+        queue,
+        supabase,
+        tmdbShowId: show.tmdb_id,
+        seasonNumber: episode.season_number,
+        episode: {
+          episode_number: episode.episode_number,
+          name: episode.name,
+          runtime: episode.runtime,
+        },
+        getWatched: () => context.watched,
+        commitWatched: (nextWatched) => {
+          context.watched = nextWatched
+          applyLocalShowFields(
+            show.id,
+            deriveWatchingFields(context.episodesBySeason, nextWatched, context.details),
+          )
+        },
+      })
+    } catch {
+      setQuickMarkError('Couldn\'t mark that episode watched. Try again.')
+    } finally {
+      setQuickMarkingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(show.id)
+        return next
+      })
+    }
   }
 
   const visibleShows = shows.filter((show) => isVisibleInWatching(show, show.status))
@@ -329,6 +410,12 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         </p>
       )}
 
+      {quickMarkError && (
+        <p role="alert" className="motion-banner mt-4 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
+          {quickMarkError}
+        </p>
+      )}
+
       {!error && (
         <WatchingPartialWarning
           error={partialError}
@@ -361,6 +448,8 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
               isOpen={interactionState.openSwipeId === show.id}
               onOpenChange={setOpenSwipeId}
               onRemove={handleRemove}
+              onQuickMark={handleQuickMark}
+              isQuickMarking={quickMarkingIds.has(show.id)}
             />
           ))}
         </div>

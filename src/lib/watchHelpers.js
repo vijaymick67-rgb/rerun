@@ -136,6 +136,27 @@ export function computeNextUp(episodesBySeason, watched) {
   return null
 }
 
+// Released-only progress for a show: numerator/denominator built exclusively
+// from hasAired() (the same authoritative release/timezone check computeNextUp
+// uses above), so a show with future TMDB episodes already listed never
+// counts them in the denominator. watchedCount only ever increments while
+// iterating actual released episodes, so it structurally cannot exceed
+// releasedCount — the percent clamp below is pure defensive belt-and-braces
+// against stale/corrupt watched rows, not something the loop can produce.
+export function computeReleasedProgress(episodesBySeason, watched) {
+  let releasedCount = 0
+  let watchedCount = 0
+  for (const [seasonNumber, episodes] of Object.entries(episodesBySeason ?? {})) {
+    for (const episode of episodes ?? []) {
+      if (!hasAired(episode)) continue
+      releasedCount += 1
+      if (watched.has(episodeKey(seasonNumber, episode.episode_number))) watchedCount += 1
+    }
+  }
+  const percent = releasedCount > 0 ? Math.min(100, (watchedCount / releasedCount) * 100) : 0
+  return { releasedCount, watchedCount, percent }
+}
+
 // A release counts as soon strictly under 12 real hours from its mapped
 // platform threshold.
 const AIRS_SOON_WINDOW_MS = 12 * 60 * 60 * 1000

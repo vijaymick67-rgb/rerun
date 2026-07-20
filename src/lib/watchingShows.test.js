@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   attachEpisodeReleaseData,
   attachReleaseData,
+  deriveWatchingFields,
   enrichTrackedShowsForWatching,
   loadWatchingShowData,
   selectTrackedShowsForWatching,
@@ -390,5 +391,111 @@ describe('Watching per-show failure isolation', () => {
     expect(result).toHaveLength(2)
     expect(result[0]).toMatchObject({ tmdb_id: 1, loadError: false })
     expect(result[1]).toMatchObject({ tmdb_id: 2, loadError: true })
+  })
+})
+
+describe('deriveWatchingFields — shared Watching-row derived fields', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('exposes released-only progress and the authoritative next-up episode with its runtime', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-01T00:00:00Z'))
+    const episodesBySeason = {
+      1: [
+        { episode_number: 1, name: 'Pilot', air_date: '2026-01-01', runtime: 42 },
+        { episode_number: 2, name: 'Second', air_date: '2026-01-08', runtime: 44 },
+        { episode_number: 3, name: 'Future', air_date: '2099-01-01', runtime: 40 },
+      ],
+    }
+    const watched = new Set(['1:1'])
+    const fields = deriveWatchingFields(episodesBySeason, watched, {})
+    expect(fields.status).toMatchObject({ type: 'nextUp', season_number: 1, episode_number: 2 })
+    expect(fields.releasedEpisodeCount).toBe(2)
+    expect(fields.releasedWatchedCount).toBe(1)
+    expect(fields.releasedProgress).toBe(50)
+    expect(fields.nextReleasedUnwatchedEpisode).toEqual({
+      season_number: 1, episode_number: 2, name: 'Second', runtime: 44,
+    })
+  })
+
+  it('returns a null next-up episode once caught up on every released episode', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-01T00:00:00Z'))
+    const episodesBySeason = {
+      1: [
+        { episode_number: 1, name: 'Pilot', air_date: '2026-01-01', runtime: 42 },
+        { episode_number: 2, name: 'Future', air_date: '2099-01-01', runtime: 40 },
+      ],
+    }
+    const fields = deriveWatchingFields(episodesBySeason, new Set(['1:1']), {})
+    expect(fields.nextReleasedUnwatchedEpisode).toBeNull()
+    expect(fields.releasedEpisodeCount).toBe(1)
+    expect(fields.releasedWatchedCount).toBe(1)
+  })
+})
+
+describe('enrichTrackedShowsForWatching — released progress fields end to end', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('attaches releasedEpisodeCount/releasedWatchedCount/releasedProgress/nextReleasedUnwatchedEpisode to each row', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-01T00:00:00Z'))
+    const getShowDetails = vi.fn(async () => ({
+      seasons: [{ season_number: 1 }], status: 'Returning Series',
+    }))
+    const getSeasonEpisodes = vi.fn(async () => ({
+      episodes: [
+        { episode_number: 1, name: 'Pilot', air_date: '2026-01-01', runtime: 42 },
+        { episode_number: 2, name: 'Second', air_date: '2026-01-08', runtime: 44 },
+        { episode_number: 3, name: 'Future', air_date: '2099-01-01', runtime: 40 },
+      ],
+    }))
+    const watchedByShowId = new Map([[5, new Set(['1:1'])]])
+    const result = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 5, name: 'Test Show' }],
+      watchedByShowId,
+      new Map(),
+      { getShowDetails, getSeasonEpisodes, getShowReleaseMap: async () => ({}) },
+    )
+    expect(result[0]).toMatchObject({
+      releasedEpisodeCount: 2,
+      releasedWatchedCount: 1,
+      releasedProgress: 50,
+      nextReleasedUnwatchedEpisode: { season_number: 1, episode_number: 2, name: 'Second', runtime: 44 },
+    })
+  })
+
+  it('passes full episodesBySeason/details/watched context to onShowSettled for local recompute', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-01T00:00:00Z'))
+    const getShowDetails = vi.fn(async () => ({ seasons: [{ season_number: 1 }] }))
+    const getSeasonEpisodes = vi.fn(async () => ({
+      episodes: [{ episode_number: 1, name: 'Pilot', air_date: '2026-01-01', runtime: 42 }],
+    }))
+    const settled = []
+    await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 6 }], new Map(), new Map(),
+      { getShowDetails, getSeasonEpisodes, getShowReleaseMap: async () => ({}) },
+      { onShowSettled: (show, loaded) => settled.push({ show, loaded }) },
+    )
+    expect(settled).toHaveLength(1)
+    expect(settled[0].loaded.episodesBySeason[1]).toHaveLength(1)
+    expect(settled[0].loaded.watched).toBeInstanceOf(Set)
+    expect(settled[0].loaded.details).toBeTruthy()
+  })
+
+  it('a failed show still exposes zeroed released fields and a null next-up (no crash)', async () => {
+    const result = await enrichTrackedShowsForWatching(
+      [{ tmdb_id: 7 }], new Map(), new Map(),
+      {
+        getShowDetails: vi.fn(async () => { throw new Error('down') }),
+        getSeasonEpisodes: vi.fn(),
+        getShowReleaseMap: vi.fn(async () => ({})),
+      },
+    )
+    expect(result[0].loadError).toBe(true)
+    expect(result[0].releasedEpisodeCount).toBe(0)
+    expect(result[0].releasedWatchedCount).toBe(0)
+    expect(result[0].nextReleasedUnwatchedEpisode).toBeNull()
   })
 })
