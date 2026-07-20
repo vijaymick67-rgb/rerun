@@ -23,13 +23,13 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="safe-area-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="safe-area-overlay fixed inset-0 z-50 flex items-center justify-center bg-(--color-overlay)"
       onClick={onCancel}
     >
       <div
         role="alertdialog"
         aria-modal="true"
-        className="w-full max-w-sm rounded-lg border border-(--color-border) bg-(--color-surface) p-4"
+        className="surface-card w-full max-w-sm p-4"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-sm font-semibold text-(--color-text)">{title}</h2>
@@ -41,17 +41,17 @@ export default function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="motion-press min-h-11 rounded-md px-3 py-1.5 text-sm font-medium text-(--color-text-muted)"
+            className="focus-ring motion-press min-h-11 rounded-md px-3 py-1.5 text-sm font-medium text-(--color-text-muted)"
           >
             {cancelLabel}
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className={`motion-press min-h-11 rounded-md px-3 py-1.5 text-sm font-medium ${
+            className={`focus-ring motion-press min-h-11 rounded-md px-3 py-1.5 text-sm font-medium ${
               danger
-                ? 'bg-red-500/90 text-white'
-                : 'bg-(--color-accent) text-(--color-bg)'
+                ? 'bg-(--color-destructive) text-(--color-canvas)'
+                : 'bg-(--color-accent) text-(--color-canvas)'
             }`}
           >
             {confirmLabel}
