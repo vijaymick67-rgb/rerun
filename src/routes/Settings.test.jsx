@@ -652,7 +652,7 @@ describe('Settings: Notifications section', () => {
     })
   })
 
-  describe('Notification time', () => {
+  describe('Reminder time', () => {
     async function enableNotifications() {
       pushClientMock.requestNotificationPermission.mockResolvedValue('granted')
       const subscription = { endpoint: 'https://web.push.apple.com/abc', toJSON: () => ({ endpoint: 'https://web.push.apple.com/abc' }) }
@@ -671,7 +671,10 @@ describe('Settings: Notifications section', () => {
     it('defaults to displaying 8:00 PM', async () => {
       await enableNotifications()
       expect(selectEl().value).toBe('20')
-      expect(container.textContent).toContain('Notification time')
+      expect(container.textContent).toContain('Reminder time')
+      expect(container.textContent).toContain(
+        'Airtime alerts arrive when episodes become available. Unwatched episodes are reminded again at this time.',
+      )
     })
 
     it('the selector offers exactly the six allowed options, 6 PM through 11 PM', async () => {

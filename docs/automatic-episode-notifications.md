@@ -1,4 +1,4 @@
-# Automatic Episode Notifications (Phase 2)
+# Automatic Episode Notifications (Phase 2 + Phase 3)
 
 Phase 2 adds automatic "episode available" push notifications on top of the
 Phase 1 native Web Push channel (`docs/web-push.md`). Phase 1 covered
@@ -6,13 +6,19 @@ permission/subscription plumbing and one manually-triggered test push;
 Phase 2 adds a scheduled worker that finds newly-available episodes of
 tracked shows and pushes to every activated subscription.
 
-**Scope of this phase, deliberately:** scheduled episode evaluation,
-automatic delivery shortly after an episode becomes available (or at a
-preferred same-day time, see "Preferred delivery hour" below), strict
-deduplication, first-run/backfill protection, and notification tap
-navigation. No notification categories/badges beyond the existing fixed
-icon, no broad Settings redesign — the one added control (Notification
-time) is a single compact row in the existing Notifications section.
+**Scope of Phase 2, deliberately:** scheduled episode evaluation, automatic
+delivery shortly after an episode becomes available (or at a preferred
+same-day time), strict deduplication, first-run/backfill protection, and
+notification tap navigation. No notification categories/badges beyond the
+existing fixed icon, no broad Settings redesign.
+
+**Phase 3 ("Add airtime episode alerts") turns that single notification
+into two independent opportunities per episode** — see "Two-stage delivery:
+airtime + reminder" below for the full design. The original Phase 2
+single-notification behavior described throughout most of this document
+(one push per newly-eligible batch, delayed only by the preferred hour) is
+now specifically the **reminder** stage; the **airtime** stage is new and
+never waits for the preferred hour.
 
 ## What was added
 
@@ -28,7 +34,13 @@ time) is a single compact row in the existing Notifications section.
   confirms a send succeeded (see "Deduplication & delivery" below).
 - `supabase/migrations/20260719170000_add_preferred_notification_hour.sql`
   — adds `push_subscriptions.preferred_notification_hour_ist` (custom
-  notification-time feature; see "Preferred delivery hour" below).
+  reminder-time feature; see "Preferred delivery hour" below).
+- `supabase/migrations/20260720080000_add_two_stage_episode_notifications.sql`
+  (Phase 3) — adds `push_subscriptions.airtime_notifications_enabled_at`
+  (the airtime rollout watermark, independent of the Phase 2 activation
+  watermark) and reclassifies already-delivered legacy `episode_available`
+  rows to `episode_reminder` so they're never resent. See "Two-stage
+  delivery: airtime + reminder" and "Rollout safety" below.
 - `src/lib/notifications/episodeEligibility.js` — pure, synchronous
   eligibility + payload-grouping logic (no fetching, no Supabase, no
   web-push). Consumes the same `status`/`episodesBySeason` shape
@@ -66,8 +78,216 @@ time) is a single compact row in the existing Notifications section.
   is enabled (see "Activation" below). The existing "Episode notifications —
   Native notifications from Rerun" row is unchanged, with one added status
   line ("Automatic episode alerts — Active") once enabled, plus one added
-  compact control — **Notification time** — described under "Preferred
+  compact control — **Reminder time** (renamed from "Notification time" in
+  Phase 3, plus one line of supporting copy) — described under "Preferred
   delivery hour" below.
+
+## Two-stage delivery: airtime + reminder
+
+Every eligible episode now has **two independent notification
+opportunities**, each with its own delivery identity, tag, and
+claim/finalize lifecycle:
+
+- **Airtime alert** (`episode_airtime`) — sent on the first worker
+  evaluation after the episode's real availability timestamp. Since the
+  worker runs every 15 minutes, "at airtime" normally means within 0-15
+  minutes of Rerun considering the episode available. The preferred hour
+  (see "Preferred delivery hour" below) never delays this — the only rule
+  is "never before availability."
+- **Reminder** (`episode_reminder`) — the original Phase 2 same-day
+  scheduling behavior, unchanged: sent on the first worker evaluation at or
+  after the subscription's preferred IST hour on the episode's release
+  date, and only if the episode is still unwatched at that point.
+
+Both use the exact same visible content — `${showName} - New Episode`,
+`omitBody: true`, no body — so a user can never tell which stage produced
+a given push from its content alone (see "Notification content" below).
+Only the OS notification `tag` and the internal `notification_type`
+differ.
+
+**Examples** (10 PM IST preferred hour):
+
+- available at 8 AM → airtime alert around 8:00-8:15 AM, reminder around
+  10:00-10:15 PM if still unwatched by then.
+- available at 9:55 PM → airtime alert shortly after availability; reminder
+  at the first worker run at or after 10 PM.
+- available at 10:30 PM → airtime alert shortly after availability; the
+  preferred-time reminder instant is `max(release, 10 PM IST) = release`,
+  the same effective instant as availability itself — see "Same-evaluation
+  collision" below for what happens when both become eligible together.
+
+### Same-evaluation collision
+
+An episode releasing at or after the preferred hour makes both stages
+eligible in the very same worker evaluation. Sending both would be two
+back-to-back identical-looking pushes for one episode, so the worker
+applies one rule: **when an episode is claimed and successfully delivered
+as an airtime alert this run, its reminder identity is also durably
+finalized in the same run — silently, with no second push.** A later
+worker run then has nothing left to send for it.
+
+This is implemented in `api/notifications/run.js` as four passes per
+subscription:
+
+1. Compute each show's airtime candidates (past the airtime watermark) and
+   reminder candidates (past the preferred-hour schedule) independently,
+   from the same underlying aired/unwatched episode pool
+   (`collectAiredUnwatchedEpisodes`, unchanged).
+2. Claim and send every show's airtime batch. Record exactly which
+   episodes were *successfully claimed and finalized* this run — critical:
+   this must be episodes actually won by *this run's claim*, not merely
+   "still airtime-watermark-eligible," since an already-delivered episode
+   stays watermark-eligible forever and must never keep suppressing its
+   reminder on every subsequent run.
+3. For each show's reminder candidates, split off the ones that were also
+   just claimed for airtime this run. If (and only if) that airtime push
+   *actually succeeded* (claimed, sent, and finalized), claim + finalize
+   those same reminder identities too — no second push. If the airtime
+   send failed, or only got as far as being claimed, those reminder
+   identities are touched **not at all** this run (not claimed, not
+   finalized, not sent) — they're simply reconsidered fresh next run. This
+   is what keeps a failed airtime delivery from ever finalizing either
+   type, and keeps the whole thing retry-safe: nothing is silently lost,
+   nothing is falsely marked delivered.
+4. Every remaining reminder candidate (never an airtime candidate this run,
+   or an airtime candidate whose delivery already happened on an earlier
+   run) goes through a completely ordinary standalone claim → send →
+   finalize, identical in shape to the airtime flow in step 2.
+
+No new database function was needed for the "silently finalize the
+reminder" step in pass 3 — it reuses the exact same
+`claim_episode_notification_deliveries` /
+`complete_episode_notification_deliveries` RPCs the airtime and standalone
+reminder flows already use, just without an intervening `sendNotification`
+call. That keeps it exactly as retry-safe as any other claim: if the
+finalize call fails, the claimed-but-undelivered row becomes reclaimable
+after the existing 10-minute staleness window, exactly like a transient
+send failure elsewhere in this worker — never silently dropped, never
+double-sent.
+
+### Delivery identity, per type
+
+Every identity stays subscription-scoped and episode-scoped, extended with
+notification type (`deliveryIdentity` in `episodeEligibility.js`,
+unchanged in shape, just called with a different `notificationType`
+argument):
+
+```
+{push_subscription_id}:{tmdb_show_id}:{season_number}:{episode_number}:{notification_type}
+```
+
+`notification_type` is one of `episode_airtime` or `episode_reminder` for
+every new delivery. The legacy `episode_available` type is never written
+by new code — see "Legacy delivery migration" below for what happens to
+rows that already used it.
+
+### Notification tags, per type
+
+`episodeNotificationTag` (in `episodeEligibility.js`) now takes an optional
+`notificationType` argument and folds it into the tag, so an airtime alert
+and its later reminder never share an OS notification tag — without that,
+the reminder would silently replace the airtime alert in Notification
+Center instead of appearing as its own entry.
+
+```
+rerun-episode-airtime-{tmdbId}-s{season}e{episode}   (single-episode airtime)
+rerun-episode-reminder-{tmdbId}-s{season}e{episode}  (single-episode reminder)
+rerun-episode-airtime-{tmdbId}-batch                 (grouped airtime)
+rerun-episode-reminder-{tmdbId}-batch                (grouped reminder)
+```
+
+Tags are always derived purely from `tmdbId`/season/episode/type — never a
+timestamp or random value — so they stay stable and idempotent exactly like
+before. The synthetic verification push (`api/notifications/verify.js`)
+calls `episodeNotificationTag` with no `notificationType`, which keeps the
+original untyped tag shape (`rerun-episode-{tmdbId}-s{season}e{episode}`)
+— it was never a real automatic delivery and stays that way.
+
+## Rollout safety: the airtime watermark
+
+Introducing a brand-new `episode_airtime` identity is exactly the same
+kind of risk the original Phase 2 activation watermark was built to avoid:
+without a watermark of its own, every unwatched episode released since a
+subscription's *original* Phase 2 activation — which could be days or
+weeks in the past — would become airtime-eligible the instant this ships.
+
+`push_subscriptions.airtime_notifications_enabled_at`
+(`supabase/migrations/20260720080000_add_two_stage_episode_notifications.sql`)
+is a second, independent watermark that solves this exactly the way
+`automatic_notifications_enabled_at` already does for Phase 2 as a whole:
+
+- **New/re-activated subscriptions:** `api/push/subscribe.js` initializes
+  `airtime_notifications_enabled_at` to the *same* grace-backdated instant
+  as `automatic_notifications_enabled_at` on a fresh activation — same
+  30-minute `ACTIVATION_GRACE_WINDOW_MS`, same timestamp, computed once and
+  reused for both columns. An already-activated row keeps its existing
+  value on re-subscribe, exactly like the automatic watermark. Disabling
+  notifications deletes the `push_subscriptions` row entirely (unchanged
+  behavior), so a later re-enable is indistinguishable from a brand-new
+  subscription — both watermarks reset together, preserving the existing
+  no-backlog guarantee.
+- **Subscriptions already active when this migration is applied:** the
+  migration backfills `airtime_notifications_enabled_at` to
+  `greatest(automatic_notifications_enabled_at, now() - interval '30
+  minutes')` — a real timestamp computed in SQL at migration-apply time
+  (not a hard-coded date in application code), evaluated once for the
+  whole `UPDATE` statement so every pre-existing subscription gets the same
+  rollout instant. `greatest(...)` guarantees the airtime watermark is
+  never *more permissive* than the subscription's own original activation
+  watermark, while still being close to "now" so days of accumulated
+  backlog can never all become airtime-eligible at once.
+- The worker (`api/notifications/run.js`) only ever considers an episode
+  airtime-eligible if its release instant is strictly after this
+  watermark — a direct reuse of `episodesSinceWatermark`, the exact same
+  function the automatic watermark already used, just applied to the
+  airtime candidate pool instead. A subscription row with a null airtime
+  watermark (defensive fallback only — the migration backfills every
+  active row) simply has an empty airtime candidate pool; its reminder
+  stage is entirely unaffected.
+
+Note this only ever *withholds* airtime alerts for old backlog — it never
+withholds the reminder. An episode that aired long before the airtime
+rollout still gets a reminder at the preferred hour if unwatched, exactly
+as Phase 2 already behaved; it just never gets an airtime alert for
+something that "aired" before airtime alerts existed.
+
+## Legacy delivery migration: `episode_available` → `episode_reminder`
+
+Before Phase 3, every automatic delivery used one shared identity,
+`episode_available`. An episode already successfully delivered under that
+system must never be resent as a "new" reminder once Phase 3 ships — so
+the same migration
+(`20260720080000_add_two_stage_episode_notifications.sql`) reclassifies
+already-**delivered** `episode_available` rows in place:
+
+```sql
+update public.notification_deliveries
+set
+  notification_type = 'episode_reminder',
+  identity = push_subscription_id || ':' || tmdb_show_id || ':' || season_number || ':' || episode_number || ':episode_reminder'
+where notification_type = 'episode_available'
+  and delivered_at is not null;
+```
+
+- Both the composite unique key (`push_subscription_id, tmdb_show_id,
+  season_number, episode_number, notification_type`) and the
+  manually-maintained `identity` text column encode `notification_type`, so
+  both are rewritten together to stay consistent with what
+  `claim_episode_notification_deliveries` builds server-side — a
+  half-migrated row (new `identity`, stale `notification_type`, or vice
+  versa) would silently break the dedup guarantee.
+- `episode_reminder` never existed before this migration, so there is no
+  possible unique-constraint conflict with an existing row — deterministic,
+  no manual conflict resolution needed.
+- Only **delivered** rows are touched. Undelivered/stale
+  `episode_available` claims (an in-flight or abandoned claim from before
+  this shipped) are left exactly as they were — a dead type going forward,
+  but harmless: the composite unique key is scoped by `notification_type`,
+  so a leftover `episode_available` row can never block or collide with a
+  fresh `episode_airtime`/`episode_reminder` claim for the same episode.
+- No `episode_airtime` rows are ever synthesized from legacy history — the
+  airtime alert is a new opportunity Phase 2 never had, not something
+  legacy single-notification delivery history can stand in for.
 
 ## Activation & first-run backfill protection
 
@@ -123,7 +343,18 @@ production data to migrate, so it's dropped and recreated rather than
 patched column-by-column.
 
 - **Identity:** unique on `(push_subscription_id, tmdb_show_id,
-  season_number, episode_number, notification_type)`.
+  season_number, episode_number, notification_type)` — this is exactly
+  what makes `episode_airtime` and `episode_reminder` (Phase 3) claim and
+  finalize completely independently of one another for the same episode,
+  with no schema change needed: they're just two different values of the
+  existing `notification_type` column.
+- **Unchanged since Phase 2:** neither `claim_episode_notification_deliveries`
+  nor `complete_episode_notification_deliveries` needed any modification for
+  Phase 3 — both were already generic over `notification_type`. The
+  same-evaluation collision handling (see "Two-stage delivery" above) reuses
+  them as-is, just called once for the airtime claim and, when it succeeds,
+  a second time for the reminder identities — no new RPC, no loosely-scoped
+  update.
 - **Claim before send:** `claim_episode_notification_deliveries(...)` is a
   `security definer` Postgres function (service-role only) that atomically
   inserts-or-conditionally-updates one row per requested episode. A row is
@@ -202,10 +433,14 @@ See `src/lib/notifications/episodeEligibility.js` for the exact functions
 
 ## Preferred delivery hour
 
-Each installation has one global preferred delivery hour — Settings →
-Notifications → **Notification time**, one of 6:00 PM through 11:00 PM IST
-(default **8:00 PM**). It changes *when* an already-eligible episode is
-pushed, never *whether* it's eligible.
+This section describes the **reminder** stage's scheduling (renamed from
+"delivery" in Phase 2, since Phase 3 added a second, unscheduled stage —
+see "Two-stage delivery" above). Each installation has one global preferred
+reminder hour — Settings → Notifications → **Reminder time** (renamed from
+"Notification time" in Phase 3), one of 6:00 PM through 11:00 PM IST
+(default **8:00 PM**). It changes *when* an already-eligible reminder is
+pushed, never *whether* it's eligible, and it has **no effect whatsoever**
+on the airtime stage — airtime never waits for it.
 
 - **Storage:** `push_subscriptions.preferred_notification_hour_ist`
   (`supabase/migrations/20260719170000_add_preferred_notification_hour.sql`)
@@ -256,24 +491,27 @@ pushed, never *whether* it's eligible.
 ## Notification content
 
 Deliberately minimal — iOS supplies "from Rerun" on its own for the
-installed PWA, so this payload never generates or duplicates that line:
+installed PWA, so this payload never generates or duplicates that line.
+**Identical for both delivery types** — an airtime alert and a reminder are
+visually indistinguishable to the user, on purpose; only the internal
+`notification_type` and the OS `tag` differ (see "Two-stage delivery"
+above):
 
 - **Title:** `${showName} - New Episode` (e.g. `House of the Dragon - New
   Episode`) — no season/episode number, episode title, episode count,
-  release time, or platform/network.
+  release time, platform/network, or any mention of "Airtime"/"Reminder".
 - **Body:** intentionally absent. There is no separate body line; the title
   is the entire visible content besides the OS-supplied "from Rerun".
 - Multiple episodes of the same show becoming available in the same
   sendable batch (e.g. all 8 episodes of a season dropping together) still
-  produce exactly **one** notification with this same minimal content — see
-  "One notification per show per delivery window" below.
+  produce exactly **one** notification with this same minimal content, per
+  type — see "One notification per show per delivery window" below.
 - Tap target: `/watching/{tmdbShowId}` (the show-detail route) — always
   producible here since `tmdbShowId` is always a real positive integer;
   `episodeNotificationUrl` falls back to `/watching` only as a defensive
   guard, never actually reached in the real worker.
-- `tag`: stable per show (`rerun-episode-{tmdbId}-s{season}e{episode}` for
-  a single episode, `rerun-episode-{tmdbId}-batch` for a group) — see
-  `public/push-sw.js`.
+- `tag`: stable per show *and* delivery type — see "Notification tags, per
+  type" above for the exact shapes.
 
 The payload also carries `omitBody: true` — a marker that distinguishes
 "this push is intentionally bodyless" from a malformed/legacy payload that
@@ -282,11 +520,13 @@ generic fallback body ("You have a new notification.") in the latter case;
 when `omitBody` is set, the notification shows no body at all instead of
 substituting the fallback text.
 
-Sample real-worker payload (as sent to `web-push`, before the OS renders the
-app-supplied "from Rerun" line above it):
+Sample real-worker payloads (as sent to `web-push`, before the OS renders
+the app-supplied "from Rerun" line above them) — an airtime alert and a
+later reminder for the same batch, content identical apart from `tag`:
 
 ```json
-{ "title": "The Bear - New Episode", "url": "/watching/1", "tag": "rerun-episode-1-batch", "omitBody": true }
+{ "title": "The Bear - New Episode", "url": "/watching/1", "tag": "rerun-episode-airtime-1-batch", "omitBody": true }
+{ "title": "The Bear - New Episode", "url": "/watching/1", "tag": "rerun-episode-reminder-1-batch", "omitBody": true }
 ```
 
 ## One notification per show per delivery window
@@ -340,16 +580,18 @@ different endpoint, not a revival of that system).
    deleting those manually).
 3. Apply, in order, `20260719140000_add_automatic_episode_notifications.sql`,
    `20260719150000_schedule_episode_notification_worker.sql`,
-   `20260719160000_add_complete_episode_notification_deliveries.sql`, and
-   `20260719170000_add_preferred_notification_hour.sql` in the Supabase SQL
-   Editor. The scheduling migration is safe to run even before the Vault
-   secrets above exist — the job just fails (harmlessly, into Cron's own run
-   history) until they're set. The last migration is additive and
-   idempotent (`add column if not exists`, a `drop constraint if exists`
-   before re-adding it) — safe to apply exactly once in production, doesn't
-   touch `notification_deliveries` or any existing subscription row beyond
-   backfilling the new column via its own `default 20`, and doesn't
-   recreate or reschedule the Cron job.
+   `20260719160000_add_complete_episode_notification_deliveries.sql`,
+   `20260719170000_add_preferred_notification_hour.sql`, and
+   `20260720080000_add_two_stage_episode_notifications.sql` in the Supabase
+   SQL Editor. The scheduling migration is safe to run even before the
+   Vault secrets above exist — the job just fails (harmlessly, into Cron's
+   own run history) until they're set. The 17:00:00 and 08:00:00 migrations
+   are both additive and safe to apply exactly once in production
+   (`add column if not exists`, idempotent backfill `update`s scoped by
+   `is null`/specific `notification_type` values) — neither recreates or
+   reschedules the Cron job, and the last one is forward-only: see "Rollout
+   safety" and "Legacy delivery migration" above for exactly what it
+   backfills and why.
 4. `TMDB_API_KEY` (already configured for `api/tmdb.js`) is reused as-is —
    the worker calls TMDB directly with it, server-side.
 
@@ -446,14 +688,16 @@ curl -X POST https://rerun-nine.vercel.app/api/notifications/verify \
 
 Steps:
 
-1. Merge and deploy this branch, and apply
-   `20260719170000_add_preferred_notification_hour.sql` (see "Setup" above)
+1. Merge and deploy this branch, and apply every migration listed under
+   "Setup" above (including `20260720080000_add_two_stage_episode_notifications.sql`)
    if it hasn't already been applied.
 2. Open the installed iPhone Home Screen PWA. Enable notifications (Phase 1
    flow, unchanged) if not already enabled.
-3. Go to Settings → Notifications. Confirm **Notification time** shows the
-   expected value (8:00 PM by default, or whatever was last saved) and that
-   changing it shows a brief "Saving…" state, then reflects the new value.
+3. Go to Settings → Notifications. Confirm **Reminder time** (renamed from
+   "Notification time") shows the expected value (8:00 PM by default, or
+   whatever was last saved), that the new supporting copy about airtime vs.
+   reminder alerts is visible, and that changing the value shows a brief
+   "Saving…" state, then reflects the new value.
 4. Tap **Verify automatic episode alert** (or run the `curl` above with the
    `managementToken` value read from that installation's `localStorage` key
    `rerun:push:managementToken`).
@@ -511,3 +755,27 @@ Real push delivery, Lock Screen/Notification Center rendering, backgrounded-
 app delivery, and the native `<select>`'s on-device wheel-picker rendering
 still require the physical-device checklist above — no automated suite can
 cover those.
+
+**Added by Phase 3 (two-stage delivery)**, primarily in
+`tests/notification-worker.test.js`,
+`src/lib/notifications/episodeEligibility.test.js`,
+`tests/two-stage-episode-notifications-migration.test.js`, and
+`api/push/subscribe.test.js`: airtime eligibility on the first evaluation
+after release and never before; the preferred hour never delaying airtime;
+`episode_airtime` identity and its distinct stable tag; no resend on a
+repeated run; one airtime push per show for a multi-episode batch and
+separate pushes per show across multiple shows; the reminder stage's
+existing preferred-hour scheduling unaffected by airtime; watched-before-
+reminder exclusion (including a partially-watched batch); the
+same-evaluation collision (one push, not two, for a late release) with the
+reminder identity durably satisfied in the same run; a failed airtime send
+finalizing neither type; a reminder-side partial-finalization failure
+surfacing as `failed` without silently dropping it or unwinding the
+already-successful airtime send; the airtime rollout watermark (no
+retroactive alert for pre-rollout backlog, still-correct grace-window
+boundary behavior, backlog episodes still reminding normally); dry-run
+previews carrying `notificationType` per entry; both payload types sharing
+identical visible content with only the tag differing; the two-stage
+migration file's exact rollout-backfill and legacy-reclassification SQL;
+and `api/push/subscribe.js` initializing/preserving both watermarks
+together across fresh activation, re-subscribe, and disable-then-re-enable.

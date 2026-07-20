@@ -48,7 +48,7 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
 
     const { data: existingRow, error: lookupError } = await client
       .from('push_subscriptions')
-      .select('id, automatic_notifications_enabled_at')
+      .select('id, automatic_notifications_enabled_at, airtime_notifications_enabled_at')
       .eq('endpoint', result.endpoint)
       .maybeSingle()
     if (lookupError) {
@@ -93,6 +93,19 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
       existingRow?.automatic_notifications_enabled_at ??
       new Date(Date.now() - ACTIVATION_GRACE_WINDOW_MS).toISOString()
 
+    // The airtime rollout/activation watermark (see
+    // supabase/migrations/20260720080000_add_two_stage_episode_notifications.sql)
+    // is initialized identically to the automatic watermark above for a
+    // fresh activation — same instant, same grace window — so a brand-new
+    // subscription's first airtime-eligible episode is never backlog. An
+    // existing row that already has one keeps it untouched, exactly like
+    // automaticNotificationsEnabledAt. Disabling notifications deletes the
+    // row entirely (see Settings' handleDisable), so a later re-enable is
+    // indistinguishable from a brand-new subscription here — both watermarks
+    // reset together, consistent with the existing no-backlog guarantee.
+    const airtimeNotificationsEnabledAt =
+      existingRow?.airtime_notifications_enabled_at ?? automaticNotificationsEnabledAt
+
     // preferred_notification_hour_ist is deliberately left out of this
     // upsert payload — leaving it out of the ON CONFLICT SET clause means a
     // re-subscribe never resets an already-chosen notification time back to
@@ -110,6 +123,7 @@ export function createSubscribeHandler({ env = process.env, supabase } = {}) {
           user_agent: userAgent,
           management_token_hash: managementTokenHash,
           automatic_notifications_enabled_at: automaticNotificationsEnabledAt,
+          airtime_notifications_enabled_at: airtimeNotificationsEnabledAt,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'endpoint' },

@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   buildEpisodeNotificationPayload,
   collectAiredUnwatchedEpisodes,
+  deliveryIdentity,
   episodeNotificationTag,
   episodeNotificationUrl,
   episodesSinceWatermark,
+  EPISODE_AIRTIME_NOTIFICATION_TYPE,
+  EPISODE_REMINDER_NOTIFICATION_TYPE,
 } from './episodeEligibility.js'
 
 // 2026-07-19T08:00:00Z is a fixed "now" used throughout — everything below
@@ -257,5 +260,84 @@ describe('episodeNotificationTag', () => {
   it('is stable across repeated calls for the same show/episode', () => {
     const episodes = [{ seasonNumber: 1, episodeNumber: 1 }]
     expect(episodeNotificationTag(42, episodes)).toBe(episodeNotificationTag(42, episodes))
+  })
+
+  it('folds the delivery type into the tag for a single episode', () => {
+    const episodes = [{ seasonNumber: 1, episodeNumber: 1 }]
+    expect(episodeNotificationTag(42, episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)).toBe('rerun-episode-airtime-42-s1e1')
+    expect(episodeNotificationTag(42, episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)).toBe('rerun-episode-reminder-42-s1e1')
+  })
+
+  it('folds the delivery type into the tag for a batch', () => {
+    const episodes = [{ seasonNumber: 1, episodeNumber: 1 }, { seasonNumber: 1, episodeNumber: 2 }]
+    expect(episodeNotificationTag(42, episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)).toBe('rerun-episode-airtime-42-batch')
+    expect(episodeNotificationTag(42, episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)).toBe('rerun-episode-reminder-42-batch')
+  })
+
+  it('airtime and reminder tags for the same episode are distinct, so neither replaces the other in Notification Center', () => {
+    const episodes = [{ seasonNumber: 1, episodeNumber: 1 }]
+    const airtimeTag = episodeNotificationTag(42, episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const reminderTag = episodeNotificationTag(42, episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)
+    expect(airtimeTag).not.toBe(reminderTag)
+  })
+
+  it('an unrecognized/omitted notificationType keeps the original untyped shape (the synthetic verification push)', () => {
+    const episodes = [{ seasonNumber: 1, episodeNumber: 1 }]
+    expect(episodeNotificationTag(42, episodes)).toBe('rerun-episode-42-s1e1')
+  })
+
+  it('never uses a timestamp or random value — repeated calls for the same input are identical', () => {
+    const episodes = [{ seasonNumber: 1, episodeNumber: 1 }]
+    const first = episodeNotificationTag(42, episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const second = episodeNotificationTag(42, episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    expect(first).toBe(second)
+  })
+})
+
+describe('buildEpisodeNotificationPayload: two-stage delivery types', () => {
+  const episodes = [{ seasonNumber: 2, episodeNumber: 5, name: 'The Return' }]
+
+  it('an airtime payload has identical visible content to a reminder payload — only the tag differs', () => {
+    const airtime = buildEpisodeNotificationPayload(42, 'Test Show', episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const reminder = buildEpisodeNotificationPayload(42, 'Test Show', episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)
+    expect(airtime.title).toBe(reminder.title)
+    expect(airtime.title).toBe('Test Show - New Episode')
+    expect(airtime).not.toHaveProperty('body')
+    expect(reminder).not.toHaveProperty('body')
+    expect(airtime.omitBody).toBe(true)
+    expect(reminder.omitBody).toBe(true)
+    expect(airtime.url).toBe(reminder.url)
+    expect(airtime.tag).not.toBe(reminder.tag)
+  })
+
+  it('never mentions "Airtime", "Reminder", episode/season numbers, or "from Rerun" in either payload', () => {
+    const airtime = buildEpisodeNotificationPayload(42, 'Test Show', episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const reminder = buildEpisodeNotificationPayload(42, 'Test Show', episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)
+    for (const payload of [airtime, reminder]) {
+      expect(payload.title).not.toMatch(/airtime|reminder|rerun|S2E5|season 2|episode 5|the return/i)
+    }
+  })
+
+  it('urls are unchanged by the delivery type', () => {
+    const airtime = buildEpisodeNotificationPayload(42, 'Test Show', episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const reminder = buildEpisodeNotificationPayload(42, 'Test Show', episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)
+    expect(airtime.url).toBe('/watching/42')
+    expect(reminder.url).toBe('/watching/42')
+  })
+})
+
+describe('deliveryIdentity: subscription + show + season + episode + notification type', () => {
+  it('airtime and reminder identities for the same episode are distinct', () => {
+    const airtime = deliveryIdentity(1, 42, 2, 5, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const reminder = deliveryIdentity(1, 42, 2, 5, EPISODE_REMINDER_NOTIFICATION_TYPE)
+    expect(airtime).not.toBe(reminder)
+    expect(airtime).toBe('1:42:2:5:episode_airtime')
+    expect(reminder).toBe('1:42:2:5:episode_reminder')
+  })
+
+  it('is scoped by subscription — two subscriptions never share an identity for the same episode/type', () => {
+    const first = deliveryIdentity(1, 42, 2, 5, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    const second = deliveryIdentity(2, 42, 2, 5, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+    expect(first).not.toBe(second)
   })
 })

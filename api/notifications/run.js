@@ -11,7 +11,8 @@ import {
   collectAiredUnwatchedEpisodes,
   deliveryIdentity,
   episodesSinceWatermark,
-  EPISODE_NOTIFICATION_TYPE,
+  EPISODE_AIRTIME_NOTIFICATION_TYPE,
+  EPISODE_REMINDER_NOTIFICATION_TYPE,
 } from '../../src/lib/notifications/episodeEligibility.js'
 import { DEFAULT_PREFERRED_HOUR_IST, isSendableNow } from '../../src/lib/notifications/deliverySchedule.js'
 
@@ -126,10 +127,106 @@ export function createNotificationWorkerHandler({
     const summary = { checkedShows: 0, eligibleEpisodes: 0, sent: 0, skipped: 0, staleRemoved: 0, failed: 0 }
     const preview = dryRun ? [] : undefined
 
+    // Claims a batch of one show's episodes under one notification type for
+    // one subscription. Returns null (and bumps summary.skipped/failed as
+    // appropriate) when nothing was actually won — either every identity was
+    // already claimed/delivered elsewhere, or the claim RPC itself errored.
+    async function claimEpisodes(subscription, tmdbShowId, episodes, notificationType) {
+      const claimToken = randomUUID()
+      const { data: claimedRows, error: claimError } = await client.rpc(
+        'claim_episode_notification_deliveries',
+        {
+          p_push_subscription_id: subscription.id,
+          p_tmdb_show_id: tmdbShowId,
+          p_episodes: episodes.map((episode) => ({
+            season_number: episode.seasonNumber,
+            episode_number: episode.episodeNumber,
+            notification_type: notificationType,
+          })),
+          p_claim_token: claimToken,
+          p_claimed_at: evaluationInstant.toISOString(),
+        },
+      )
+      if (claimError) {
+        summary.failed += 1
+        console.error('notification_worker_claim_failed', { tmdbShowId, notificationType, message: claimError.message })
+        return null
+      }
+      const claimedKeys = new Set(
+        (claimedRows ?? []).map((row) => episodeKey(row.season_number, row.episode_number)),
+      )
+      const claimedEpisodes = episodes.filter(
+        (episode) => claimedKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
+      )
+      summary.skipped += episodes.length - claimedEpisodes.length
+      if (claimedEpisodes.length === 0) return null
+      return { claimToken, episodes: claimedEpisodes }
+    }
+
+    // Finalizes exactly the rows this claim_token owns — see
+    // supabase/migrations/20260719160000_add_complete_episode_notification_deliveries.sql
+    // for why this must be claim-token-scoped rather than a plain
+    // identity-only update.
+    async function finalizeEpisodes(subscription, tmdbShowId, claimToken, episodes, notificationType) {
+      const identities = episodes.map((episode) => deliveryIdentity(
+        subscription.id, tmdbShowId, episode.seasonNumber, episode.episodeNumber, notificationType,
+      ))
+      const { data: finalizedRows, error: finalizeError } = await client.rpc(
+        'complete_episode_notification_deliveries',
+        {
+          p_claim_token: claimToken,
+          p_identities: identities,
+          p_delivered_at: evaluationInstant.toISOString(),
+        },
+      )
+      if (finalizeError || (finalizedRows ?? []).length !== identities.length) {
+        summary.failed += 1
+        console.error('notification_worker_finalize_mismatch', {
+          tmdbShowId,
+          notificationType,
+          expected: identities.length,
+          finalized: (finalizedRows ?? []).length,
+          message: finalizeError?.message,
+        })
+        return false
+      }
+      return true
+    }
+
+    // Sends a real push for an already-claimed batch and finalizes it on
+    // success. Returns 'sent', 'failed', or 'removed' (subscription was gone
+    // — 404/410 from the push service, already deleted). Only a 'sent'
+    // outcome (push accepted *and* the finalize RPC durably confirmed every
+    // claimed identity) counts as a real delivery — a send that succeeds but
+    // fails to finalize is 'failed', exactly like the pre-two-stage worker.
+    async function sendClaim(subscription, tmdbShowId, showName, claimToken, episodes, notificationType) {
+      const payload = buildEpisodeNotificationPayload(tmdbShowId, showName, episodes, notificationType)
+      const target = { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }
+      try {
+        await sendNotification(target, JSON.stringify({
+          title: payload.title, url: payload.url, tag: payload.tag, omitBody: payload.omitBody,
+        }))
+      } catch (err) {
+        const statusCode = err?.statusCode
+        if (statusCode === 404 || statusCode === 410) {
+          await client.from('push_subscriptions').delete().eq('id', subscription.id)
+          summary.staleRemoved += 1
+          return 'removed'
+        }
+        summary.failed += 1
+        console.error('notification_worker_send_failed', { statusCode, message: err?.message, notificationType })
+        return 'failed'
+      }
+      const finalized = await finalizeEpisodes(subscription, tmdbShowId, claimToken, episodes, notificationType)
+      if (!finalized) return 'failed'
+      summary.sent += 1
+      return 'sent'
+    }
+
     try {
       const { data: subscriptionRows, error: subsError } = await client
         .from('push_subscriptions')
-        .select('id, endpoint, p256dh, auth, automatic_notifications_enabled_at, preferred_notification_hour_ist')
+        .select('id, endpoint, p256dh, auth, automatic_notifications_enabled_at, airtime_notifications_enabled_at, preferred_notification_hour_ist')
         .not('automatic_notifications_enabled_at', 'is', null)
       if (subsError) throw subsError
 
@@ -175,9 +272,13 @@ export function createNotificationWorkerHandler({
 
       // Computed once and shared across every subscription below — the
       // release/watched data behind eligibility doesn't vary per
-      // subscription, only the activation watermark and dedup claim do. This
-      // is what keeps TMDB/TVmaze call volume flat regardless of how many
-      // installs are subscribed.
+      // subscription, only the two activation/rollout watermarks and the
+      // claim/dedup step vary per subscription. This is what keeps
+      // TMDB/TVmaze call volume flat regardless of how many installs are
+      // subscribed. Note this pool is intentionally *not* watermark-filtered
+      // — it's every already-aired, unwatched episode; each subscription
+      // below applies its own airtime and reminder watermarks/schedules on
+      // top of it independently.
       const showPool = new Map()
       await mapWithConcurrency(candidates, concurrency, async (show) => {
         try {
@@ -199,7 +300,10 @@ export function createNotificationWorkerHandler({
 
       for (const subscription of subscriptions) {
         try {
-          const watermarkMs = new Date(subscription.automatic_notifications_enabled_at).getTime()
+          const automaticWatermarkMs = new Date(subscription.automatic_notifications_enabled_at).getTime()
+          const airtimeWatermarkMs = subscription.airtime_notifications_enabled_at
+            ? new Date(subscription.airtime_notifications_enabled_at).getTime()
+            : null
           // Falls back to the product default for a row the DB migration
           // hasn't backfilled yet (or a test double that omits the column) —
           // the column itself is `not null default 20`, so this is only ever
@@ -208,113 +312,150 @@ export function createNotificationWorkerHandler({
             ? subscription.preferred_notification_hour_ist
             : DEFAULT_PREFERRED_HOUR_IST
 
-          const claims = []
+          // Pass 1: for every show with a candidate under either stage,
+          // claim its airtime batch immediately (no preferred-hour gate —
+          // "never send before availability" is the only timing rule) and
+          // stash its reminder batch (still gated by the preferred hour) for
+          // pass 2, once we know which episodes airtime actually delivered.
+          const reminderPool = new Map() // tmdbShowId -> { showName, candidates }
+          const airtimeClaims = []
+          // Which episodes actually won the airtime claim this run (i.e.
+          // this is genuinely the first time airtime is being attempted for
+          // them, not merely "still watermark-eligible" — an already
+          // fully-delivered episode stays a watermark-eligible candidate
+          // forever, but must never keep suppressing its reminder run after
+          // run). Only these episodes can ever be treated as a same-run
+          // collision with the reminder stage below, regardless of whether
+          // the send that follows in pass 2 actually succeeds.
+          const airtimeClaimedKeysByShow = new Map() // tmdbShowId -> Set(episodeKey)
           for (const [tmdbShowId, entry] of showPool) {
-            const sinceWatermark = episodesSinceWatermark(entry.episodes, watermarkMs)
-            if (sinceWatermark.length === 0) continue
+            const airtimeCandidates = Number.isFinite(airtimeWatermarkMs)
+              ? episodesSinceWatermark(entry.episodes, airtimeWatermarkMs)
+              : []
+            const reminderCandidates = episodesSinceWatermark(entry.episodes, automaticWatermarkMs)
+              .filter((episode) => isSendableNow(episode.releaseTimestamp, preferredHourIst, evaluationMs))
 
-            // Activation watermark and every eligibility rule above already
-            // apply to each episode's raw release instant, not this
-            // schedule — this filter only ever delays *when* an
-            // already-eligible episode is sent, never turns a
-            // pre-activation episode eligible. An episode whose scheduled
-            // instant hasn't arrived yet simply isn't claimed this run; it
-            // stays in showPool/sinceWatermark for a later run once its
-            // scheduled instant passes.
-            const sendable = sinceWatermark.filter((episode) =>
-              isSendableNow(episode.releaseTimestamp, preferredHourIst, evaluationMs))
-            if (sendable.length === 0) continue
-            summary.eligibleEpisodes += sendable.length
+            if (airtimeCandidates.length === 0 && reminderCandidates.length === 0) continue
+            summary.eligibleEpisodes += airtimeCandidates.length + reminderCandidates.length
 
             if (dryRun) {
-              const payload = buildEpisodeNotificationPayload(tmdbShowId, entry.showName, sendable)
-              preview.push({ tmdbShowId, title: payload.title, episodeCount: sendable.length })
+              if (airtimeCandidates.length > 0) {
+                const payload = buildEpisodeNotificationPayload(
+                  tmdbShowId, entry.showName, airtimeCandidates, EPISODE_AIRTIME_NOTIFICATION_TYPE,
+                )
+                preview.push({
+                  tmdbShowId, title: payload.title, episodeCount: airtimeCandidates.length,
+                  notificationType: EPISODE_AIRTIME_NOTIFICATION_TYPE,
+                })
+              }
+              if (reminderCandidates.length > 0) {
+                const payload = buildEpisodeNotificationPayload(
+                  tmdbShowId, entry.showName, reminderCandidates, EPISODE_REMINDER_NOTIFICATION_TYPE,
+                )
+                preview.push({
+                  tmdbShowId, title: payload.title, episodeCount: reminderCandidates.length,
+                  notificationType: EPISODE_REMINDER_NOTIFICATION_TYPE,
+                })
+              }
               continue
             }
 
-            const claimToken = randomUUID()
-            const { data: claimedRows, error: claimError } = await client.rpc(
-              'claim_episode_notification_deliveries',
-              {
-                p_push_subscription_id: subscription.id,
-                p_tmdb_show_id: tmdbShowId,
-                p_episodes: sendable.map((episode) => ({
-                  season_number: episode.seasonNumber,
-                  episode_number: episode.episodeNumber,
-                  notification_type: EPISODE_NOTIFICATION_TYPE,
-                })),
-                p_claim_token: claimToken,
-                p_claimed_at: evaluationInstant.toISOString(),
-              },
-            )
-            if (claimError) {
-              summary.failed += 1
-              console.error('notification_worker_claim_failed', { tmdbShowId, message: claimError.message })
-              continue
+            if (reminderCandidates.length > 0) {
+              reminderPool.set(tmdbShowId, { showName: entry.showName, candidates: reminderCandidates })
             }
-
-            const claimedKeys = new Set(
-              (claimedRows ?? []).map((row) => episodeKey(row.season_number, row.episode_number)),
-            )
-            const claimedEpisodes = sendable.filter(
-              (episode) => claimedKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
-            )
-            summary.skipped += sendable.length - claimedEpisodes.length
-            if (claimedEpisodes.length > 0) {
-              claims.push({ tmdbShowId, showName: entry.showName, episodes: claimedEpisodes, claimToken })
+            if (airtimeCandidates.length > 0) {
+              const claimed = await claimEpisodes(subscription, tmdbShowId, airtimeCandidates, EPISODE_AIRTIME_NOTIFICATION_TYPE)
+              if (claimed) {
+                airtimeClaims.push({ tmdbShowId, showName: entry.showName, ...claimed })
+                airtimeClaimedKeysByShow.set(
+                  tmdbShowId,
+                  new Set(claimed.episodes.map((episode) => episodeKey(episode.seasonNumber, episode.episodeNumber))),
+                )
+              }
             }
           }
 
           if (dryRun) continue
 
-          for (const claim of claims) {
-            const payload = buildEpisodeNotificationPayload(claim.tmdbShowId, claim.showName, claim.episodes)
-            const target = { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }
-            try {
-              await sendNotification(target, JSON.stringify({
-                title: payload.title, url: payload.url, tag: payload.tag, omitBody: payload.omitBody,
-              }))
-            } catch (err) {
-              const statusCode = err?.statusCode
-              if (statusCode === 404 || statusCode === 410) {
-                await client.from('push_subscriptions').delete().eq('id', subscription.id)
-                summary.staleRemoved += 1
-                break
+          // Pass 2: send + finalize every airtime claim, remembering exactly
+          // which episodes were *successfully* delivered this run — only
+          // those can silently satisfy an overlapping reminder below. A push
+          // that fails, or that sends but fails to finalize, must never
+          // suppress the reminder (see sendClaim's outcome contract).
+          let subscriptionRemoved = false
+          const airtimeSentKeysByShow = new Map() // tmdbShowId -> Set(episodeKey)
+          for (const claim of airtimeClaims) {
+            const outcome = await sendClaim(
+              subscription, claim.tmdbShowId, claim.showName, claim.claimToken, claim.episodes, EPISODE_AIRTIME_NOTIFICATION_TYPE,
+            )
+            if (outcome === 'removed') { subscriptionRemoved = true; break }
+            if (outcome === 'sent') {
+              airtimeSentKeysByShow.set(
+                claim.tmdbShowId,
+                new Set(claim.episodes.map((episode) => episodeKey(episode.seasonNumber, episode.episodeNumber))),
+              )
+            }
+          }
+          if (subscriptionRemoved) continue
+
+          // Pass 3: split each show's reminder pool into episodes that were
+          // *genuinely, newly claimed for airtime this run* (a same-run
+          // collision — satisfy silently once pass 2 confirms delivery, no
+          // second push) and everything else, which always goes through a
+          // real standalone reminder send in pass 4 regardless of airtime's
+          // outcome (including a show whose airtime already delivered on an
+          // earlier run: airtimeClaimedKeysByShow is empty for it this run,
+          // so its now-due reminder is never mistaken for a collision).
+          const reminderToSendByShow = new Map()
+          for (const [tmdbShowId, { showName, candidates }] of reminderPool) {
+            const claimedAirtimeKeys = airtimeClaimedKeysByShow.get(tmdbShowId) ?? new Set()
+            const collisionCandidates = candidates.filter(
+              (episode) => claimedAirtimeKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
+            )
+            const standalone = candidates.filter(
+              (episode) => !claimedAirtimeKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
+            )
+
+            // Only an episode whose airtime push in pass 2 actually
+            // succeeded may be silently satisfied here. One that failed to
+            // send (or send-but-not-finalize) is dropped entirely for this
+            // run — not finalized, not sent standalone either — and simply
+            // becomes a fresh candidate again (both airtime and reminder)
+            // on the next run. This is exactly what keeps "failed airtime
+            // delivery finalizes neither type" true: nothing here ever
+            // finalizes a reminder off the back of a failed airtime send.
+            const justSentKeys = airtimeSentKeysByShow.get(tmdbShowId) ?? new Set()
+            const collision = collisionCandidates.filter(
+              (episode) => justSentKeys.has(episodeKey(episode.seasonNumber, episode.episodeNumber)),
+            )
+
+            if (collision.length > 0) {
+              const claimed = await claimEpisodes(subscription, tmdbShowId, collision, EPISODE_REMINDER_NOTIFICATION_TYPE)
+              if (claimed) {
+                // A failure here (surfaced via summary.failed inside
+                // finalizeEpisodes) leaves the reminder claim exactly as
+                // reclaimable as any other unfinalized claim — retried by a
+                // later run, never silently dropped, and it never unwinds
+                // the airtime send that already succeeded.
+                await finalizeEpisodes(subscription, tmdbShowId, claimed.claimToken, claimed.episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)
               }
-              summary.failed += 1
-              console.error('notification_worker_send_failed', { statusCode, message: err?.message })
-              continue
             }
 
-            // Web Push confirmed acceptance — now durably finalize, but only
-            // the rows this exact claim owns. A plain unscoped update here
-            // would let a database-write failure report as "sent" while the
-            // claim stays reclaimable (risking a duplicate resend), or let a
-            // stale/slow worker finalize rows a newer invocation already
-            // reclaimed under a different claim_token. See migration
-            // 20260719160000 for the full rationale.
-            const identities = claim.episodes.map((episode) => deliveryIdentity(
-              subscription.id, claim.tmdbShowId, episode.seasonNumber, episode.episodeNumber,
-            ))
-            const { data: finalizedRows, error: finalizeError } = await client.rpc(
-              'complete_episode_notification_deliveries',
-              {
-                p_claim_token: claim.claimToken,
-                p_identities: identities,
-                p_delivered_at: evaluationInstant.toISOString(),
-              },
+            if (standalone.length > 0) reminderToSendByShow.set(tmdbShowId, { showName, episodes: standalone })
+          }
+
+          // Pass 4: claim + send + finalize standalone reminders exactly
+          // like airtime in passes 1-2.
+          const reminderClaims = []
+          for (const [tmdbShowId, { showName, episodes }] of reminderToSendByShow) {
+            const claimed = await claimEpisodes(subscription, tmdbShowId, episodes, EPISODE_REMINDER_NOTIFICATION_TYPE)
+            if (claimed) reminderClaims.push({ tmdbShowId, showName, ...claimed })
+          }
+          for (const claim of reminderClaims) {
+            const outcome = await sendClaim(
+              subscription, claim.tmdbShowId, claim.showName, claim.claimToken, claim.episodes, EPISODE_REMINDER_NOTIFICATION_TYPE,
             )
-            if (finalizeError || (finalizedRows ?? []).length !== identities.length) {
-              summary.failed += 1
-              console.error('notification_worker_finalize_mismatch', {
-                tmdbShowId: claim.tmdbShowId,
-                expected: identities.length,
-                finalized: (finalizedRows ?? []).length,
-                message: finalizeError?.message,
-              })
-              continue
-            }
-            summary.sent += 1
+            if (outcome === 'removed') break
           }
         } catch (err) {
           summary.failed += 1
