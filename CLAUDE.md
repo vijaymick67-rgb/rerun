@@ -5,12 +5,14 @@
 > don't rely on chat summaries to carry context between sessions.
 
 ## What This Is
-A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no login).
+A personal TV watch-log app. TV shows only, no movies. Owner-only auth (single approved
+Google/recovery-password identity — no public signup, no multi-user).
 
 ## Stack
 - React + Vite
 - Tailwind
-- Supabase (Postgres, no auth — public/anon access)
+- Supabase (Postgres, owner-only auth — Google OAuth primary, email/password recovery,
+  singleton `private.owner_config` + RLS. See `docs/AUTH_SETUP.md`.)
 - TMDB API (search + episode data)
 - Deploy: merge to `main` on GitHub → Vercel auto-deploys. No local dev environment
   (Mac is away for several months) — all work happens via GitHub Claude Code / web merges.
@@ -28,7 +30,9 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
   runtime_minutes (real per-episode runtime from TMDB, not an estimate), watched_at.
   Unique on (tmdb_show_id, season_number, episode_number) — marking watched twice updates
   watched_at instead of duplicating (upsert).
-- RLS enabled on both tables, policy set to public (no auth in this app).
+- RLS enabled on both tables, owner-only policies (see `docs/AUTH_SETUP.md`). No `user_id`
+  column on either table — ownership is a singleton allowlist check
+  (`private.is_owner()`), not per-row multi-tenant ownership.
 
 ## Screens (in build order)
 1. Scaffold + TMDB integration
@@ -58,7 +62,9 @@ A personal TV watch-log app. TV shows only, no movies, no auth (single-user, no 
 
 ## Key Technical Decisions
 - **Cache TMDB responses locally from day one.** Lesson learned from Marquee — don't skip this.
-- No auth. No multi-user. Single-user personal tool.
+- Owner-only auth, no multi-user. Single-user personal tool — one approved Google account
+  (with an email/password recovery fallback), enforced by RLS via a singleton
+  `private.owner_config` + `private.is_owner()`, not per-row `user_id`. See `docs/AUTH_SETUP.md`.
 
 ## Workflow Rules (non-negotiable, apply to every PR)
 - Always branch new work off `main` directly — never stack a branch on an unmerged PR's branch.
@@ -81,6 +87,10 @@ _(update this after every merge)_
 - [ ] Log view
 - [ ] Stats
 - [ ] Aesthetics pass
+- [ ] Owner-only auth (PR open — draft, not merged): Google OAuth + recovery login, RLS
+  Migration A (auth infra) + Migration B (data lockdown) staged separately, see
+  `docs/AUTH_SETUP.md`. Update this line to "done" once merged and the manual rollout
+  in that doc is complete.
 
 ## Open Questions / Not Yet Decided
 - Visual direction for the aesthetics pass (not started — decide once core screens are functional)

@@ -39,6 +39,27 @@ export function clearDetailCache(key) {
   }
 }
 
+const DETAIL_CACHE_PREFIXES = ['showdetail_cache:v1:', 'seasondetail_cache:v1:']
+
+// Clears every show/season detail entry regardless of tmdbId — unlike
+// clearDetailCache (one known key), there's no fixed list of keys to name,
+// since one exists per show/season ever opened. Used on sign-out so watched
+// state cached here can't be read back before the next owner signs in.
+export function clearAllDetailCaches() {
+  try {
+    const keysToRemove = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (key && DETAIL_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        keysToRemove.push(key)
+      }
+    }
+    for (const key of keysToRemove) localStorage.removeItem(key)
+  } catch {
+    // ignore
+  }
+}
+
 export function patchShowDetailState(tmdbId, patch) {
   const key = showDetailCacheKey(tmdbId)
   const cached = readDetailCache(key)

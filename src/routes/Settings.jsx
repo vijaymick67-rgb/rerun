@@ -1,4 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { useAuth } from '../lib/AuthContext'
+import { supabase } from '../lib/supabase'
+import ConfirmDialog from '../components/ConfirmDialog'
+import { clearWatchingCache } from '../lib/watchingCache'
+import { clearAllDetailCaches } from '../lib/detailCache'
+import { clearStatsCache } from './Stats'
 import {
   buildBackup,
   backupFilename,
@@ -182,6 +188,7 @@ export default function Settings() {
     <div className="app-page px-4 pb-6">
       <BackupRestoreSection />
       <NotificationsSection />
+      <AccountSection />
     </div>
   )
 }
@@ -709,6 +716,195 @@ function NotificationsSection() {
         <Banner tone="error" live>{preferenceError}</Banner>
       )}
       {subscriptionError && <Banner tone="error">Subscription error: {subscriptionError}</Banner>}
+    </>
+  )
+}
+
+const MIN_RECOVERY_PASSWORD_LENGTH = 8
+
+// Sets/replaces the password credential on the owner's already-authenticated
+// Supabase session — the same `updateUser({ password })` call documented in
+// docs/AUTH_SETUP.md, now reachable from the app instead of the browser
+// console. Only ever rendered inside AccountSection, which is itself only
+// reachable once AuthGate has already admitted the owner — there is no
+// separate ownership check here.
+function RecoveryPasswordForm({ onDone }) {
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState(null)
+  const [successMessage, setSuccessMessage] = useState(null)
+
+  function resetFields() {
+    setPassword('')
+    setConfirmPassword('')
+  }
+
+  function handleCancel() {
+    resetFields()
+    setFormError(null)
+    setSuccessMessage(null)
+    onDone()
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    if (saving) return
+    setFormError(null)
+    setSuccessMessage(null)
+
+    if (!password || !confirmPassword) {
+      setFormError('Enter and confirm the new password.')
+      return
+    }
+    if (password !== confirmPassword) {
+      setFormError('Passwords do not match.')
+      return
+    }
+    if (password.length < MIN_RECOVERY_PASSWORD_LENGTH) {
+      setFormError(`Password must be at least ${MIN_RECOVERY_PASSWORD_LENGTH} characters.`)
+      return
+    }
+
+    setSaving(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password })
+      if (error) {
+        setFormError(error.message || 'Could not update the recovery password.')
+        return
+      }
+      resetFields()
+      setSuccessMessage('Recovery password updated.')
+    } catch (err) {
+      setFormError(err.message || 'Could not update the recovery password.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="content-surface motion-banner mt-3 p-4">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <label className="flex flex-col gap-1.5">
+          <span className="type-metadata text-(--color-text-secondary)">New password</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={saving}
+            className="surface-interactive focus-ring type-body min-h-11 px-3 py-2 text-(--color-text) disabled:opacity-60"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="type-metadata text-(--color-text-secondary)">Confirm password</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            required
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            disabled={saving}
+            className="surface-interactive focus-ring type-body min-h-11 px-3 py-2 text-(--color-text) disabled:opacity-60"
+          />
+        </label>
+
+        {formError && (
+          <p role="alert" aria-live="assertive" className="status-banner status-banner--destructive type-body">
+            {formError}
+          </p>
+        )}
+
+        {successMessage && (
+          <p role="status" aria-live="polite" className="status-banner status-banner--success type-body">
+            {successMessage}
+          </p>
+        )}
+
+        <div className="flex gap-3">
+          <button
+            type="submit"
+            disabled={saving}
+            className="focus-ring motion-press min-h-11 flex-1 rounded-md bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-canvas) disabled:opacity-60"
+          >
+            {saving ? 'Saving…' : 'Save password'}
+          </button>
+          <button
+            type="button"
+            onClick={handleCancel}
+            disabled={saving}
+            className="focus-ring motion-press min-h-11 flex-1 rounded-md border border-(--color-border) px-4 py-2.5 text-sm font-medium text-(--color-text) disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// Deliberately does NOT touch push subscription state (managementToken,
+// automaticActivation, notificationPreference) — this is a personal
+// single-owner device, and notification delivery is controlled entirely by
+// the Notifications section above, not by sign-in state. See
+// docs/AUTH_SETUP.md.
+function AccountSection() {
+  const { session, signOut } = useAuth()
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const [showRecoveryForm, setShowRecoveryForm] = useState(false)
+
+  function handleSignOutPress() {
+    if (signingOut) return
+    setConfirmOpen(true)
+  }
+
+  async function handleConfirmSignOut() {
+    setConfirmOpen(false)
+    setSigningOut(true)
+    // Clear local caches that carry personal watch state before flipping
+    // auth status — AuthGate unmounts the private app (this component
+    // included) as soon as signOut() resolves.
+    clearWatchingCache()
+    clearAllDetailCaches()
+    clearStatsCache()
+    await signOut()
+  }
+
+  const identityLabel = session?.user?.email || 'Signed in'
+
+  return (
+    <>
+      <SettingsSection title="Account">
+        <SettingsInfoRow label="Signed in as" status={identityLabel} />
+        <SettingsActionRow
+          label="Set recovery password"
+          onPress={() => setShowRecoveryForm((open) => !open)}
+        />
+        <SettingsActionRow
+          label="Sign out"
+          onPress={handleSignOutPress}
+          disabled={signingOut}
+          busyLabel={signingOut ? 'Signing out…' : null}
+        />
+      </SettingsSection>
+
+      {showRecoveryForm && (
+        <RecoveryPasswordForm onDone={() => setShowRecoveryForm(false)} />
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Sign out?"
+        message="You'll need to sign back in with Google (or your recovery login) to see your watch history again."
+        confirmLabel="Sign out"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={handleConfirmSignOut}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </>
   )
 }

@@ -4,12 +4,20 @@
 // These are almost certainly rows written before the hasAired() fixes in
 // PRs #9 and #10 were live.
 //
-// This can't be run inside a sandboxed Claude Code session — it needs the
-// real Supabase credentials, which only exist in Vercel's project settings
-// (see CLAUDE.md, "No local dev environment"). Run it yourself wherever you
-// have those values, e.g.:
+// Manual-only, forever — this must NOT be wired into CI. It used to run via
+// a GitHub Action authenticated with the anon key
+// (.github/workflows/cleanup-unaired-watched.yml, removed in the owner-only
+// auth PR); once owner-only RLS is applied
+// (20260720140000_owner_only_rls_tracked_watched.sql), the anon key can no
+// longer read or write these tables at all, so that workflow would only
+// ever see zero rows. Rather than hand a GitHub Actions secret the
+// Supabase service-role key (which bypasses RLS entirely and would expand
+// what a CI credential can do), this script now takes the service-role key
+// directly and is meant to be run by hand, from a machine you control, with
+// credentials from Vercel's project settings (see CLAUDE.md, "No local dev
+// environment") — never stored in CI.
 //
-//   VITE_SUPABASE_URL=... VITE_SUPABASE_ANON_KEY=... node scripts/cleanup-unaired-watched.js
+//   SUPABASE_SERVICE_ROLE_KEY=... VITE_SUPABASE_URL=... node scripts/cleanup-unaired-watched.js
 //
 // Dry run by default — only prints what it would delete. Pass --confirm to
 // actually delete the rows it finds.
@@ -25,14 +33,17 @@ const PROXY_BASE = 'https://rerun-nine.vercel.app/api/tmdb'
 const CONFIRM = process.argv.includes('--confirm')
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in the environment before running this.')
+if (!supabaseUrl || !serviceRoleKey) {
+  console.error('Set VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the environment before running this.')
+  console.error('Run this by hand, from a machine you control — never from CI. See the comment at the top of this file.')
   process.exit(1)
 }
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey)
+const supabase = createClient(supabaseUrl, serviceRoleKey, {
+  auth: { persistSession: false, autoRefreshToken: false },
+})
 
 async function fetchJSON(path) {
   const res = await fetch(`${PROXY_BASE}${path}`)
