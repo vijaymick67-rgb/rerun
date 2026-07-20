@@ -177,15 +177,17 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         // Revision each show's local-mutation counter was at when this load
         // captured it into renderedById/freshById — see localRevisionRef above.
         const capturedRevisionById = new Map()
-        // Revision each show's local-mutation counter was at right before
-        // this load started fetching that show's own per-show data
-        // (details/seasons) — populated in loadCandidateBatch, read in
-        // mergeRenderedShow. If a quick mark lands on a show while that
-        // show's own enrichment is still in flight, the watched snapshot
-        // baked into `loaded` is stale relative to the tap even though
-        // nothing else in the batch is racing — capturedRevisionById alone
-        // can't catch this because it's stamped at settle time, after the
-        // tap already bumped the counter.
+        // Revision each show's local-mutation counter was at when this load
+        // batch began — stamped at the very top of loadCandidateBatch, before
+        // the watched_episodes request even starts, and read in
+        // mergeRenderedShow. It marks the mutation state the whole load's
+        // watched snapshot reflects. If a quick mark lands on a show any time
+        // after this point — while the watched fetch is in flight, or while
+        // that show's own detail/season enrichment is — the snapshot baked
+        // into `loaded` is stale relative to the tap. capturedRevisionById
+        // alone can't catch this because it's stamped at settle time, after
+        // the tap already bumped the counter; capturing before the fetch
+        // begins is what makes the mismatch detectable.
         const startingRevisionById = new Map()
         let renderedAny = renderedById.size > 0
         let partialFailureCount = 0
@@ -265,6 +267,19 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
 
         const loadCandidateBatch = async (candidates, preloadedById) => {
           if (candidates.length === 0) return []
+
+          // Stamp each candidate's starting revision now, before this batch's
+          // watched_episodes request even begins — the watched snapshot this
+          // load will bake into `loaded` reflects the mutation state as of
+          // right here. A quick mark that lands while the fetch below is in
+          // flight bumps the counter, and the returned snapshot is pre-tap;
+          // capturing after the fetch resolves would record the already-bumped
+          // revision and mask that staleness. See startingRevisionById above
+          // and mergeRenderedShow.
+          for (const candidate of candidates) {
+            startingRevisionById.set(candidate.id, localRevisionRef.current.get(candidate.id) ?? 0)
+          }
+
           const tmdbIds = candidates.map((show) => show.tmdb_id)
           let watchedRows
           try {
@@ -298,14 +313,6 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
             watchedByShowId
               .get(row.tmdb_show_id)
               .add(episodeKey(row.season_number, row.episode_number))
-          }
-
-          // Stamp each candidate's starting revision now, right before its
-          // own per-show enrichment (details/season fetches) begins below —
-          // this is the watched snapshot's effective capture point. See
-          // startingRevisionById above and mergeRenderedShow.
-          for (const candidate of candidates) {
-            startingRevisionById.set(candidate.id, localRevisionRef.current.get(candidate.id) ?? 0)
           }
 
           return enrichTrackedShowsForWatching(
