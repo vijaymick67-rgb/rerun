@@ -12,20 +12,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-function makeSelectChain(result) {
+function makeSelectChain(result, gate = Promise.resolve()) {
+  const resolveResult = () => gate.then(() => result)
   const chain = {
     eq: () => chain,
     in: () => chain,
     order: () => chain,
     range: () => chain,
-    maybeSingle: () => Promise.resolve(result),
-    then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
+    maybeSingle: () => resolveResult(),
+    then: (resolve, reject) => resolveResult().then(resolve, reject),
   }
   return chain
 }
 
 let trackedShowsResult
 let watchedEpisodesResult
+// Lets a test hold the watched_episodes fetch open — and therefore the
+// in-memory quick-mark context it feeds — so it can assert on the window
+// before that context is ready.
+let watchedEpisodesGate
 let upsertImpl
 const upsertCalls = []
 
@@ -34,7 +39,7 @@ vi.mock('../lib/supabase', () => ({
     from: (table) => ({
       select: () => {
         if (table === 'tracked_shows') return makeSelectChain(trackedShowsResult)
-        if (table === 'watched_episodes') return makeSelectChain(watchedEpisodesResult)
+        if (table === 'watched_episodes') return makeSelectChain(watchedEpisodesResult, watchedEpisodesGate)
         throw new Error(`unexpected select on ${table}`)
       },
       upsert: (rows) => {
@@ -106,6 +111,7 @@ beforeEach(() => {
   upsertImpl = async () => ({ error: null })
   trackedShowsResult = { data: [SHOW], error: null }
   watchedEpisodesResult = { data: watchedRows([[1, 1], [1, 2], [2, 1], [2, 2], [2, 3], [2, 4]]), error: null }
+  watchedEpisodesGate = Promise.resolve()
   getShowDetails.mockResolvedValue({ seasons: [{ season_number: 1 }, { season_number: 2 }], status: 'Returning Series' })
   getSeasonEpisodes.mockImplementation(async (_id, seasonNumber) => ({
     episodes: seasonNumber === 1 ? season1 : season2,
@@ -239,5 +245,82 @@ describe('Watching quick mark — one episode at a time', () => {
     await flush()
     expect(container.querySelectorAll('.watching-row')).toHaveLength(1)
     expect(container.textContent).not.toContain('No shows yet')
+  })
+
+  it('a cached row with a quick-mark-eligible episode does not expose a tappable control until this load\'s mutation context is ready', async () => {
+    const cachedShow = {
+      id: 1, tmdb_id: 900, name: 'The Sopranos', poster_path: null,
+      added_at: '2026-01-01T00:00:00Z', finished_at: null, hidden_at: null,
+      status: { type: 'nextUp', season_number: 2, episode_number: 5, name: 'S2E5', air_date: '2015-02-05' },
+      releasedEpisodeCount: 9, releasedWatchedCount: 4, releasedProgress: (4 / 9) * 100,
+      nextReleasedUnwatchedEpisode: { season_number: 2, episode_number: 5, name: 'S2E5', runtime: 40 },
+    }
+    localStorage.setItem('watching_cache:v5', JSON.stringify([cachedShow]))
+
+    let releaseGate
+    watchedEpisodesGate = new Promise((resolve) => { releaseGate = resolve })
+
+    await mountWatching()
+
+    // The cached row renders instantly from localStorage, including its
+    // cached next-up label — but this load's watched_episodes fetch (and
+    // therefore the in-memory mutation context handleQuickMark needs) hasn't
+    // resolved yet, so the control must not appear tappable.
+    expect(container.textContent).toContain('S2E5')
+    expect(container.querySelector('.watching-quick-mark')).toBeNull()
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
+
+    await act(async () => { releaseGate() })
+    await flush()
+
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).not.toBeNull()
+  })
+
+  it('does not let the loader\'s final commit overwrite a quick mark that landed while another show was still loading', async () => {
+    const SHOW2 = {
+      id: 2, tmdb_id: 901, name: 'Better Call Saul', poster_path: null,
+      added_at: '2026-01-02T00:00:00Z', finished_at: null, hidden_at: null,
+    }
+    trackedShowsResult = { data: [SHOW, SHOW2], error: null }
+
+    let releaseShow2
+    const show2Gate = new Promise((resolve) => { releaseShow2 = resolve })
+    getShowDetails.mockImplementation(async (tmdbId) => {
+      if (tmdbId === 901) {
+        await show2Gate
+        return { seasons: [{ season_number: 1 }], status: 'Returning Series' }
+      }
+      return { seasons: [{ season_number: 1 }, { season_number: 2 }], status: 'Returning Series' }
+    })
+    getSeasonEpisodes.mockImplementation(async (tmdbId, seasonNumber) => {
+      if (tmdbId === 901) {
+        return { episodes: [{ episode_number: 1, name: 'BCS S1E1', air_date: '2015-01-01', runtime: 47 }] }
+      }
+      return { episodes: seasonNumber === 1 ? season1 : season2 }
+    })
+
+    await mountWatching()
+
+    // Show 1 (Sopranos) has settled and is ready; show 2 is still gated.
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).not.toBeNull()
+
+    const button = container.querySelector('.watching-quick-mark')
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    await flush()
+    expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
+
+    // Now let show 2's enrichment finish, completing the whole load batch.
+    await act(async () => { releaseShow2() })
+    await flush()
+
+    // The loader's final commit must not revert the quick mark that already
+    // landed on show 1's row while show 2 was still in flight.
+    expect(container.querySelector('[aria-label="Mark S2E6 of The Sopranos watched"]')).not.toBeNull()
+    expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
+
+    const cached = JSON.parse(localStorage.getItem('watching_cache:v5'))
+    const cachedShow = cached.find((show) => show.tmdb_id === 900)
+    expect(cachedShow.releasedWatchedCount).toBe(7)
+    expect(cachedShow.nextReleasedUnwatchedEpisode).toMatchObject({ season_number: 2, episode_number: 6 })
   })
 })

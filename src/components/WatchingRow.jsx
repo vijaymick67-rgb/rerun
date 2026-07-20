@@ -10,6 +10,7 @@ const DRAG_THRESHOLD = 6
 
 export default function WatchingRow({
   show, isRemoving, isOpen, onOpenChange, onRemove, onQuickMark, isQuickMarking,
+  canQuickMark = true,
 }) {
   const navigate = useNavigate()
   const rowRef = useRef(null)
@@ -106,7 +107,11 @@ export default function WatchingRow({
     handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)
   }
 
-  const quickMarkEpisode = show.nextReleasedUnwatchedEpisode ?? null
+  // A cached row can render nextReleasedUnwatchedEpisode long before this
+  // load's mutation context for it is ready (see Watching.jsx's
+  // readyShowIds) — the control must not appear tappable in that window,
+  // since tapping it before context exists would silently do nothing.
+  const quickMarkEpisode = canQuickMark ? (show.nextReleasedUnwatchedEpisode ?? null) : null
   const showProgressBar = (show.releasedEpisodeCount ?? 0) > 0 &&
     (show.releasedWatchedCount ?? 0) < (show.releasedEpisodeCount ?? 0)
 
