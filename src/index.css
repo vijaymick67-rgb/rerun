@@ -72,25 +72,24 @@
   --type-badge-size: 0.6875rem;
 }
 
-html,
-body,
-#root {
-  height: 100%;
-  background: var(--canvas-atmosphere);
-  background-attachment: fixed;
-  background-repeat: no-repeat;
-  background-size: cover;
-}
-
 html {
+  min-height: 100%;
   background-color: var(--color-canvas);
 }
 
 body {
+  min-height: 100%;
   margin: 0;
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  background: var(--canvas-atmosphere);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+#root {
+  min-height: 100%;
 }
 
 .app-shell {
@@ -99,10 +98,6 @@ body {
   max-width: 42rem;
   margin-inline: auto;
   padding-bottom: calc(4rem + var(--safe-area-inset-bottom));
-  background: var(--canvas-atmosphere);
-  background-attachment: fixed;
-  background-repeat: no-repeat;
-  background-size: cover;
 }
 
 .app-page {
