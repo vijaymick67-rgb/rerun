@@ -260,7 +260,7 @@ export default function Browse() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Find a show…"
-        className="min-h-11 w-full rounded-xl border border-(--color-border) bg-(--color-surface) px-3 text-(--color-text) outline-none placeholder:text-(--color-text-muted) focus:border-(--color-accent) focus:ring-2 focus:ring-(--color-accent)/25"
+        className="browse-search"
       />
 
       {loading && (
@@ -312,7 +312,7 @@ export default function Browse() {
 
       {!loading && !error && results.length > 0 && (
         <section aria-labelledby="search-results-heading" className="mt-5">
-          <h2 id="search-results-heading" className="text-base font-semibold text-(--color-text)">
+          <h2 id="search-results-heading" className="type-section-title text-(--color-text)">
             Search results
           </h2>
           <div className="mt-2 grid grid-cols-2 gap-3">
@@ -339,10 +339,10 @@ export default function Browse() {
                 />
 
                 <div className="p-2">
-                  <p className="truncate text-sm font-medium text-(--color-text)">
+                  <p className="type-show-title truncate text-(--color-text)">
                     {show.name}
                   </p>
-                  <p className="text-xs text-(--color-text-muted)">
+                  <p className="type-metadata text-(--color-text-muted)">
                     {year ?? 'Unknown year'}
                   </p>
 

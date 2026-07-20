@@ -67,9 +67,9 @@ function SettingsActionRow({ label, onPress, disabled, busyLabel }) {
       disabled={disabled}
       className="settings-action-row surface-interactive motion-press flex min-h-11 w-full items-center justify-between gap-3 border-0 px-4 py-2.5 text-left text-sm font-medium text-(--color-text) disabled:opacity-60"
     >
-      <span>{label}</span>
+      <span className="type-body">{label}</span>
       {busyLabel ? (
-        <span className="text-xs font-normal text-(--color-text-muted)">{busyLabel}</span>
+        <span className="type-caption text-(--color-text-muted)">{busyLabel}</span>
       ) : (
         <Chevron />
       )}
@@ -88,7 +88,7 @@ function SettingsSecondaryActionRow({ label, onPress, disabled, ariaLabel }) {
       aria-label={ariaLabel}
       className="settings-action-row settings-action-row--secondary surface-interactive motion-press flex min-h-11 w-full items-center justify-between gap-3 border-0 px-4 py-2.5 text-left text-xs font-normal text-(--color-text-secondary) disabled:opacity-60"
     >
-      <span>{label}</span>
+      <span className="type-body">{label}</span>
     </button>
   )
 }
@@ -113,17 +113,17 @@ const PREFERRED_HOUR_OPTIONS = Array.from(
 function SettingsSelectRow({ label, value, options, onChange, disabled, busyLabel }) {
   return (
     <div className="flex min-h-11 items-center justify-between gap-3 px-4 py-2.5">
-      <label htmlFor="notification-time-select" className="text-sm font-medium text-(--color-text)">
+      <label htmlFor="notification-time-select" className="type-body text-(--color-text)">
         {label}
       </label>
       <div className="flex items-center gap-2">
-        {busyLabel && <span className="text-xs font-normal text-(--color-text-muted)">{busyLabel}</span>}
+        {busyLabel && <span className="type-caption text-(--color-text-muted)">{busyLabel}</span>}
         <select
           id="notification-time-select"
           value={value}
           onChange={onChange}
           disabled={disabled}
-          className="surface-interactive focus-ring min-h-11 px-2.5 py-1.5 text-sm font-medium text-(--color-text) disabled:opacity-60"
+          className="surface-interactive focus-ring type-body min-h-11 px-2.5 py-1.5 text-(--color-text) disabled:opacity-60"
         >
           {options.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
@@ -143,8 +143,8 @@ function SettingsInfoRow({ label, status }) {
 
   return (
     <div className="flex min-h-11 items-center justify-between gap-3 px-4 py-2.5 text-sm">
-      <span className="font-medium text-(--color-text-secondary)">{label}</span>
-      <span className={`settings-status ${statusTone} min-w-0 max-w-[62%] break-words rounded-full px-2.5 py-1 text-right text-xs font-medium`}>
+      <span className="type-metadata text-(--color-text-secondary)">{label}</span>
+      <span className={`settings-status type-caption ${statusTone} min-w-0 max-w-[62%] break-words rounded-full px-2.5 py-1 text-right`}>
         {status}
       </span>
     </div>
@@ -154,8 +154,8 @@ function SettingsInfoRow({ label, status }) {
 function SettingsDescriptionRow({ label, description }) {
   return (
     <div className="flex min-h-11 flex-col justify-center gap-0.5 px-4 py-2.5">
-      <span className="text-sm font-medium text-(--color-text)">{label}</span>
-      <span className="text-xs text-(--color-text-muted)">{description}</span>
+      <span className="type-body text-(--color-text)">{label}</span>
+      <span className="type-caption text-(--color-text-muted)">{description}</span>
     </div>
   )
 }
@@ -169,7 +169,7 @@ function Banner({ tone, children, live }) {
         : 'status-banner--success'
   return (
     <p
-      className={`status-banner motion-banner mt-3 text-sm ${toneClass}`}
+      className={`status-banner motion-banner type-body mt-3 ${toneClass}`}
       aria-live={live ? 'polite' : undefined}
     >
       {children}

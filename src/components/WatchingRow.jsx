@@ -140,21 +140,21 @@ export default function WatchingRow({ show, isRemoving, isOpen, onOpenChange, on
           />
 
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-(--color-text)">{show.name}</p>
+            <p className="type-show-title truncate text-(--color-text)">{show.name}</p>
 
             {show.loadError ? (
-              <p className="mt-1 text-xs text-(--color-destructive)">Couldn't load episodes</p>
+              <p className="type-caption mt-1 text-(--color-destructive)">Couldn't load episodes</p>
             ) : show.status?.type === 'nextUp' ? (
-              <p className="mt-1 text-xs text-(--color-accent)">
+              <p className="type-caption mt-1 text-(--color-accent)">
                 Up next: S{show.status.season_number}E{show.status.episode_number}
                 {show.status.name ? ` · ${show.status.name}` : ''}
               </p>
             ) : show.status?.type === 'countdown' ? (
-              <span className="mt-1 inline-flex w-fit items-center rounded-full bg-(--color-upcoming-muted) px-2 py-0.5 text-xs font-medium text-(--color-upcoming)">
+              <span className="type-caption mt-1 inline-flex w-fit items-center rounded-full bg-(--color-upcoming-muted) px-2 py-0.5 text-(--color-upcoming)">
                 {watchingStatusLabel(show.status)}
               </span>
             ) : (
-              <p className="mt-1 text-xs text-(--color-text-muted)">Caught up</p>
+              <p className="type-caption mt-1 text-(--color-text-muted)">Caught up</p>
             )}
           </div>
 
