@@ -242,23 +242,33 @@ export default function WatchingRow({
     handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)
   }
 
-  // notReady: this load's mutation context for the show isn't populated yet
-  // — must never read as a false "caught up" just because the episode field
-  // is temporarily absent. accepted: the brief post-tap confirmation.
-  // available: a released unwatched episode can be quick-marked. caughtUp:
-  // no released unwatched episode remains — permanent until data changes.
-  const visualState = !canQuickMark
-    ? 'notReady'
-    : confirmState
-      ? 'accepted'
-      : episode
-        ? 'available'
-        : 'caughtUp'
+  // The row's caught-up-ness is knowable independently of whether this
+  // load's mutation context (canQuickMark) has hydrated yet — a cached or
+  // freshly-enriched row always carries a derived `status` once it reaches
+  // Watching's `shows` state (see deriveWatchingFields in watchingShows.js),
+  // so its color must never wait on readiness. Only a row that truly lacks
+  // both an episode identity and a derived status is unresolved.
+  const rowStatusIsKnown = Boolean(episode) || Boolean(show.status && typeof show.status.type === 'string')
+
+  // derivedStatus is readiness-independent: it reflects what the row's own
+  // data says right now. available/caughtUp render their real color from
+  // the very first paint, even while canQuickMark is still false — only
+  // interactivity (below) waits on readiness. accepted is the brief
+  // post-tap confirmation, and it is session-local: it can only ever be set
+  // from a real user tap in startConfirmation, never from hydration.
+  const derivedStatus = episode
+    ? 'available'
+    : rowStatusIsKnown
+      ? 'caughtUp'
+      : 'notReady'
+  const visualState = confirmState ? 'accepted' : derivedStatus
+
+  const isInteractive = canQuickMark && visualState === 'available' && !isQuickMarking
 
   function handleStatusClick(e) {
     e.preventDefault()
     e.stopPropagation()
-    if (visualState !== 'available' || isQuickMarking) return
+    if (!isInteractive) return
     const marked = {
       season_number: episode.season_number,
       episode_number: episode.episode_number,
@@ -268,13 +278,14 @@ export default function WatchingRow({
     startConfirmation(marked)
   }
 
-  const isInteractive = visualState === 'available' && !isQuickMarking
-  const statusLabel = visualState === 'available'
-    ? `Mark S${episode.season_number}E${episode.episode_number} of ${show.name} watched`
-    : visualState === 'accepted'
-      ? `Marked S${confirmState.season_number}E${confirmState.episode_number} of ${show.name} watched`
-      : visualState === 'caughtUp'
-        ? `Caught up with ${show.name}`
+  const statusLabel = visualState === 'accepted'
+    ? `Marked S${confirmState.season_number}E${confirmState.episode_number} of ${show.name} watched`
+    : visualState === 'caughtUp'
+      ? `Caught up with ${show.name}`
+      : visualState === 'available'
+        ? (isInteractive
+          ? `Mark S${episode.season_number}E${episode.episode_number} of ${show.name} watched`
+          : `Loading watch status for ${show.name}`)
         : `Loading watch status for ${show.name}`
 
   return (

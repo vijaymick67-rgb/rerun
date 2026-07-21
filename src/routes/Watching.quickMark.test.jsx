@@ -296,7 +296,7 @@ describe('Watching quick mark — one episode at a time', () => {
     expect(container.textContent).not.toContain('No shows yet')
   })
 
-  it('a cached row with a quick-mark-eligible episode reads not-ready (never falsely tappable or falsely caught up) until this load\'s mutation context is ready', async () => {
+  it('a cached row with a quick-mark-eligible episode reads grey/available immediately (never falsely caught up), and stays disabled/non-tappable until this load\'s mutation context is ready', async () => {
     const cachedShow = {
       id: 1, tmdb_id: 900, name: 'The Sopranos', poster_path: null,
       added_at: '2026-01-01T00:00:00Z', finished_at: null, hidden_at: null,
@@ -312,20 +312,24 @@ describe('Watching quick mark — one episode at a time', () => {
     await mountWatching()
 
     // The cached row renders instantly from localStorage, including its
-    // cached next-up label — but this load's watched_episodes fetch (and
-    // therefore the in-memory mutation context handleQuickMark needs) hasn't
-    // resolved yet, so the control must read not-ready: disabled, and never
-    // claiming either "Mark ... watched" or "Caught up".
+    // cached next-up label — the row already knows a released unwatched
+    // episode exists, so the check must be grey (available) from the first
+    // paint even though this load's watched_episodes fetch (and therefore
+    // the in-memory mutation context handleQuickMark needs) hasn't resolved
+    // yet. It must stay disabled and non-actionable until then, and must
+    // never claim "Mark ... watched" before it's truly tappable.
     expect(container.textContent).toContain('S2E5')
     expect(statusButton()).not.toBeNull()
-    expect(statusButton().getAttribute('data-status')).toBe('notReady')
+    expect(statusButton().getAttribute('data-status')).toBe('available')
     expect(statusButton().disabled).toBe(true)
     expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).toBeNull()
 
     await act(async () => { releaseGate() })
     await flush()
 
+    // Readiness only flips interactivity — the color was already correct.
     expect(statusButton().getAttribute('data-status')).toBe('available')
+    expect(statusButton().disabled).toBe(false)
     expect(container.querySelector('[aria-label="Mark S2E5 of The Sopranos watched"]')).not.toBeNull()
   })
 

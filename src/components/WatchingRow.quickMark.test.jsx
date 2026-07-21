@@ -51,6 +51,16 @@ const advancedShow = baseShow({
   nextReleasedUnwatchedEpisode: { season_number: 2, episode_number: 6, name: 'Ep 6', runtime: 44 },
 })
 
+// A row that genuinely lacks enough information to know its status — no
+// episode identity and no derived `status.type` at all. This is the only
+// shape that should ever render notReady; a known available/caughtUp row
+// must not, even while canQuickMark is still false (see the fresh-launch
+// replay regression coverage below).
+const unresolvedShow = baseShow({
+  status: null,
+  nextReleasedUnwatchedEpisode: null,
+})
+
 function staticHtml(show, props = {}) {
   return renderToStaticMarkup(
     <MemoryRouter>
@@ -219,16 +229,21 @@ describe('status button — surface stays neutral graphite in every state', () =
     }
   })
 
-  it('available, caughtUp and notReady all reach the DOM with the expected data-status', () => {
-    for (const status of ['available', 'caughtUp', 'notReady']) {
+  it('available and caughtUp reach the DOM with the expected data-status', () => {
+    for (const status of ['available', 'caughtUp']) {
       const html = staticHtml(baseShow({
         status: status === 'available' ? { type: 'nextUp', season_number: 1, episode_number: 1 } : { type: 'caughtUp' },
         nextReleasedUnwatchedEpisode: status === 'available'
           ? { season_number: 1, episode_number: 1, name: 'Ep', runtime: 30 }
           : null,
-      }), status === 'notReady' ? { canQuickMark: false } : {})
+      }))
       expect(html).toContain(`data-status="${status}"`)
     }
+  })
+
+  it('a genuinely unresolved row reaches the DOM with data-status="notReady"', () => {
+    const html = staticHtml(unresolvedShow)
+    expect(html).toContain('data-status="notReady"')
   })
 
   it('the button element never carries an inline background style or a Tailwind bg- utility class, in any state', async () => {
@@ -316,18 +331,25 @@ describe('status button — visual states', () => {
     }
   })
 
-  it('notReady: mutation context not yet populated, quiet and non-actionable, never falsely green', () => {
-    const html = staticHtml(nextUpShow, { canQuickMark: false })
+  it('notReady: a genuinely unresolved row (no episode, no status) is quiet and non-actionable, never falsely green', () => {
+    const html = staticHtml(unresolvedShow, { canQuickMark: false })
     expect(html).toContain("data-status=\"notReady\"")
     expect(html).toContain('disabled=""')
     expect(html).not.toContain("data-status=\"caughtUp\"")
-    expect(html).not.toContain('Caught up')
+    expect(html).not.toContain('aria-label="Caught up with The Sopranos"')
   })
 
-  it('a caught-up show that has not yet loaded its mutation context still reads notReady, never caughtUp', () => {
+  it('an available row not yet ready renders grey (available), never notReady — no false-unknown state', () => {
+    const html = staticHtml(nextUpShow, { canQuickMark: false })
+    expect(html).toContain('data-status="available"')
+    expect(html).toContain('disabled=""')
+  })
+
+  it('a caught-up show that has not yet loaded its mutation context still reads caughtUp (green) immediately — fresh-launch regression', () => {
     const html = staticHtml(caughtUpShow, { canQuickMark: false })
-    expect(html).toContain("data-status=\"notReady\"")
-    expect(html).not.toContain("data-status=\"caughtUp\"")
+    expect(html).toContain("data-status=\"caughtUp\"")
+    expect(html).toContain('disabled=""')
+    expect(html).not.toContain("data-status=\"notReady\"")
   })
 
   it('a tap fires the accepted (green) state synchronously, before any prop update', async () => {
@@ -352,8 +374,19 @@ describe('status button — accessibility', () => {
   })
 
   it('notReady state never claims caught-up in its label', () => {
+    const html = staticHtml(unresolvedShow, { canQuickMark: false })
+    expect(html).toContain('aria-label="Loading watch status for The Sopranos"')
+  })
+
+  it('an available-but-not-ready row uses a truthful non-actionable label, never claiming it is currently tappable', () => {
     const html = staticHtml(nextUpShow, { canQuickMark: false })
     expect(html).toContain('aria-label="Loading watch status for The Sopranos"')
+    expect(html).not.toContain('aria-label="Mark S2E5 of The Sopranos watched"')
+  })
+
+  it('a caught-up-but-not-ready row keeps its caught-up label, not a loading label', () => {
+    const html = staticHtml(caughtUpShow, { canQuickMark: false })
+    expect(html).toContain('aria-label="Caught up with The Sopranos"')
   })
 
   it('sets aria-busy while the mutation is pending', () => {
@@ -475,15 +508,23 @@ describe('status button — accepted-confirmation state machine (backlog/Soprano
     expect(button().getAttribute('data-status')).toBe('caughtUp')
   })
 
-  it('a not-ready row cannot be activated even if clicked', async () => {
-    const { button, onQuickMark } = await mount(nextUpShow, { canQuickMark: false })
+  it('a truly unresolved row cannot be activated even if clicked', async () => {
+    const { button, onQuickMark } = await mount(unresolvedShow, { canQuickMark: false })
     await click(button())
     expect(onQuickMark).not.toHaveBeenCalled()
     expect(button().getAttribute('data-status')).toBe('notReady')
   })
 
+  it('an available-but-not-ready row cannot be activated even if clicked, despite already being grey', async () => {
+    const { button, onQuickMark } = await mount(nextUpShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('available')
+    await click(button())
+    expect(onQuickMark).not.toHaveBeenCalled()
+    expect(button().getAttribute('data-status')).toBe('available')
+  })
+
   it('readiness resolving from notReady to available produces the correct grey state with no dimension change', async () => {
-    const { button, update } = await mount(nextUpShow, { canQuickMark: false })
+    const { button, update } = await mount(unresolvedShow, { canQuickMark: false })
     expect(button().getAttribute('data-status')).toBe('notReady')
     expect(button().className).toContain('watching-status-button')
 
@@ -491,6 +532,83 @@ describe('status button — accepted-confirmation state machine (backlog/Soprano
     expect(button().getAttribute('data-status')).toBe('available')
     // Same base class/footprint before and after — only the state attribute changed.
     expect(button().className).toContain('watching-status-button')
+  })
+})
+
+// Regression coverage for the grey → green replay on fresh app launch: a
+// cached row already knows its status well before readyShowIds/canQuickMark
+// hydrates. These tests rerender the exact same row data with only
+// canQuickMark changing, proving color/visual state never moves on that
+// transition alone — only interactivity does.
+describe('status button — fresh-launch hydration does not replay color', () => {
+  it('a cached caught-up row with canQuickMark=false renders green (caughtUp) immediately, disabled, with a caught-up label', () => {
+    const html = staticHtml(caughtUpShow, { canQuickMark: false })
+    expect(html).toContain('data-status="caughtUp"')
+    expect(html).toContain('disabled=""')
+    expect(html).toContain('aria-label="Caught up with The Sopranos"')
+  })
+
+  it('updating only canQuickMark from false to true on a caught-up row does not change its visual state or produce an accepted animation', async () => {
+    const { button, update, onQuickMark } = await mount(caughtUpShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+    expect(button().disabled).toBe(true)
+
+    await update(caughtUpShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+    expect(onQuickMark).not.toHaveBeenCalled()
+  })
+
+  it('a cached countdown row with no released unwatched episode renders green immediately and does not replay on readiness', async () => {
+    const { button, update } = await mount(countdownShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+    await update(countdownShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+  })
+
+  it('a cached completed row renders green immediately and does not replay on readiness', async () => {
+    const { button, update } = await mount(completedShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+    await update(completedShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+  })
+
+  it('a cached available row renders grey while canQuickMark=false, stays disabled, and readiness only enables it (no color change, never caughtUp)', async () => {
+    const { button, update } = await mount(nextUpShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(button().disabled).toBe(true)
+
+    await update(nextUpShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(button().disabled).toBe(false)
+  })
+
+  it('a truly unresolved row stays notReady until authoritative data arrives, then resolves to available or caughtUp as appropriate', async () => {
+    const { button, update: updateAvailable } = await mount(unresolvedShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('notReady')
+    await updateAvailable(nextUpShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('available')
+
+    const { button: button2, update: updateCaughtUp } = await mount(unresolvedShow, { canQuickMark: false })
+    expect(button2().getAttribute('data-status')).toBe('notReady')
+    await updateCaughtUp(caughtUpShow, { canQuickMark: true })
+    expect(button2().getAttribute('data-status')).toBe('caughtUp')
+  })
+
+  it('a real later data change (new weekly episode released) still flips a caught-up row from green to grey, gated by readiness', async () => {
+    const { button, update } = await mount(caughtUpShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+
+    const releasedShow = baseShow({
+      status: { type: 'nextUp', season_number: 3, episode_number: 1, name: 'Premiere' },
+      nextReleasedUnwatchedEpisode: { season_number: 3, episode_number: 1, name: 'Premiere', runtime: 55 },
+    })
+    await update(releasedShow, { canQuickMark: false })
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(button().disabled).toBe(true)
+
+    await update(releasedShow, { canQuickMark: true })
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(button().disabled).toBe(false)
   })
 })
 

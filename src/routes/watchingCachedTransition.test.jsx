@@ -179,19 +179,24 @@ describe('Watching cache pre-render transition (Feature 2)', () => {
     expect(container.textContent).not.toContain('New episode soon')
     expect(container.querySelector('.watching-countdown-pill')).toBeNull()
     expect(container.querySelector('.progress-track')).not.toBeNull() // bar immediate
-    // The status button is always mounted, but must read as not-ready (never
-    // a false green "caught up") until this load's mutation context settles.
-    expect(container.querySelector('.watching-status-button').getAttribute('data-status')).toBe('notReady')
+    // The cached row already knows a released unwatched episode exists, so
+    // the check must be grey (available) from this very first frame — never
+    // a false "not ready" placeholder and never a false green "caught up" —
+    // even though this load's mutation context hasn't settled yet. It must
+    // stay disabled/non-actionable until then.
+    expect(container.querySelector('.watching-status-button').getAttribute('data-status')).toBe('available')
     expect(container.querySelector('.watching-status-button').disabled).toBe(true)
 
     await act(async () => releaseGate())
     await flush()
 
     // Background enrichment confirms the same state — no remount, no flash,
-    // exactly one row — and the button becomes actionable now that context is ready.
+    // exactly one row — and the button becomes actionable now that context is
+    // ready, with no color change.
     expect(container.querySelectorAll('.watching-row')).toHaveLength(1)
     expect(container.textContent).toContain('Up next: S2E1')
     expect(container.querySelector('.watching-status-button').getAttribute('data-status')).toBe('available')
+    expect(container.querySelector('.watching-status-button').disabled).toBe(false)
   })
 
   it('background enrichment corrects a delayed episode cleanly, reverting the optimistic transition', async () => {
