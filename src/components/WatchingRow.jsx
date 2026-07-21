@@ -272,27 +272,19 @@ export default function WatchingRow({
       ref={rowRef}
       className="watching-row content-row relative overflow-hidden"
       data-success-flash={showSuccessFlash ? 'true' : undefined}
+      data-swipe-glow={rightSwipeArmed ? 'armed' : rightSwipePulling ? 'pulling' : undefined}
     >
       {quickMarkEpisode && (
         <div
           aria-hidden="true"
-          className={`watching-swipe-underlay absolute inset-0 flex items-center pl-5${
+          className={`watching-swipe-underlay absolute inset-0${
             rightSwipeArmed ? ' watching-swipe-underlay--armed' : ''
           }`}
           style={{
             opacity: underlayOpacity,
             transition: dragX !== null ? 'none' : 'opacity 200ms ease',
           }}
-        >
-          <span className="watching-swipe-underlay__glyph">
-            <svg
-              viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-            >
-              <path d="m5 12 4 4L19 6" />
-            </svg>
-          </span>
-        </div>
+        />
       )}
 
       <button
@@ -316,7 +308,7 @@ export default function WatchingRow({
         <Link
           to={`/watching/${show.tmdb_id}`}
           onClick={handleLinkClick}
-          className="motion-press flex min-w-0 flex-1 items-center gap-3 pr-14 text-left"
+          className="motion-press watching-row-link flex min-w-0 flex-1 items-center gap-3 text-left"
         >
           <ProgressiveImage
             src={show.poster_path ? POSTER_BASE + show.poster_path : null}

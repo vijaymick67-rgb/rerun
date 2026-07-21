@@ -18,6 +18,7 @@ import WatchingRow from './WatchingRow'
 // which Vite intercepts as an asset reference for .css specifically) so this
 // resolves to a plain filesystem read under vitest.
 const indexCss = readFileSync('src/index.css', 'utf8')
+const watchingRowSrc = readFileSync('src/components/WatchingRow.jsx', 'utf8')
 
 const RIGHT_ACTIVATION_DISTANCE = 80
 const RIGHT_MAX_PULL = 104
@@ -435,6 +436,124 @@ describe('right-swipe quick mark — visual state', () => {
   })
 })
 
+describe('right-swipe quick mark — mobile visual polish', () => {
+  it('hides the standalone tick by default and only shows it under the hover+fine-pointer (desktop) media query', () => {
+    const ruleStart = indexCss.indexOf('.watching-quick-mark {')
+    const rule = indexCss.slice(ruleStart, indexCss.indexOf('}', ruleStart) + 1)
+    expect(rule).toContain('display: none;')
+
+    const desktopBlockStart = indexCss.indexOf(
+      '@media (hover: hover) and (pointer: fine) {\n  .watching-quick-mark {',
+    )
+    expect(desktopBlockStart).toBeGreaterThan(-1)
+    const desktopBlock = indexCss.slice(desktopBlockStart, indexCss.indexOf('}', desktopBlockStart) + 3)
+    expect(desktopBlock).toContain('display: flex;')
+  })
+
+  it('the tick remains a real, mounted button (not conditionally unmounted) so desktop click/focus/keyboard behavior is untouched', async () => {
+    const { front } = await mount(baseShow())
+    const button = container.querySelector('.watching-quick-mark')
+    expect(button).not.toBeNull()
+    expect(button.tagName).toBe('BUTTON')
+    expect(front).not.toBeNull()
+  })
+
+  it('the row link no longer reserves the old unconditional pr-14 space, and reserves it responsively instead', () => {
+    expect(watchingRowSrc).not.toContain('pr-14')
+    expect(watchingRowSrc).toContain('watching-row-link')
+
+    const mobileRuleStart = indexCss.indexOf('.watching-row-link {')
+    const mobileRule = indexCss.slice(mobileRuleStart, indexCss.indexOf('}', mobileRuleStart) + 1)
+    expect(mobileRule).toContain('padding-right: 0.75rem;')
+
+    const desktopBlockStart = indexCss.indexOf(
+      '@media (hover: hover) and (pointer: fine) {\n  .watching-row-link {',
+    )
+    expect(desktopBlockStart).toBeGreaterThan(-1)
+    const desktopBlock = indexCss.slice(desktopBlockStart, indexCss.indexOf('}', desktopBlockStart) + 3)
+    expect(desktopBlock).toContain('padding-right: 3.5rem;')
+  })
+
+  it('the right-swipe underlay renders as clean color only — no glyph, no chip, no svg', async () => {
+    const { front } = await mount(baseShow())
+    await fire(front, 'touchstart', 40, 40)
+    await fire(front, 'touchmove', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
+
+    const underlay = container.querySelector('.watching-swipe-underlay')
+    expect(underlay).not.toBeNull()
+    expect(underlay.querySelector('svg')).toBeNull()
+    expect(container.querySelector('.watching-swipe-underlay__glyph')).toBeNull()
+    expect(underlay.textContent).toBe('')
+
+    await fire(front, 'touchend', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
+  })
+
+  it('the underlay glyph markup and its CSS are removed outright (no dangling unused rule)', () => {
+    expect(watchingRowSrc).not.toContain('watching-swipe-underlay__glyph')
+    expect(indexCss).not.toContain('.watching-swipe-underlay__glyph')
+  })
+
+  it('a pulling (unarmed) row carries the pulling edge-glow attribute, which clears back to nothing at rest', async () => {
+    const { front } = await mount(baseShow())
+    const row = () => container.querySelector('.watching-row')
+    expect(row().getAttribute('data-swipe-glow')).toBeNull()
+
+    await fire(front, 'touchstart', 40, 40)
+    await fire(front, 'touchmove', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
+    expect(row().getAttribute('data-swipe-glow')).toBe('pulling')
+
+    await fire(front, 'touchend', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
+    expect(row().getAttribute('data-swipe-glow')).toBeNull()
+  })
+
+  it('an armed row carries the stronger "armed" edge-glow attribute deterministically at the activation threshold', async () => {
+    const { front } = await mount(baseShow())
+    const row = () => container.querySelector('.watching-row')
+
+    await fire(front, 'touchstart', 40, 40)
+    await fire(front, 'touchmove', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
+    expect(row().getAttribute('data-swipe-glow')).toBe('pulling')
+
+    await fire(front, 'touchmove', 40 + RIGHT_ACTIVATION_DISTANCE, 40)
+    expect(row().getAttribute('data-swipe-glow')).toBe('armed')
+
+    await fire(front, 'touchend', 40 + RIGHT_ACTIVATION_DISTANCE, 40)
+    expect(row().getAttribute('data-swipe-glow')).toBeNull()
+  })
+
+  it('a caught-up (ineligible) row never carries the swipe edge-glow attribute', async () => {
+    const { front } = await mount(caughtUpShow)
+    await drag(front, { dx: 90 })
+    expect(container.querySelector('.watching-row').getAttribute('data-swipe-glow')).toBeNull()
+  })
+
+  it('the edge-glow CSS is a layered inset box-shadow (perimeter bloom, not a large opaque fill), richer once armed', () => {
+    const pullingStart = indexCss.indexOf(".watching-row[data-swipe-glow] {")
+    expect(pullingStart).toBeGreaterThan(-1)
+    const pullingRule = indexCss.slice(pullingStart, indexCss.indexOf('}', pullingStart) + 1)
+    expect(pullingRule).toContain('box-shadow:')
+    expect(pullingRule).toContain('inset 0 0 0 1px')
+    expect(pullingRule).toContain('inset 0 0 22px 0')
+
+    const armedStart = indexCss.indexOf(".watching-row[data-swipe-glow='armed'] {")
+    expect(armedStart).toBeGreaterThan(-1)
+    const armedRule = indexCss.slice(armedStart, indexCss.indexOf('}', armedStart) + 1)
+    expect(armedRule).toContain('inset 0 0 0 1.5px')
+    expect(armedRule).toContain('inset 0 0 30px 0')
+    // Armed is strictly richer: higher color-mix percentages than the plain pulling state.
+    const pullingPct = Number(pullingRule.match(/inset 0 0 22px 0 color-mix\(in srgb, var\(--color-success\) (\d+)%/)[1])
+    const armedPct = Number(armedRule.match(/inset 0 0 30px 0 color-mix\(in srgb, var\(--color-success\) (\d+)%/)[1])
+    expect(armedPct).toBeGreaterThan(pullingPct)
+  })
+
+  it('the accepted-feedback flash uses the same inset edge-glow technique (never a 9999px full-box flood)', () => {
+    const flashStart = indexCss.indexOf('@keyframes watching-row-success-flash {')
+    const flashBlock = indexCss.slice(flashStart, indexCss.indexOf('\n}\n', flashStart) + 3)
+    expect(flashBlock).not.toContain('9999px')
+    expect(flashBlock).toContain('inset 0 0 30px 0')
+  })
+})
+
 describe('right-swipe quick mark — reduced motion', () => {
   it('the success-flash animation and underlay opacity transition fall under the existing universal reduced-motion override', () => {
     const reducedMotionBlock = indexCss.slice(indexCss.indexOf('@media (prefers-reduced-motion: reduce)'))
@@ -443,6 +562,10 @@ describe('right-swipe quick mark — reduced motion', () => {
     // Neither new rule opts itself out of that universal collapse.
     expect(indexCss).not.toMatch(/watching-row-success-flash[^}]*animation-duration:\s*(?!1ms)/)
     expect(indexCss).not.toMatch(/watching-swipe-underlay[^}]*transition-duration:\s*(?!1ms)/)
+  })
+
+  it('the swipe edge-glow transition also falls under the universal reduced-motion override (no opt-out)', () => {
+    expect(indexCss).not.toMatch(/\[data-swipe-glow\][^}]*transition-duration:\s*(?!1ms)/)
   })
 })
 
