@@ -854,23 +854,34 @@ body {
   background: color-mix(in srgb, var(--color-success) 30%, var(--color-success-muted));
 }
 
-/* Perimeter glow while a right swipe is in progress. Uses only inset
-   box-shadows (never a bare outer glow) so it can never escape the row's own
-   overflow-hidden clip and bleed into a neighbouring row — the blur is
-   strongest near the edges and fades inward, reading as a soft bloom around
-   the card rather than a flat colored fill. Richer once the pull crosses the
-   armed threshold; cleared entirely (no attribute) at rest. */
-.watching-row[data-swipe-glow] {
-  transition: box-shadow 150ms ease;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--color-success) 38%, transparent),
-    inset 0 0 22px 0 color-mix(in srgb, var(--color-success) 24%, transparent);
+/* The front row is the visible, opaque (bg-(--color-surface)) surface that
+   paints above the outer .watching-row — the glow has to live here, not on
+   the outer wrapper, or the front row's own background simply covers it.
+   border-radius: inherit keeps the glow's inset corners matching the card's
+   actual rounded shape rather than the front row's own (unset) square box;
+   the outer row's overflow-hidden still clips the composite so the glow can
+   never bleed into a neighbouring row. */
+.watching-row-front {
+  border-radius: inherit;
 }
 
-.watching-row[data-swipe-glow='armed'] {
+/* Perimeter glow while a right swipe is in progress. Uses only inset
+   box-shadows (never a bare outer glow) so it stays within the front row's
+   own rounded bounds — the blur is strongest near the edges and fades
+   inward, reading as a soft bloom around the card rather than a flat
+   colored fill. Richer once the pull crosses the armed threshold; cleared
+   entirely (no attribute) at rest. */
+.watching-row-front[data-swipe-glow] {
+  transition: box-shadow 150ms ease;
   box-shadow:
-    inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 55%, transparent),
-    inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 34%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-success) 42%, transparent),
+    inset 0 0 22px 0 color-mix(in srgb, var(--color-success) 30%, transparent);
+}
+
+.watching-row-front[data-swipe-glow='armed'] {
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 62%, transparent),
+    inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 42%, transparent);
 }
 
 /* Brief post-quick-mark success wash — the same edge-glow treatment as
@@ -887,8 +898,8 @@ body {
   }
   30% {
     box-shadow:
-      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 62%, transparent),
-      inset 0 0 34px 0 color-mix(in srgb, var(--color-success) 42%, transparent);
+      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 70%, transparent),
+      inset 0 0 34px 0 color-mix(in srgb, var(--color-success) 50%, transparent);
   }
   100% {
     box-shadow:
@@ -897,7 +908,7 @@ body {
   }
 }
 
-.watching-row[data-success-flash='true'] {
+.watching-row-front[data-success-flash='true'] {
   animation: watching-row-success-flash 400ms ease-out;
 }
 

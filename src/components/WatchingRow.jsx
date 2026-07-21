@@ -271,8 +271,6 @@ export default function WatchingRow({
     <div
       ref={rowRef}
       className="watching-row content-row relative overflow-hidden"
-      data-success-flash={showSuccessFlash ? 'true' : undefined}
-      data-swipe-glow={rightSwipeArmed ? 'armed' : rightSwipePulling ? 'pulling' : undefined}
     >
       {quickMarkEpisode && (
         <div
@@ -299,7 +297,9 @@ export default function WatchingRow({
 
       <div
         ref={frontRef}
-        className="relative flex touch-pan-y gap-3 bg-(--color-surface) p-3"
+        className="watching-row-front relative flex touch-pan-y gap-3 bg-(--color-surface) p-3"
+        data-success-flash={showSuccessFlash ? 'true' : undefined}
+        data-swipe-glow={rightSwipeArmed ? 'armed' : rightSwipePulling ? 'pulling' : undefined}
         style={{
           transform: `translateX(${translateX}px)`,
           transition: dragX !== null ? 'none' : 'transform 200ms ease',
