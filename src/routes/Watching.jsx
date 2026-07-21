@@ -468,6 +468,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       quickMarkQueuesRef.current.set(show.tmdb_id, queue)
     }
 
+    let overlayToken = null
     try {
       await toggleEpisodeOptimistically({
         queue,
@@ -503,7 +504,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
           // Keep a cross-route overlay alive while this upsert is pending, so
           // a Show/Season Detail page opened immediately after the tap can't
           // revert it from a stale background read (see detailCache.js).
-          setOptimisticWatchOverlay({
+          overlayToken = setOptimisticWatchOverlay({
             tmdbShowId: show.tmdb_id,
             seasonNumber: episode.season_number,
             episodeNumber: episode.episode_number,
@@ -521,6 +522,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         tmdbShowId: show.tmdb_id,
         seasonNumber: episode.season_number,
         episodeNumber: episode.episode_number,
+        token: overlayToken,
       })
       setQuickMarkingIds((prev) => {
         const next = new Set(prev)

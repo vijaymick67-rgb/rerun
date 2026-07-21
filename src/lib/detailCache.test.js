@@ -251,4 +251,58 @@ describe('cross-route optimistic watch overlay', () => {
 
     expect(reconcileWatchedListWithOverlay(TMDB_ID, ['1:1'])).toEqual(['1:1'])
   })
+
+  describe('ownership tokens for queued toggles of the same episode', () => {
+    it('an older operation settling does not remove a newer pending overlay', () => {
+      // Toggle A marks the episode watched, then a rapid re-toggle B overwrites
+      // the same overlay key (say back to unwatched) before A's upsert settles.
+      const tokenA = setOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true,
+      })
+      const tokenB = setOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: false,
+      })
+      expect(tokenB).not.toBe(tokenA)
+
+      // A settles first and clears with its now-stale token: must be a no-op.
+      clearOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, token: tokenA,
+      })
+
+      // B's overlay is still live — a stale detail refresh during B cannot
+      // revert it, and B's intended (unwatched) value is what reconciles.
+      expect(reconcileWatchedListWithOverlay(TMDB_ID, ['2:5'])).toEqual([])
+    })
+
+    it('keeps the latest overlay until its own mutation settles, then clears it', () => {
+      setOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true,
+      })
+      const tokenB = setOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: false,
+      })
+
+      // B settling with its own token removes the entry; later reads win.
+      clearOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, token: tokenB,
+      })
+      expect(reconcileWatchedListWithOverlay(TMDB_ID, ['2:5'])).toEqual(['2:5'])
+    })
+
+    it('bumps the revision on a stale-token clear no-op just as little as any no-op clear', () => {
+      const tokenA = setOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true,
+      })
+      setOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: false,
+      })
+      const before = getOptimisticWatchRevision()
+
+      clearOptimisticWatchOverlay({
+        tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, token: tokenA,
+      })
+
+      expect(getOptimisticWatchRevision()).toBe(before)
+    })
+  })
 })

@@ -172,7 +172,7 @@ function ShowDetailInner({ tmdbId }) {
     percent: totalProgressPercent,
   } = computeReleasedProgress(episodesBySeason, watched)
 
-  function commitWatched(nextWatchedSet, seasonNumber) {
+  function commitWatched(nextWatchedSet, seasonNumber, overlayTokens) {
     const next = new Set(nextWatchedSet)
     watchedRef.current = next
     setWatched(next)
@@ -187,20 +187,25 @@ function ShowDetailInner({ tmdbId }) {
     })
     // Hold a per-episode cross-route overlay across the whole season while this
     // bulk toggle's upsert is pending, so a Season Detail page opened right
-    // after can't revert it from a stale read (see detailCache.js).
+    // after can't revert it from a stale read (see detailCache.js). Each
+    // episode's ownership token is recorded so this toggle settling only clears
+    // the entries it still owns, not ones a later toggle overwrote.
     for (const ep of episodesBySeason[seasonNumber] ?? []) {
-      setOptimisticWatchOverlay({
+      overlayTokens.set(ep.episode_number, setOptimisticWatchOverlay({
         tmdbShowId: numericTmdbId,
         seasonNumber,
         episodeNumber: ep.episode_number,
         watched: next.has(episodeKey(seasonNumber, ep.episode_number)),
-      })
+      }))
     }
   }
 
   function toggleSeason(seasonNumber) {
     setError(null)
     const seasonEpisodes = episodesBySeason[seasonNumber] ?? []
+    // Per-episode ownership tokens for the overlay entries this toggle sets;
+    // the latest commit (optimistic or rollback) overwrites them.
+    const overlayTokens = new Map()
     toggleSeasonOptimistically({
       queue: mutationQueueRef.current,
       supabase,
@@ -208,7 +213,7 @@ function ShowDetailInner({ tmdbId }) {
       tmdbShowId: numericTmdbId,
       seasonNumber,
       getWatched: () => watchedRef.current,
-      commitWatched: (next) => commitWatched(next, seasonNumber),
+      commitWatched: (next) => commitWatched(next, seasonNumber, overlayTokens),
     })
       .catch((err) => setError(err?.message || 'Could not update this season. Try again.'))
       .finally(() => {
@@ -217,6 +222,7 @@ function ShowDetailInner({ tmdbId }) {
             tmdbShowId: numericTmdbId,
             seasonNumber,
             episodeNumber: ep.episode_number,
+            token: overlayTokens.get(ep.episode_number),
           })
         }
       })

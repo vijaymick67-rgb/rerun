@@ -85,8 +85,17 @@ export function clearAllDetailCaches() {
 // mid-fetch. Entries clear when the originating mutation settles (success or
 // failure) — on failure the cache patch has already rolled back; on success
 // the server reflects the change and later reads are authoritative.
-const optimisticWatchOverlay = new Map() // `${tmdbShowId}:${season}:${episode}` -> watched(boolean)
+// Each entry is `${tmdbShowId}:${season}:${episode}` -> { watched, token }.
+// The token is the ownership guard: rapid queued toggles of the SAME episode
+// each call setOptimisticWatchOverlay, so a later mutation overwrites the
+// earlier one's entry (with its own newer token). When the earlier mutation
+// then settles, its clear must NOT drop the entry the later mutation still
+// depends on. clearOptimisticWatchOverlay therefore removes an entry only when
+// the caller's token still matches the one currently stored — otherwise a
+// newer owner has taken over and its own clear will do the removal later.
+const optimisticWatchOverlay = new Map()
 let optimisticWatchRevision = 0
+let optimisticWatchToken = 0
 
 function overlayKey(tmdbShowId, seasonNumber, episodeNumber) {
   return `${Number(tmdbShowId)}:${Number(seasonNumber)}:${Number(episodeNumber)}`
@@ -96,15 +105,27 @@ export function getOptimisticWatchRevision() {
   return optimisticWatchRevision
 }
 
+// Registers an in-flight optimistic change for one episode and returns the
+// ownership token the caller must hand back to clearOptimisticWatchOverlay
+// when its mutation settles.
 export function setOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeNumber, watched }) {
-  optimisticWatchOverlay.set(overlayKey(tmdbShowId, seasonNumber, episodeNumber), watched)
+  optimisticWatchToken += 1
+  const token = optimisticWatchToken
+  optimisticWatchOverlay.set(overlayKey(tmdbShowId, seasonNumber, episodeNumber), { watched, token })
   optimisticWatchRevision += 1
+  return token
 }
 
-export function clearOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeNumber }) {
-  if (optimisticWatchOverlay.delete(overlayKey(tmdbShowId, seasonNumber, episodeNumber))) {
-    optimisticWatchRevision += 1
-  }
+// Clears this episode's overlay entry only if `token` still owns it. Passing a
+// stale token (a newer mutation has since overwritten the entry) is a no-op, so
+// an older operation settling can't strip a newer pending one's protection.
+export function clearOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeNumber, token }) {
+  const mapKey = overlayKey(tmdbShowId, seasonNumber, episodeNumber)
+  const entry = optimisticWatchOverlay.get(mapKey)
+  if (!entry) return
+  if (token != null && entry.token !== token) return
+  optimisticWatchOverlay.delete(mapKey)
+  optimisticWatchRevision += 1
 }
 
 export function resetOptimisticWatchOverlay() {
@@ -122,13 +143,13 @@ export function resetOptimisticWatchOverlay() {
 // by a pending overlay are carried through untouched.
 export function reconcileWatchedListWithOverlay(tmdbShowId, watchedList, { seasonNumber } = {}) {
   const next = new Set(Array.isArray(watchedList) ? watchedList : [])
-  for (const [k, watched] of optimisticWatchOverlay) {
+  for (const [k, entry] of optimisticWatchOverlay) {
     const [showPart, seasonPart, episodePart] = k.split(':')
     if (Number(showPart) !== Number(tmdbShowId)) continue
     const season = Number(seasonPart)
     if (seasonNumber != null && season !== Number(seasonNumber)) continue
     const key = episodeKey(season, Number(episodePart))
-    if (watched) next.add(key)
+    if (entry.watched) next.add(key)
     else next.delete(key)
   }
   return [...next]

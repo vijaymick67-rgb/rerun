@@ -143,7 +143,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   // cache (if present) through the shared helper — same principle as
   // Watching.jsx's confirmRemove updating its cache right after the
   // mutation succeeds, extended across the two related cache entries.
-  function commitWatchedEpisode(nextWatchedSet, episodeNumber) {
+  function commitWatchedEpisode(nextWatchedSet, episodeNumber, overlayHolder) {
     const next = new Set(nextWatchedSet)
     watchedRef.current = next
     setWatched(next)
@@ -156,8 +156,9 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     })
     // Hold a cross-route overlay while this toggle's upsert is pending, so the
     // parent Show Detail page opened right after can't revert it from a stale
-    // read (see detailCache.js).
-    setOptimisticWatchOverlay({
+    // read (see detailCache.js). The token records who owns this entry so a
+    // rapid re-toggle's later mutation isn't cleared by this one settling.
+    overlayHolder.token = setOptimisticWatchOverlay({
       tmdbShowId: numericTmdbId,
       seasonNumber: numericSeasonNumber,
       episodeNumber,
@@ -168,6 +169,10 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
   function toggleEpisode(episode) {
     if (!hasAired(episode)) return
     setError(null)
+    // Mutable holder so the latest commit (optimistic set, or rollback set for
+    // the last failed tap) records the overlay token this toggle owns; the
+    // finally clears only if that token still owns the entry.
+    const overlayHolder = { token: null }
     toggleEpisodeOptimistically({
       queue: mutationQueueRef.current,
       supabase,
@@ -175,13 +180,14 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       seasonNumber: numericSeasonNumber,
       episode,
       getWatched: () => watchedRef.current,
-      commitWatched: (next) => commitWatchedEpisode(next, episode.episode_number),
+      commitWatched: (next) => commitWatchedEpisode(next, episode.episode_number, overlayHolder),
     })
       .catch((err) => setError(err?.message || 'Could not update this episode. Try again.'))
       .finally(() => clearOptimisticWatchOverlay({
         tmdbShowId: numericTmdbId,
         seasonNumber: numericSeasonNumber,
         episodeNumber: episode.episode_number,
+        token: overlayHolder.token,
       }))
   }
 
