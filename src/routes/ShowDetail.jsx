@@ -13,6 +13,10 @@ import {
   readDetailCache,
   writeDetailCache,
   clearDetailCache,
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+  reconcileWatchedListWithOverlay,
+  getOptimisticWatchRevision,
 } from '../lib/detailCache'
 import ShowDetailSkeleton from '../components/ShowDetailSkeleton'
 import WatchedCircle from '../components/WatchedCircle'
@@ -46,6 +50,7 @@ function ShowDetailInner({ tmdbId }) {
 
     async function load() {
       const mutationVersion = mutationQueueRef.current.version
+      const overlayRevision = getOptimisticWatchRevision(numericTmdbId)
       setError(null)
       try {
         const { data: trackedShow, error: showError } = await withTimeout((signal) => {
@@ -113,8 +118,15 @@ function ShowDetailInner({ tmdbId }) {
         setShow(trackedShow)
         setSeasons(seasonList)
         setEpisodesBySeason(bySeason)
-        const nextWatched = mutationQueueRef.current.version === mutationVersion
-          ? new Set(watchedList)
+        // Trust the fetched rows only if no local mutation happened during the
+        // load AND no cross-route optimistic overlay changed while it was in
+        // flight; even then, reconcile against any still-pending overlay so a
+        // stale snapshot can't drop an unsettled optimistic mark (e.g. a
+        // Watching quick tick tapped just before navigating here). Otherwise
+        // keep the live (optimistic) watched set. See detailCache.js.
+        const overlayUnchanged = getOptimisticWatchRevision(numericTmdbId) === overlayRevision
+        const nextWatched = mutationQueueRef.current.version === mutationVersion && overlayUnchanged
+          ? new Set(reconcileWatchedListWithOverlay(numericTmdbId, watchedList))
           : watchedRef.current
         watchedRef.current = nextWatched
         setWatched(nextWatched)
@@ -160,7 +172,7 @@ function ShowDetailInner({ tmdbId }) {
     percent: totalProgressPercent,
   } = computeReleasedProgress(episodesBySeason, watched)
 
-  function commitWatched(nextWatchedSet, seasonNumber) {
+  function commitWatched(nextWatchedSet, seasonNumber, overlayTokens) {
     const next = new Set(nextWatchedSet)
     watchedRef.current = next
     setWatched(next)
@@ -173,19 +185,47 @@ function ShowDetailInner({ tmdbId }) {
       episodes: seasonCached?.episodes ?? episodesBySeason[seasonNumber] ?? [],
       watchedList: watchedList.filter((key) => key.startsWith(`${seasonNumber}:`)),
     })
+    // Hold a per-episode cross-route overlay across the whole season while this
+    // bulk toggle's upsert is pending, so a Season Detail page opened right
+    // after can't revert it from a stale read (see detailCache.js). Each
+    // episode's ownership token is recorded so this toggle settling only clears
+    // the entries it still owns, not ones a later toggle overwrote.
+    for (const ep of episodesBySeason[seasonNumber] ?? []) {
+      overlayTokens.set(ep.episode_number, setOptimisticWatchOverlay({
+        tmdbShowId: numericTmdbId,
+        seasonNumber,
+        episodeNumber: ep.episode_number,
+        watched: next.has(episodeKey(seasonNumber, ep.episode_number)),
+      }))
+    }
   }
 
   function toggleSeason(seasonNumber) {
     setError(null)
+    const seasonEpisodes = episodesBySeason[seasonNumber] ?? []
+    // Per-episode ownership tokens for the overlay entries this toggle sets;
+    // the latest commit (optimistic or rollback) overwrites them.
+    const overlayTokens = new Map()
     toggleSeasonOptimistically({
       queue: mutationQueueRef.current,
       supabase,
-      episodes: episodesBySeason[seasonNumber] ?? [],
+      episodes: seasonEpisodes,
       tmdbShowId: numericTmdbId,
       seasonNumber,
       getWatched: () => watchedRef.current,
-      commitWatched: (next) => commitWatched(next, seasonNumber),
-    }).catch((err) => setError(err?.message || 'Could not update this season. Try again.'))
+      commitWatched: (next) => commitWatched(next, seasonNumber, overlayTokens),
+    })
+      .catch((err) => setError(err?.message || 'Could not update this season. Try again.'))
+      .finally(() => {
+        for (const ep of seasonEpisodes) {
+          clearOptimisticWatchOverlay({
+            tmdbShowId: numericTmdbId,
+            seasonNumber,
+            episodeNumber: ep.episode_number,
+            token: overlayTokens.get(ep.episode_number),
+          })
+        }
+      })
   }
 
   return (

@@ -11,6 +11,11 @@ import {
   selectTrackedShowsForWatching,
 } from '../lib/watchingShows'
 import { createWatchMutationQueue, toggleEpisodeOptimistically } from '../lib/seasonWatchMutations'
+import {
+  patchEpisodeWatchedCaches,
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+} from '../lib/detailCache'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { advanceCachedWatchingRows } from '../lib/watchingCacheTransition'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
@@ -463,6 +468,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       quickMarkQueuesRef.current.set(show.tmdb_id, queue)
     }
 
+    let overlayToken = null
     try {
       await toggleEpisodeOptimistically({
         queue,
@@ -475,17 +481,49 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
           runtime: episode.runtime,
         },
         getWatched: () => context.watched,
+        // Runs once for the optimistic set and, only for the latest failed
+        // tap, again for the rollback set (see runOptimisticWatchMutation's
+        // queue.version check in seasonWatchMutations.js) — patching the
+        // Show/Season Detail caches here, synchronously and before the
+        // Supabase call resolves, inherits that same version protection
+        // instead of needing a second rollback path.
         commitWatched: (nextWatched) => {
           context.watched = nextWatched
           applyLocalShowFields(
             show.id,
             deriveWatchingFields(context.episodesBySeason, nextWatched, context.details),
           )
+          const isWatched =
+            nextWatched.has(episodeKey(episode.season_number, episode.episode_number))
+          patchEpisodeWatchedCaches({
+            tmdbShowId: show.tmdb_id,
+            seasonNumber: episode.season_number,
+            episodeNumber: episode.episode_number,
+            watched: isWatched,
+          })
+          // Keep a cross-route overlay alive while this upsert is pending, so
+          // a Show/Season Detail page opened immediately after the tap can't
+          // revert it from a stale background read (see detailCache.js).
+          overlayToken = setOptimisticWatchOverlay({
+            tmdbShowId: show.tmdb_id,
+            seasonNumber: episode.season_number,
+            episodeNumber: episode.episode_number,
+            watched: isWatched,
+          })
         },
       })
     } catch {
       setQuickMarkError('Couldn\'t mark that episode watched. Try again.')
     } finally {
+      // The mutation has settled (committed on success, rolled back on
+      // failure); the cache/live state is now authoritative, so drop the
+      // overlay and let later detail reads win.
+      clearOptimisticWatchOverlay({
+        tmdbShowId: show.tmdb_id,
+        seasonNumber: episode.season_number,
+        episodeNumber: episode.episode_number,
+        token: overlayToken,
+      })
       setQuickMarkingIds((prev) => {
         const next = new Set(prev)
         next.delete(show.id)
