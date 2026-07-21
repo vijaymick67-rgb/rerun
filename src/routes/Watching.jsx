@@ -11,6 +11,7 @@ import {
   selectTrackedShowsForWatching,
 } from '../lib/watchingShows'
 import { createWatchMutationQueue, toggleEpisodeOptimistically } from '../lib/seasonWatchMutations'
+import { patchEpisodeWatchedCaches } from '../lib/detailCache'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { advanceCachedWatchingRows } from '../lib/watchingCacheTransition'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
@@ -475,12 +476,24 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
           runtime: episode.runtime,
         },
         getWatched: () => context.watched,
+        // Runs once for the optimistic set and, only for the latest failed
+        // tap, again for the rollback set (see runOptimisticWatchMutation's
+        // queue.version check in seasonWatchMutations.js) — patching the
+        // Show/Season Detail caches here, synchronously and before the
+        // Supabase call resolves, inherits that same version protection
+        // instead of needing a second rollback path.
         commitWatched: (nextWatched) => {
           context.watched = nextWatched
           applyLocalShowFields(
             show.id,
             deriveWatchingFields(context.episodesBySeason, nextWatched, context.details),
           )
+          patchEpisodeWatchedCaches({
+            tmdbShowId: show.tmdb_id,
+            seasonNumber: episode.season_number,
+            episodeNumber: episode.episode_number,
+            watched: nextWatched.has(episodeKey(episode.season_number, episode.episode_number)),
+          })
         },
       })
     } catch {

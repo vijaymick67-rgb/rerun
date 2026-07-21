@@ -63,6 +63,7 @@ vi.mock('../lib/tvmaze', () => ({
 
 import { getSeasonEpisodes, getShowDetails } from '../lib/tmdb'
 import Watching from './Watching'
+import { showDetailCacheKey, seasonDetailCacheKey, writeDetailCache } from '../lib/detailCache'
 
 const SHOW = { id: 1, tmdb_id: 900, name: 'The Sopranos', poster_path: null, added_at: '2026-01-01T00:00:00Z', finished_at: null, hidden_at: null }
 
@@ -444,5 +445,77 @@ describe('Watching quick mark — one episode at a time', () => {
     await flush()
     expect(upsertCalls).toHaveLength(2)
     expect(upsertCalls[1].episode_number).toBe(6)
+  })
+})
+
+describe('Watching quick mark — Show/Season Detail cache synchronization', () => {
+  function seedDetailCaches() {
+    writeDetailCache(showDetailCacheKey(900), {
+      show: { id: 1, tmdb_id: 900, name: 'The Sopranos' },
+      seasons: [{ season_number: 1 }, { season_number: 2 }],
+      episodesBySeason: { 1: season1, 2: season2 },
+      watchedList: ['1:1', '1:2', '2:1', '2:2', '2:3', '2:4'],
+    })
+    writeDetailCache(seasonDetailCacheKey(900, 2), {
+      showName: 'The Sopranos',
+      episodes: season2,
+      watchedList: ['2:1', '2:2', '2:3', '2:4'],
+    })
+  }
+
+  it('patches both the Show Detail and Season Detail caches before the Supabase upsert resolves', async () => {
+    let resolveUpsert
+    upsertImpl = () => new Promise((resolve) => { resolveUpsert = resolve })
+    seedDetailCaches()
+    await mountWatching()
+
+    const button = container.querySelector('.watching-quick-mark')
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    await flush()
+
+    // The Supabase write is still pending (upsertImpl's promise unresolved),
+    // yet the optimistic commit must already have patched both caches.
+    expect(upsertCalls).toHaveLength(1)
+    const showCache = JSON.parse(localStorage.getItem('showdetail_cache:v1:900'))
+    const seasonCache = JSON.parse(localStorage.getItem('seasondetail_cache:v1:900:2'))
+    expect(showCache.watchedList).toContain('2:5')
+    expect(seasonCache.watchedList).toContain('2:5')
+
+    await act(async () => { resolveUpsert({ error: null }) })
+    await flush()
+  })
+
+  it('retains the patched cache values after the Supabase mutation succeeds', async () => {
+    seedDetailCaches()
+    await mountWatching()
+
+    const button = container.querySelector('.watching-quick-mark')
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    await flush()
+
+    const showCache = JSON.parse(localStorage.getItem('showdetail_cache:v1:900'))
+    const seasonCache = JSON.parse(localStorage.getItem('seasondetail_cache:v1:900:2'))
+    expect(showCache.watchedList.sort()).toEqual(['1:1', '1:2', '2:1', '2:2', '2:3', '2:4', '2:5'])
+    expect(seasonCache.watchedList.sort()).toEqual(['2:1', '2:2', '2:3', '2:4', '2:5'])
+    // Unrelated fields on both caches are untouched by the patch.
+    expect(showCache.seasons).toEqual([{ season_number: 1 }, { season_number: 2 }])
+    expect(seasonCache.showName).toBe('The Sopranos')
+  })
+
+  it('rolls the patched cache values back in both caches when the Supabase mutation fails', async () => {
+    upsertImpl = async () => { throw new Error('network down') }
+    seedDetailCaches()
+    await mountWatching()
+
+    const button = container.querySelector('.watching-quick-mark')
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    await flush()
+
+    const showCache = JSON.parse(localStorage.getItem('showdetail_cache:v1:900'))
+    const seasonCache = JSON.parse(localStorage.getItem('seasondetail_cache:v1:900:2'))
+    expect(showCache.watchedList).not.toContain('2:5')
+    expect(seasonCache.watchedList).not.toContain('2:5')
+    expect(showCache.watchedList.sort()).toEqual(['1:1', '1:2', '2:1', '2:2', '2:3', '2:4'])
+    expect(seasonCache.watchedList.sort()).toEqual(['2:1', '2:2', '2:3', '2:4'])
   })
 })

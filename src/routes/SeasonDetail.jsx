@@ -7,10 +7,10 @@ import { episodeKey, hasAired, formatDate, episodeReleaseInfo } from '../lib/wat
 import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import {
-  showDetailCacheKey,
   seasonDetailCacheKey,
   readDetailCache,
   writeDetailCache,
+  patchEpisodeWatchedCaches,
 } from '../lib/detailCache'
 import SeasonDetailSkeleton from '../components/SeasonDetailSkeleton'
 import WatchedCircle from '../components/WatchedCircle'
@@ -125,37 +125,21 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     setLoadAttempt((attempt) => attempt + 1)
   }
 
-  // Writes the season's own cache with the new watched set, and patches the
-  // parent ShowDetail cache (if present) so its watched counts don't go
-  // stale until its own background refresh runs — same principle as
-  // Watching.jsx's confirmRemove updating its cache right after the mutation
-  // succeeds, extended across the two related cache entries.
-  function syncWatchedCaches(nextWatchedSet) {
-    const watchedList = [...nextWatchedSet]
-    writeDetailCache(cacheKey, {
-      showName,
-      episodes,
-      watchedList,
-    })
-
-    const showCacheKey = showDetailCacheKey(numericTmdbId)
-    const showCached = readDetailCache(showCacheKey)
-    if (showCached) {
-      const otherSeasonsWatched = (showCached.watchedList ?? []).filter(
-        (key) => !key.startsWith(`${numericSeasonNumber}:`),
-      )
-      writeDetailCache(showCacheKey, {
-        ...showCached,
-        watchedList: [...otherSeasonsWatched, ...watchedList],
-      })
-    }
-  }
-
-  function commitWatched(nextWatchedSet) {
+  // Updates local state with the new watched set, then patches this exact
+  // episode into both this season's own cache and the parent ShowDetail
+  // cache (if present) through the shared helper — same principle as
+  // Watching.jsx's confirmRemove updating its cache right after the
+  // mutation succeeds, extended across the two related cache entries.
+  function commitWatchedEpisode(nextWatchedSet, episodeNumber) {
     const next = new Set(nextWatchedSet)
     watchedRef.current = next
     setWatched(next)
-    syncWatchedCaches(next)
+    patchEpisodeWatchedCaches({
+      tmdbShowId: numericTmdbId,
+      seasonNumber: numericSeasonNumber,
+      episodeNumber,
+      watched: next.has(episodeKey(numericSeasonNumber, episodeNumber)),
+    })
   }
 
   function toggleEpisode(episode) {
@@ -168,7 +152,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       seasonNumber: numericSeasonNumber,
       episode,
       getWatched: () => watchedRef.current,
-      commitWatched,
+      commitWatched: (next) => commitWatchedEpisode(next, episode.episode_number),
     })
       .catch((err) => setError(err?.message || 'Could not update this episode. Try again.'))
   }

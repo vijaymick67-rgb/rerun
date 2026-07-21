@@ -4,6 +4,8 @@
 // baked-in constants, since SeasonDetail needs to patch ShowDetail's cache
 // (and vice versa) after a watched-toggle mutation, not just its own.
 
+import { episodeKey } from './watchHelpers.js'
+
 export function showDetailCacheKey(tmdbId) {
   return `showdetail_cache:v1:${tmdbId}`
 }
@@ -68,4 +70,56 @@ export function patchShowDetailState(tmdbId, patch) {
     ...cached,
     show: { ...cached.show, ...patch },
   })
+}
+
+function withPatchedWatchedKey(watchedList, key, watched) {
+  const next = new Set(watchedList ?? [])
+  if (watched) next.add(key)
+  else next.delete(key)
+  return [...next]
+}
+
+// Patches exactly one episode's watched state into whichever of the Show
+// Detail / Season Detail localStorage caches currently exist for it — the
+// mechanism that lets Watching's quick-mark tap keep those two
+// stale-while-revalidate caches coherent with the optimistic mutation it
+// just committed, without waiting on the Supabase round-trip. Called once
+// per optimistic commit (see seasonWatchMutations.js's commitWatched
+// contract) and once again, with the opposite `watched` value, on rollback —
+// so it naturally inherits that mechanism's per-mutation version protection
+// instead of needing an independent rollback path.
+//
+// Each cache is patched only if it already holds a recognizable, validly
+// shaped entry (the same `cached?.show` / episodes-array checks the routes
+// themselves rely on) — a cache that was never opened, or one that failed to
+// parse, is left alone rather than fabricated. Every other field on a
+// patched cache (show/seasons/episodesBySeason, or showName/episodes) is
+// carried over unchanged, and only the exact `episodeKey` for this episode
+// is added to or removed from that cache's own watchedList.
+export function patchEpisodeWatchedCaches({ tmdbShowId, seasonNumber, episodeNumber, watched }) {
+  const key = episodeKey(seasonNumber, episodeNumber)
+  let showPatched = false
+  let seasonPatched = false
+
+  const showKey = showDetailCacheKey(tmdbShowId)
+  const showCached = readDetailCache(showKey)
+  if (showCached?.show) {
+    writeDetailCache(showKey, {
+      ...showCached,
+      watchedList: withPatchedWatchedKey(showCached.watchedList, key, watched),
+    })
+    showPatched = true
+  }
+
+  const seasonKey = seasonDetailCacheKey(tmdbShowId, seasonNumber)
+  const seasonCached = readDetailCache(seasonKey)
+  if (seasonCached && Array.isArray(seasonCached.episodes)) {
+    writeDetailCache(seasonKey, {
+      ...seasonCached,
+      watchedList: withPatchedWatchedKey(seasonCached.watchedList, key, watched),
+    })
+    seasonPatched = true
+  }
+
+  return { showPatched, seasonPatched }
 }
