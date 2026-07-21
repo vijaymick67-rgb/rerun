@@ -8,6 +8,37 @@ import ProgressiveImage from './ProgressiveImage'
 const REVEAL_WIDTH = 84
 const DRAG_THRESHOLD = 6
 
+// How much more horizontal than vertical movement must be present before a
+// touch sequence is allowed to lock into a horizontal (left/right) swipe at
+// all. Below this ratio, vertical scrolling always wins — this is what keeps
+// an accidental diagonal drag during a scroll from ever arming the
+// no-confirmation right-swipe quick mark.
+const HORIZONTAL_DOMINANCE_RATIO = 1.3
+
+// A rightward drag must travel at least this far before a release will fire
+// quick mark — deliberately larger than DRAG_THRESHOLD (which only decides
+// horizontal vs. vertical) so a slight flick can never activate a
+// destructive-adjacent, no-confirmation action.
+const RIGHT_ACTIVATION_DISTANCE = 80
+
+// The row is never allowed to travel further right than this. Travel past
+// RIGHT_ACTIVATION_DISTANCE is resisted (see pullWithResistance) so the
+// gesture reads as "armed", not as the row sliding fully away.
+const RIGHT_MAX_PULL = 104
+const RIGHT_RESISTANCE_DIVISOR = 3
+
+// How long the post-quick-mark success wash stays visible before it clears
+// itself — independent of the Supabase mutation's own timing, since the row
+// must never look "stuck" green regardless of how the mutation resolves.
+const SUCCESS_FLASH_DURATION = 400
+
+function pullWithResistance(deltaX) {
+  if (deltaX <= RIGHT_ACTIVATION_DISTANCE) return deltaX
+  const resisted = RIGHT_ACTIVATION_DISTANCE +
+    (deltaX - RIGHT_ACTIVATION_DISTANCE) / RIGHT_RESISTANCE_DIVISOR
+  return Math.min(RIGHT_MAX_PULL, resisted)
+}
+
 export default function WatchingRow({
   show, isRemoving, isOpen, onOpenChange, onRemove, onQuickMark, isQuickMarking,
   canQuickMark = true,
@@ -18,26 +49,63 @@ export default function WatchingRow({
   const dragState = useRef(null)
   const dragXRef = useRef(null)
   const [dragX, setDragX] = useState(null)
+  const successTimerRef = useRef(null)
+  const [showSuccessFlash, setShowSuccessFlash] = useState(false)
 
   const baseX = isOpen ? -REVEAL_WIDTH : 0
   const translateX = dragX !== null ? dragX : baseX
+
+  // A cached row can render nextReleasedUnwatchedEpisode long before this
+  // load's mutation context for it is ready (see Watching.jsx's
+  // readyShowIds) — the control must not appear tappable or swipeable in
+  // that window, since acting on it before context exists would silently do
+  // nothing.
+  const quickMarkEpisode = canQuickMark ? (show.nextReleasedUnwatchedEpisode ?? null) : null
+  const rightSwipeEligible = !!quickMarkEpisode && !isQuickMarking
+  const showProgressBar = (show.releasedEpisodeCount ?? 0) > 0 &&
+    (show.releasedWatchedCount ?? 0) < (show.releasedEpisodeCount ?? 0)
+
+  // Read inside the touch handlers below via .current so a right-swipe
+  // release always acts on the freshest show/eligibility, without forcing
+  // the gesture effect to re-subscribe its listeners on every render (the
+  // same pattern Watching.jsx uses for showsRef).
+  const showRef = useRef(show)
+  showRef.current = show
+  const onQuickMarkRef = useRef(onQuickMark)
+  onQuickMarkRef.current = onQuickMark
+  const rightSwipeEligibleRef = useRef(rightSwipeEligible)
+  rightSwipeEligibleRef.current = rightSwipeEligible
 
   function setDrag(value) {
     dragXRef.current = value
     setDragX(value)
   }
 
+  useEffect(() => () => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current)
+  }, [])
+
   useEffect(() => {
     const el = frontRef.current
     if (!el) return
 
     function handleTouchStart(e) {
+      // A gesture that starts on an interactive control (tick, Remove) must
+      // never be reinterpreted as a row swipe underneath it.
+      if (e.target && e.target.closest && e.target.closest('button')) {
+        dragState.current = null
+        return
+      }
       const touch = e.touches[0]
       dragState.current = {
         startX: touch.clientX,
         startY: touch.clientY,
         base: isOpen ? -REVEAL_WIDTH : 0,
         isHorizontal: null,
+        // Locked the instant the gesture is classified horizontal, so a
+        // reversal mid-drag can never cross over into the opposite action.
+        family: null,
+        rightEligible: rightSwipeEligibleRef.current,
       }
     }
 
@@ -50,13 +118,35 @@ export default function WatchingRow({
 
       if (state.isHorizontal === null) {
         if (Math.abs(deltaX) < DRAG_THRESHOLD && Math.abs(deltaY) < DRAG_THRESHOLD) return
-        state.isHorizontal = Math.abs(deltaX) > Math.abs(deltaY)
+        const horizontalDominant = Math.abs(deltaX) > Math.abs(deltaY) * HORIZONTAL_DOMINANCE_RATIO
+        if (!horizontalDominant) {
+          // Vertical scrolling wins — never revisited for this gesture.
+          state.isHorizontal = false
+          return
+        }
+        if (state.base < 0 || deltaX < 0) {
+          state.family = 'reveal'
+        } else if (state.rightEligible) {
+          state.family = 'quickmark'
+        } else {
+          // Rightward drag on an ineligible (e.g. caught-up) row is not a
+          // recognized gesture at all — no displacement, no armed state,
+          // nothing to cancel or bounce back from.
+          state.isHorizontal = false
+          return
+        }
+        state.isHorizontal = true
       }
       if (!state.isHorizontal) return
 
       e.preventDefault()
-      const next = Math.min(0, Math.max(-REVEAL_WIDTH, state.base + deltaX))
-      setDrag(next)
+      if (state.family === 'reveal') {
+        const next = Math.min(0, Math.max(-REVEAL_WIDTH, state.base + deltaX))
+        setDrag(next)
+      } else {
+        const pulled = deltaX > 0 ? pullWithResistance(deltaX) : 0
+        setDrag(Math.max(0, pulled))
+      }
     }
 
     function handleTouchEnd() {
@@ -66,20 +156,36 @@ export default function WatchingRow({
         const current = dragXRef.current !== null ? dragXRef.current : state.base
         const shouldOpen = current < -REVEAL_WIDTH / 2
         onOpenChange(shouldOpen ? show.id : null)
+        if (state.family === 'quickmark' && current >= RIGHT_ACTIVATION_DISTANCE) {
+          onQuickMarkRef.current(showRef.current)
+          setShowSuccessFlash(true)
+          if (successTimerRef.current) clearTimeout(successTimerRef.current)
+          successTimerRef.current = setTimeout(() => {
+            successTimerRef.current = null
+            setShowSuccessFlash(false)
+          }, SUCCESS_FLASH_DURATION)
+        }
       }
+      setDrag(null)
+    }
+
+    function handleTouchCancel() {
+      // A cancelled sequence never activates quick mark and never commits a
+      // Remove-reveal state change — it just snaps back to rest.
+      dragState.current = null
       setDrag(null)
     }
 
     el.addEventListener('touchstart', handleTouchStart, { passive: true })
     el.addEventListener('touchmove', handleTouchMove, { passive: false })
     el.addEventListener('touchend', handleTouchEnd, { passive: true })
-    el.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+    el.addEventListener('touchcancel', handleTouchCancel, { passive: true })
 
     return () => {
       el.removeEventListener('touchstart', handleTouchStart)
       el.removeEventListener('touchmove', handleTouchMove)
       el.removeEventListener('touchend', handleTouchEnd)
-      el.removeEventListener('touchcancel', handleTouchEnd)
+      el.removeEventListener('touchcancel', handleTouchCancel)
     }
   }, [isOpen, show.id, onOpenChange])
 
@@ -107,14 +213,6 @@ export default function WatchingRow({
     handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)
   }
 
-  // A cached row can render nextReleasedUnwatchedEpisode long before this
-  // load's mutation context for it is ready (see Watching.jsx's
-  // readyShowIds) — the control must not appear tappable in that window,
-  // since tapping it before context exists would silently do nothing.
-  const quickMarkEpisode = canQuickMark ? (show.nextReleasedUnwatchedEpisode ?? null) : null
-  const showProgressBar = (show.releasedEpisodeCount ?? 0) > 0 &&
-    (show.releasedWatchedCount ?? 0) < (show.releasedEpisodeCount ?? 0)
-
   function handleQuickMarkClick(e) {
     e.preventDefault()
     e.stopPropagation()
@@ -122,11 +220,38 @@ export default function WatchingRow({
     onQuickMark(show)
   }
 
+  const rightSwipePulling = dragX !== null && dragX > 0
+  const rightSwipeArmed = rightSwipePulling && dragX >= RIGHT_ACTIVATION_DISTANCE
+  const underlayOpacity = rightSwipePulling ? Math.min(1, dragX / RIGHT_ACTIVATION_DISTANCE) : 0
+
   return (
     <div
       ref={rowRef}
       className="watching-row content-row relative overflow-hidden"
+      data-success-flash={showSuccessFlash ? 'true' : undefined}
     >
+      {quickMarkEpisode && (
+        <div
+          aria-hidden="true"
+          className={`watching-swipe-underlay absolute inset-0 flex items-center pl-5${
+            rightSwipeArmed ? ' watching-swipe-underlay--armed' : ''
+          }`}
+          style={{
+            opacity: underlayOpacity,
+            transition: dragX !== null ? 'none' : 'opacity 200ms ease',
+          }}
+        >
+          <span className="watching-swipe-underlay__glyph">
+            <svg
+              viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+            >
+              <path d="m5 12 4 4L19 6" />
+            </svg>
+          </span>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={() => onRemove(show)}
