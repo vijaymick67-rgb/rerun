@@ -858,23 +858,10 @@ body {
   color: var(--color-accent-strong);
 }
 
+/* Pending state keeps the same tick glyph and chip footprint (no spinner
+   swap, no resize) — just a quieter opacity so it still reads as disabled. */
 .watching-quick-mark:disabled .watching-quick-mark__chip {
   opacity: 0.55;
-}
-
-/* Same footprint as the tick glyph it replaces while pending, so the chip
-   never changes size between idle/loading. */
-.watching-quick-mark__spinner {
-  width: 0.875rem;
-  height: 0.875rem;
-  border: 2px solid color-mix(in srgb, var(--color-accent-strong) 35%, transparent);
-  border-top-color: var(--color-accent-strong);
-  border-radius: 999px;
-  animation: watching-quick-mark-spin 700ms linear infinite;
-}
-
-@keyframes watching-quick-mark-spin {
-  to { transform: rotate(360deg); }
 }
 
 .watching-countdown-pill {
