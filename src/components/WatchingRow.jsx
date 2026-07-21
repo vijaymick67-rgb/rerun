@@ -209,20 +209,23 @@ export default function WatchingRow({
             onClick={handleQuickMarkClick}
             disabled={isQuickMarking}
             aria-busy={isQuickMarking}
-            aria-label={`Mark S${quickMarkEpisode.season_number}E${quickMarkEpisode.episode_number} of ${show.name} watched`}
+            // While pending, the row may already have optimistically advanced
+            // to the NEXT episode (see Watching.jsx's commitWatched, which
+            // runs before the Supabase call resolves) — quickMarkEpisode at
+            // that point names the episode after the one actually in flight,
+            // so the label must not claim that episode is being marked.
+            aria-label={isQuickMarking
+              ? `Updating watched status for ${show.name}`
+              : `Mark S${quickMarkEpisode.season_number}E${quickMarkEpisode.episode_number} of ${show.name} watched`}
             className="motion-press watching-quick-mark absolute top-1/2 right-1 -translate-y-1/2 disabled:cursor-default"
           >
             <span className="watching-quick-mark__chip">
-              {isQuickMarking ? (
-                <span className="watching-quick-mark__spinner" aria-hidden="true" />
-              ) : (
-                <svg
-                  viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none"
-                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                >
-                  <path d="m5 12 4 4L19 6" />
-                </svg>
-              )}
+              <svg
+                viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none"
+                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+              >
+                <path d="m5 12 4 4L19 6" />
+              </svg>
             </span>
           </button>
         )}

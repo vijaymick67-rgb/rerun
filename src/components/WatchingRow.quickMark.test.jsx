@@ -182,17 +182,38 @@ describe('WatchingRow — quick mark interaction (mounted DOM)', () => {
     expect(link.getAttribute('href')).toBe('/watching/100')
   })
 
-  it('disables the control and swaps in a stable-size spinner while pending', async () => {
+  it('disables the control while pending, with no spinner and the same stable chip', async () => {
     const { onQuickMark } = await mount(nextUpShow, { isQuickMarking: true })
     const button = container.querySelector('.watching-quick-mark')
     expect(button.disabled).toBe(true)
     expect(button.getAttribute('aria-busy')).toBe('true')
-    expect(container.querySelector('.watching-quick-mark__spinner')).not.toBeNull()
-    expect(container.querySelector('.watching-quick-mark__chip')).not.toBeNull()
+    expect(container.querySelector('.watching-quick-mark__spinner')).toBeNull()
+    const chip = container.querySelector('.watching-quick-mark__chip')
+    expect(chip).not.toBeNull()
+    // Same check glyph as idle — no icon morph, no swap to a loading treatment.
+    expect(chip.querySelector('svg path[d="m5 12 4 4L19 6"]')).not.toBeNull()
     await act(async () => {
       button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(onQuickMark).not.toHaveBeenCalled()
+  })
+
+  it('does not imply the newly advanced episode is already being marked while pending', async () => {
+    await mount(nextUpShow, { isQuickMarking: true })
+    const button = container.querySelector('.watching-quick-mark')
+    // The pending label must stay neutral rather than naming
+    // nextReleasedUnwatchedEpisode, since that field may already reflect the
+    // episode AFTER the one whose mutation is actually in flight.
+    expect(button.getAttribute('aria-label')).toBe('Updating watched status for The Sopranos')
+    expect(button.getAttribute('aria-label')).not.toContain('Mark S')
+  })
+
+  it('idle and pending markup use the identical chip class (no layout shift)', () => {
+    const idleHtml = staticHtml(nextUpShow, { isQuickMarking: false })
+    const pendingHtml = staticHtml(nextUpShow, { isQuickMarking: true })
+    const chipClass = /class="(watching-quick-mark__chip)"/.exec(idleHtml)?.[1]
+    expect(chipClass).toBe('watching-quick-mark__chip')
+    expect(pendingHtml).toContain('class="watching-quick-mark__chip"')
   })
 
   it('desktop hover-remove and quick mark are independent, non-overlapping controls', async () => {
