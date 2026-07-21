@@ -23,6 +23,13 @@
   --color-warning-muted: rgb(225 173 104 / 0.12);
   --color-destructive: #f0808a;
   --color-destructive-muted: rgb(240 128 138 / 0.12);
+
+  /* Status-button check glyph only — deliberately not --color-success (that
+     teal is used elsewhere for banners/toasts). The button surface itself
+     never carries these; only the check glyph and its tiny supporting
+     tint (border/inner-highlight/check-shadow) do. */
+  --color-status-check-idle: #8d93b4;
+  --color-status-check-done: #a7e85b;
   --color-overlay: rgb(3 6 14 / 0.76);
   --color-skeleton: #151e30;
   --color-skeleton-highlight: #202d45;
@@ -840,135 +847,121 @@ body {
   }
 }
 
-/* Understated emerald underlay revealed on the left as the row is pulled
-   right (see WatchingRow.jsx's quick-mark swipe). Sits behind the front row
-   in DOM/paint order, so it's invisible until the row actually translates.
-   Clean color only — no glyph/chip — the edge glow below (data-swipe-glow)
-   carries the "this is armed" signal instead. */
-.watching-swipe-underlay {
-  background: var(--color-success-muted);
-  color: var(--color-success);
-}
-
-.watching-swipe-underlay--armed {
-  background: color-mix(in srgb, var(--color-success) 30%, var(--color-success-muted));
-}
-
-/* The front row is the visible, opaque (bg-(--color-surface)) surface that
-   paints above the outer .watching-row — the glow has to live here, not on
-   the outer wrapper, or the front row's own background simply covers it.
-   border-radius: inherit keeps the glow's inset corners matching the card's
-   actual rounded shape rather than the front row's own (unset) square box;
-   the outer row's overflow-hidden still clips the composite so the glow can
-   never bleed into a neighbouring row. */
 .watching-row-front {
   border-radius: inherit;
 }
 
-/* Perimeter glow while a right swipe is in progress. Uses only inset
-   box-shadows (never a bare outer glow) so it stays within the front row's
-   own rounded bounds — the blur is strongest near the edges and fades
-   inward, reading as a soft bloom around the card rather than a flat
-   colored fill. Richer once the pull crosses the armed threshold; cleared
-   entirely (no attribute) at rest. */
-.watching-row-front[data-swipe-glow] {
-  transition: box-shadow 150ms ease;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--color-success) 42%, transparent),
-    inset 0 0 22px 0 color-mix(in srgb, var(--color-success) 30%, transparent);
-}
-
-.watching-row-front[data-swipe-glow='armed'] {
-  box-shadow:
-    inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 62%, transparent),
-    inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 42%, transparent);
-}
-
-/* Brief post-quick-mark success wash — the same edge-glow treatment as
-   data-swipe-glow, momentarily richer, so "gesture accepted" reads as a
-   continuation of the swipe's own glow rather than a different effect. A
-   soft inset edge tint (never a large opaque fill) so poster art and text
-   are never obscured; auto-clears via the animation itself plus
-   WatchingRow's own timer, so it can never get stuck on a failed mutation. */
-@keyframes watching-row-success-flash {
-  0% {
-    box-shadow:
-      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 0%, transparent),
-      inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 0%, transparent);
-  }
-  30% {
-    box-shadow:
-      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 70%, transparent),
-      inset 0 0 34px 0 color-mix(in srgb, var(--color-success) 50%, transparent);
-  }
-  100% {
-    box-shadow:
-      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 0%, transparent),
-      inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 0%, transparent);
-  }
-}
-
-.watching-row-front[data-success-flash='true'] {
-  animation: watching-row-success-flash 400ms ease-out;
-}
-
-/* Reclaimed right-side space on mobile now that the standalone tick is
-   hidden there (see .watching-quick-mark below) — only the right-swipe
-   gesture handles quick mark on touch. Desktop still reserves room so title/
-   status text never collides with the visible tick. */
+/* Right-side reserve for the always-present status button — long
+   titles/status text never collide with it. Desktop adds more reserve
+   below for the hover Remove control that sits beside it. */
 .watching-row-link {
-  padding-right: 0.75rem;
+  padding-right: 3.5rem;
 }
 
 @media (hover: hover) and (pointer: fine) {
+  /* The hover-revealed Remove control sits immediately to the left of the
+     status button on desktop (see the button's own right-[3.75rem]
+     position in WatchingRow.jsx) — reserve extra text width so long
+     titles/status text never run under either control. Mobile has no
+     hover Remove (it's swipe-revealed instead), so it keeps the smaller
+     single-control reserve above. */
   .watching-row-link {
-    padding-right: 3.5rem;
+    padding-right: 6rem;
   }
 }
 
-/* Compact quick-mark control: a full 44px touch target via invisible padding
-   around a visually smaller, lighter soft-edged chip than WatchedCircle's
-   filled circular bulk-watch control. Touch/coarse-pointer layouts hide it
-   entirely — the right-swipe gesture is the mobile quick-mark action, and a
-   redundant on-screen tick has no reason to reserve space or paint there.
-   Desktop/fine-pointer layouts keep it exactly as before. */
-.watching-quick-mark {
-  display: none;
-  min-height: 2.75rem;
-  min-width: 2.75rem;
+/* Persistent rounded-square quick-mark / caught-up status control. One fixed
+   footprint AND one fixed dark-graphite surface across every visual state
+   (never circular, never resized, never recolored) — the square itself must
+   never read as a grey tile or a green tile. Only the check glyph (and a
+   tiny supporting tint in the border/inner-highlight/check-shadow) changes
+   between states; the body always stays this same premium neutral surface.
+   Sized so the visible box and the minimum touch target are the same 44px
+   box; no separate invisible hit-area needed. */
+.watching-status-button {
+  display: flex;
+  width: 2.75rem;
+  height: 2.75rem;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-control);
+  border-radius: 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
   outline: none;
+  background: linear-gradient(175deg, #171b25, #11151e);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    inset 0 -1px 0 rgb(0 0 0 / 0.25),
+    0 2px 6px rgb(3 6 14 / 0.35);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .watching-quick-mark {
-    display: flex;
-  }
+.watching-status-button__check {
+  width: 21px;
+  height: 21px;
+  color: var(--color-status-check-idle);
+  transition: color 150ms ease, filter 150ms ease;
 }
 
-.watching-quick-mark:focus-visible {
+.watching-status-button:focus-visible {
   outline: 2px solid var(--color-accent-strong);
   outline-offset: 2px;
 }
 
-.watching-quick-mark__chip {
-  display: flex;
-  width: 1.75rem;
-  height: 1.75rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-compact);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
-  background: var(--color-accent-muted);
-  color: var(--color-accent-strong);
+/* Available — actionable: a released unwatched episode can be quick-marked.
+   Surface stays the same dark graphite; only the check glyph, in a calm
+   smoky periwinkle-grey, signals it's tappable (paired with the shared
+   raised surface + pointer/press feedback + accessible label). */
+.watching-status-button[data-status='available'] .watching-status-button__check {
+  color: var(--color-status-check-idle);
 }
 
-/* Pending state keeps the same tick glyph and chip footprint (no spinner
-   swap, no resize) — just a quieter opacity so it still reads as disabled. */
-.watching-quick-mark:disabled .watching-quick-mark__chip {
-  opacity: 0.55;
+/* Accepted (brief post-tap confirmation) and caughtUp (persistent) share
+   the check color — a fresh pistachio-lime, never emerald — plus one tiny
+   supporting tint each in the border and inner highlight immediately
+   around the glyph. The square body itself stays graphite in both. */
+.watching-status-button[data-status='caughtUp'],
+.watching-status-button[data-status='accepted'] {
+  border-color: color-mix(in srgb, var(--color-status-check-done) 30%, var(--color-border) 70%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    inset 0 -1px 0 rgb(0 0 0 / 0.25),
+    0 0 0 1px color-mix(in srgb, var(--color-status-check-done) 12%, transparent),
+    0 2px 6px rgb(3 6 14 / 0.35);
+}
+
+.watching-status-button[data-status='caughtUp'] .watching-status-button__check,
+.watching-status-button[data-status='accepted'] .watching-status-button__check {
+  color: var(--color-status-check-done);
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check-done) 35%, transparent));
+}
+
+/* The accepted confirmation is the same design as caughtUp, momentarily a
+   touch richer around the glyph only — never a visually distinct button —
+   so it reads as "this state, just landed" rather than a different control. */
+.watching-status-button[data-status='accepted'] {
+  border-color: color-mix(in srgb, var(--color-status-check-done) 46%, var(--color-border) 54%);
+}
+
+.watching-status-button[data-status='accepted'] .watching-status-button__check {
+  animation: status-check-pop 150ms ease-out;
+}
+
+@keyframes status-check-pop {
+  from {
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check-done) 35%, transparent)) brightness(1.4);
+  }
+
+  to {
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check-done) 35%, transparent)) brightness(1);
+  }
+}
+
+/* Not ready: this load's mutation context for the show hasn't settled yet.
+   Same graphite body; the check just dims to a low-opacity neutral — never
+   a colored tint, never the pistachio-lime caught-up read. */
+.watching-status-button[data-status='notReady'] .watching-status-button__check {
+  color: var(--color-text-muted);
+  opacity: 0.5;
 }
 
 .watching-countdown-pill {
