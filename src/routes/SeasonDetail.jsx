@@ -49,7 +49,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
     async function load() {
       const mutationVersion = mutationQueueRef.current.version
-      const overlayRevision = getOptimisticWatchRevision()
+      const overlayRevision = getOptimisticWatchRevision(numericTmdbId)
       setError(null)
       try {
         // getShowAirstamps never throws (any failure → {}), so it's safe to
@@ -98,7 +98,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
         // flight; even then, reconcile against any still-pending overlay so a
         // stale snapshot can't drop an unsettled optimistic mark. Otherwise
         // keep the live (optimistic) watched set. See detailCache.js.
-        const overlayUnchanged = getOptimisticWatchRevision() === overlayRevision
+        const overlayUnchanged = getOptimisticWatchRevision(numericTmdbId) === overlayRevision
         const nextWatched = mutationQueueRef.current.version === mutationVersion && overlayUnchanged
           ? new Set(reconcileWatchedListWithOverlay(numericTmdbId, watchedList, {
             seasonNumber: numericSeasonNumber,

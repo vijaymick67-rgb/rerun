@@ -231,18 +231,69 @@ describe('cross-route optimistic watch overlay', () => {
   })
 
   it('bumps the revision on set and on a clear that removed an entry, but not on a no-op clear', () => {
-    const start = getOptimisticWatchRevision()
+    const start = getOptimisticWatchRevision(TMDB_ID)
     setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
-    const afterSet = getOptimisticWatchRevision()
+    const afterSet = getOptimisticWatchRevision(TMDB_ID)
     expect(afterSet).toBe(start + 1)
 
     clearOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5 })
-    const afterClear = getOptimisticWatchRevision()
+    const afterClear = getOptimisticWatchRevision(TMDB_ID)
     expect(afterClear).toBe(afterSet + 1)
 
     // Clearing something that was never there must not move the revision.
     clearOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 9, episodeNumber: 9 })
-    expect(getOptimisticWatchRevision()).toBe(afterClear)
+    expect(getOptimisticWatchRevision(TMDB_ID)).toBe(afterClear)
+  })
+
+  it('scopes the revision counter per show, so an unrelated show cannot move it', () => {
+    const OTHER_TMDB_ID = 555
+    const startA = getOptimisticWatchRevision(TMDB_ID)
+    const startB = getOptimisticWatchRevision(OTHER_TMDB_ID)
+
+    const tokenB = setOptimisticWatchOverlay({
+      tmdbShowId: OTHER_TMDB_ID, seasonNumber: 1, episodeNumber: 1, watched: true,
+    })
+    // Show A's revision must be untouched by Show B's overlay change.
+    expect(getOptimisticWatchRevision(TMDB_ID)).toBe(startA)
+    expect(getOptimisticWatchRevision(OTHER_TMDB_ID)).toBe(startB + 1)
+
+    clearOptimisticWatchOverlay({
+      tmdbShowId: OTHER_TMDB_ID, seasonNumber: 1, episodeNumber: 1, token: tokenB,
+    })
+    expect(getOptimisticWatchRevision(TMDB_ID)).toBe(startA)
+    expect(getOptimisticWatchRevision(OTHER_TMDB_ID)).toBe(startB + 2)
+
+    // Show A's own overlay change still moves its own revision.
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+    expect(getOptimisticWatchRevision(TMDB_ID)).toBe(startA + 1)
+  })
+
+  it('detail loader isolation: an unrelated show settling mid-fetch does not discard a fresh fetch, but the same show settling does', () => {
+    const OTHER_TMDB_ID = 555
+
+    // Simulates ShowDetail/SeasonDetail's loader: capture the revision before
+    // the fetch starts, then compare it after the fetch resolves.
+    const showARevisionAtFetchStart = getOptimisticWatchRevision(TMDB_ID)
+
+    // While Show A's fetch is in flight, Show B's quick tick commits and
+    // settles (set then clear), each in the middle of Show A's request.
+    const tokenB = setOptimisticWatchOverlay({
+      tmdbShowId: OTHER_TMDB_ID, seasonNumber: 1, episodeNumber: 1, watched: true,
+    })
+    clearOptimisticWatchOverlay({
+      tmdbShowId: OTHER_TMDB_ID, seasonNumber: 1, episodeNumber: 1, token: tokenB,
+    })
+
+    // Show A's fetch resolves: its own revision must be unchanged, so its
+    // loader accepts the freshly fetched watched rows rather than distrusting
+    // them and falling back to watchedRef.current.
+    expect(getOptimisticWatchRevision(TMDB_ID)).toBe(showARevisionAtFetchStart)
+
+    // But if Show A's OWN overlay changes mid-fetch, its loader must still
+    // detect that and keep the live optimistic state instead of the stale
+    // fetch — show-scoping must not weaken that existing protection.
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+    expect(getOptimisticWatchRevision(TMDB_ID)).not.toBe(showARevisionAtFetchStart)
   })
 
   it('leaves the fetched list untouched once the overlay is cleared', () => {
@@ -296,13 +347,13 @@ describe('cross-route optimistic watch overlay', () => {
       setOptimisticWatchOverlay({
         tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: false,
       })
-      const before = getOptimisticWatchRevision()
+      const before = getOptimisticWatchRevision(TMDB_ID)
 
       clearOptimisticWatchOverlay({
         tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, token: tokenA,
       })
 
-      expect(getOptimisticWatchRevision()).toBe(before)
+      expect(getOptimisticWatchRevision(TMDB_ID)).toBe(before)
     })
   })
 })

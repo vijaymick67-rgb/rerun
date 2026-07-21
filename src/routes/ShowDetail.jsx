@@ -50,7 +50,7 @@ function ShowDetailInner({ tmdbId }) {
 
     async function load() {
       const mutationVersion = mutationQueueRef.current.version
-      const overlayRevision = getOptimisticWatchRevision()
+      const overlayRevision = getOptimisticWatchRevision(numericTmdbId)
       setError(null)
       try {
         const { data: trackedShow, error: showError } = await withTimeout((signal) => {
@@ -124,7 +124,7 @@ function ShowDetailInner({ tmdbId }) {
         // stale snapshot can't drop an unsettled optimistic mark (e.g. a
         // Watching quick tick tapped just before navigating here). Otherwise
         // keep the live (optimistic) watched set. See detailCache.js.
-        const overlayUnchanged = getOptimisticWatchRevision() === overlayRevision
+        const overlayUnchanged = getOptimisticWatchRevision(numericTmdbId) === overlayRevision
         const nextWatched = mutationQueueRef.current.version === mutationVersion && overlayUnchanged
           ? new Set(reconcileWatchedListWithOverlay(numericTmdbId, watchedList))
           : watchedRef.current

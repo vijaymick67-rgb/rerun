@@ -93,16 +93,26 @@ export function clearAllDetailCaches() {
 // depends on. clearOptimisticWatchOverlay therefore removes an entry only when
 // the caller's token still matches the one currently stored — otherwise a
 // newer owner has taken over and its own clear will do the removal later.
+// The revision counter used by loaders' "did anything change while my fetch
+// was in flight" check is scoped per show, not global: a Watching tick on
+// Show B must not make Show A's detail loader distrust its own fresh fetch
+// just because they raced in time. getOptimisticWatchRevision(tmdbShowId)
+// only reflects set/clear calls for that exact show.
 const optimisticWatchOverlay = new Map()
-let optimisticWatchRevision = 0
+const optimisticWatchRevisionByShow = new Map()
 let optimisticWatchToken = 0
 
 function overlayKey(tmdbShowId, seasonNumber, episodeNumber) {
   return `${Number(tmdbShowId)}:${Number(seasonNumber)}:${Number(episodeNumber)}`
 }
 
-export function getOptimisticWatchRevision() {
-  return optimisticWatchRevision
+function bumpShowRevision(tmdbShowId) {
+  const showKey = Number(tmdbShowId)
+  optimisticWatchRevisionByShow.set(showKey, (optimisticWatchRevisionByShow.get(showKey) ?? 0) + 1)
+}
+
+export function getOptimisticWatchRevision(tmdbShowId) {
+  return optimisticWatchRevisionByShow.get(Number(tmdbShowId)) ?? 0
 }
 
 // Registers an in-flight optimistic change for one episode and returns the
@@ -112,7 +122,7 @@ export function setOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeNum
   optimisticWatchToken += 1
   const token = optimisticWatchToken
   optimisticWatchOverlay.set(overlayKey(tmdbShowId, seasonNumber, episodeNumber), { watched, token })
-  optimisticWatchRevision += 1
+  bumpShowRevision(tmdbShowId)
   return token
 }
 
@@ -125,14 +135,21 @@ export function clearOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeN
   if (!entry) return
   if (token != null && entry.token !== token) return
   optimisticWatchOverlay.delete(mapKey)
-  optimisticWatchRevision += 1
+  bumpShowRevision(tmdbShowId)
 }
 
 export function resetOptimisticWatchOverlay() {
-  if (optimisticWatchOverlay.size > 0) {
-    optimisticWatchOverlay.clear()
-    optimisticWatchRevision += 1
+  if (optimisticWatchOverlay.size === 0) return
+  // Sign-out clears every show's entries at once, so every show that had a
+  // pending overlay needs its own revision bumped — not just one counter —
+  // or an unrelated show's in-flight loader could still trust a fetch that
+  // raced past the reset it should have seen.
+  const affectedShows = new Set()
+  for (const key of optimisticWatchOverlay.keys()) {
+    affectedShows.add(Number(key.split(':')[0]))
   }
+  optimisticWatchOverlay.clear()
+  for (const showKey of affectedShows) bumpShowRevision(showKey)
 }
 
 // Applies every still-pending overlay entry for this show (optionally scoped
