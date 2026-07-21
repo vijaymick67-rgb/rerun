@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { POSTER_BASE } from '../lib/tmdb'
-import { watchingStatusLabel } from '../lib/watchHelpers'
+import { episodeKey, watchingStatusLabel } from '../lib/watchHelpers'
 import { handleTapNavigateClick } from '../lib/pressIntent'
 import ProgressiveImage from './ProgressiveImage'
 
@@ -9,51 +9,25 @@ const REVEAL_WIDTH = 84
 const DRAG_THRESHOLD = 6
 
 // How much more horizontal than vertical movement must be present before a
-// touch sequence is allowed to lock into a horizontal (left/right) swipe at
-// all. Below this ratio, vertical scrolling always wins — this is what keeps
-// an accidental diagonal drag during a scroll from ever arming the
-// no-confirmation right-swipe quick mark.
+// touch sequence is allowed to lock into the left-swipe Remove-reveal
+// gesture at all. Below this ratio, vertical scrolling always wins.
 const HORIZONTAL_DOMINANCE_RATIO = 1.3
 
-// A rightward drag must travel at least this far before a release will fire
-// quick mark — deliberately larger than DRAG_THRESHOLD (which only decides
-// horizontal vs. vertical) so a slight flick can never activate a
-// destructive-adjacent, no-confirmation action.
-const RIGHT_ACTIVATION_DISTANCE = 80
-
-// The row is never allowed to travel further right than this. Travel past
-// RIGHT_ACTIVATION_DISTANCE is resisted (see pullWithResistance) so the
-// gesture reads as "armed", not as the row sliding fully away.
-const RIGHT_MAX_PULL = 104
-const RIGHT_RESISTANCE_DIVISOR = 3
-
-// How long the post-quick-mark success wash stays visible before it clears
-// itself — independent of the Supabase mutation's own timing, since the row
-// must never look "stuck" green regardless of how the mutation resolves.
-// This is deliberately "gesture accepted" feedback, not a persistence
-// confirmation: it starts the instant a valid right-swipe is recognized and
-// always finishes on its own fixed schedule, exactly like the tick button's
-// own optimistic (no-spinner, no-confirmation) contract. If the mutation
-// later fails, Watching.jsx's rollback is what's authoritative — the row's
-// text/progress revert — while this wash has already cleared on its own.
-const SUCCESS_FLASH_DURATION = 400
-
 // Bounded window during which a click event that immediately follows a
-// recognized horizontal swipe (Remove-reveal or quick-mark) is swallowed.
-// Mobile browsers can still synthesize a click after touchend even though
-// touchmove already called preventDefault() on the drag itself, and that
-// synthetic click must never be allowed to navigate the row — a completed
-// swipe is not a tap. The flag is consumed (and cleared) the moment a click
-// actually arrives; this timeout only guards the case where the browser
-// never emits one at all, so it never swallows an unrelated, later tap.
+// recognized Remove-reveal swipe is swallowed. Mobile browsers can still
+// synthesize a click after touchend even though touchmove already called
+// preventDefault() on the drag itself, and that synthetic click must never
+// be allowed to navigate the row — a completed swipe is not a tap. The flag
+// is consumed (and cleared) the moment a click actually arrives; this
+// timeout only guards the case where the browser never emits one at all, so
+// it never swallows an unrelated, later tap.
 const CLICK_SUPPRESS_WINDOW = 500
 
-function pullWithResistance(deltaX) {
-  if (deltaX <= RIGHT_ACTIVATION_DISTANCE) return deltaX
-  const resisted = RIGHT_ACTIVATION_DISTANCE +
-    (deltaX - RIGHT_ACTIVATION_DISTANCE) / RIGHT_RESISTANCE_DIVISOR
-  return Math.min(RIGHT_MAX_PULL, resisted)
-}
+// Minimum time the status button stays visibly green after a tap before it
+// is allowed to return to grey, even if the row has already advanced to the
+// next episode by then — long enough to be consciously noticed, short
+// enough that the interaction never feels delayed. See handleStatusClick.
+const QUICK_MARK_MIN_DWELL_MS = 340
 
 export default function WatchingRow({
   show, isRemoving, isOpen, onOpenChange, onRemove, onQuickMark, isQuickMarking,
@@ -65,8 +39,6 @@ export default function WatchingRow({
   const dragState = useRef(null)
   const dragXRef = useRef(null)
   const [dragX, setDragX] = useState(null)
-  const successTimerRef = useRef(null)
-  const [showSuccessFlash, setShowSuccessFlash] = useState(false)
   const suppressNextClickRef = useRef(false)
   const suppressClickTimerRef = useRef(null)
 
@@ -75,42 +47,80 @@ export default function WatchingRow({
 
   // A cached row can render nextReleasedUnwatchedEpisode long before this
   // load's mutation context for it is ready (see Watching.jsx's
-  // readyShowIds) — the control must not appear tappable or swipeable in
-  // that window, since acting on it before context exists would silently do
-  // nothing.
-  const quickMarkEpisode = canQuickMark ? (show.nextReleasedUnwatchedEpisode ?? null) : null
-  const rightSwipeEligible = !!quickMarkEpisode && !isQuickMarking
+  // readyShowIds) — the button must not appear tappable, and must not read
+  // as a false "caught up" either, in that window. See visualState below.
+  const episode = show.nextReleasedUnwatchedEpisode ?? null
+  const currentEpisodeKey = episode ? episodeKey(episode.season_number, episode.episode_number) : null
   const showProgressBar = (show.releasedEpisodeCount ?? 0) > 0 &&
     (show.releasedWatchedCount ?? 0) < (show.releasedEpisodeCount ?? 0)
 
-  // Read inside the touch handlers below via .current so a right-swipe
-  // release always acts on the freshest show/eligibility, without forcing
-  // the gesture effect to re-subscribe its listeners on every render (the
-  // same pattern Watching.jsx uses for showsRef).
-  const showRef = useRef(show)
-  showRef.current = show
-  const onQuickMarkRef = useRef(onQuickMark)
-  onQuickMarkRef.current = onQuickMark
-  const rightSwipeEligibleRef = useRef(rightSwipeEligible)
-  rightSwipeEligibleRef.current = rightSwipeEligible
+  // Explicit, bounded presentation state for the status button's brief
+  // post-tap green confirmation — deliberately not derived solely from
+  // isQuickMarking, since the network request may resolve too fast or too
+  // slow to read as a deliberate confirmation either way. `key` is the
+  // episode identity that was quick-marked at tap time; the confirmation
+  // clears once both a minimum dwell has elapsed AND the row's current
+  // episode has actually moved on from that identity (or resolved to
+  // caught-up), whichever finishes last.
+  const [confirmState, setConfirmState] = useState(null)
+  const confirmTimerRef = useRef(null)
+  const advanced = confirmState ? currentEpisodeKey !== confirmState.key : false
+
+  function clearConfirmTimer() {
+    if (confirmTimerRef.current) {
+      clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = null
+    }
+  }
+
+  function startConfirmation(marked) {
+    setConfirmState({ ...marked, dwellDone: false })
+    clearConfirmTimer()
+    confirmTimerRef.current = setTimeout(() => {
+      confirmTimerRef.current = null
+      setConfirmState((prev) => (prev && prev.key === marked.key ? { ...prev, dwellDone: true } : prev))
+    }, QUICK_MARK_MIN_DWELL_MS)
+  }
+
+  // Normal path: both the minimum dwell and a genuine row advance are in —
+  // release the confirmation and let the button fall back to its plain
+  // derived state (grey if another episode is available, green if caught up).
+  useEffect(() => {
+    if (confirmState && confirmState.dwellDone && advanced) {
+      setConfirmState(null)
+    }
+  }, [confirmState, advanced])
+
+  // Failure/rollback path: the mutation settled (isQuickMarking went back to
+  // false) but the row never advanced — the episode is available again
+  // exactly as before, so the button must not keep reading as accepted.
+  const prevIsQuickMarkingRef = useRef(isQuickMarking)
+  useEffect(() => {
+    const wasMarking = prevIsQuickMarkingRef.current
+    prevIsQuickMarkingRef.current = isQuickMarking
+    if (wasMarking && !isQuickMarking && confirmState && !advanced) {
+      clearConfirmTimer()
+      setConfirmState(null)
+    }
+  }, [isQuickMarking, confirmState, advanced])
+
+  useEffect(() => () => {
+    clearConfirmTimer()
+    if (suppressClickTimerRef.current) clearTimeout(suppressClickTimerRef.current)
+  }, [])
 
   function setDrag(value) {
     dragXRef.current = value
     setDragX(value)
   }
 
-  useEffect(() => () => {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current)
-    if (suppressClickTimerRef.current) clearTimeout(suppressClickTimerRef.current)
-  }, [])
-
   useEffect(() => {
     const el = frontRef.current
     if (!el) return
 
     function handleTouchStart(e) {
-      // A gesture that starts on an interactive control (tick, Remove) must
-      // never be reinterpreted as a row swipe underneath it.
+      // A gesture that starts on an interactive control (status button,
+      // Remove) must never be reinterpreted as a row swipe underneath it.
       if (e.target && e.target.closest && e.target.closest('button')) {
         dragState.current = null
         return
@@ -121,10 +131,6 @@ export default function WatchingRow({
         startY: touch.clientY,
         base: isOpen ? -REVEAL_WIDTH : 0,
         isHorizontal: null,
-        // Locked the instant the gesture is classified horizontal, so a
-        // reversal mid-drag can never cross over into the opposite action.
-        family: null,
-        rightEligible: rightSwipeEligibleRef.current,
       }
     }
 
@@ -143,14 +149,9 @@ export default function WatchingRow({
           state.isHorizontal = false
           return
         }
-        if (state.base < 0 || deltaX < 0) {
-          state.family = 'reveal'
-        } else if (state.rightEligible) {
-          state.family = 'quickmark'
-        } else {
-          // Rightward drag on an ineligible (e.g. caught-up) row is not a
-          // recognized gesture at all — no displacement, no armed state,
-          // nothing to cancel or bounce back from.
+        if (state.base >= 0 && deltaX > 0) {
+          // A rightward drag from rest is not a recognized gesture at all —
+          // there is no more right-swipe action to arm.
           state.isHorizontal = false
           return
         }
@@ -159,19 +160,13 @@ export default function WatchingRow({
       if (!state.isHorizontal) return
 
       e.preventDefault()
-      if (state.family === 'reveal') {
-        const next = Math.min(0, Math.max(-REVEAL_WIDTH, state.base + deltaX))
-        setDrag(next)
-      } else {
-        const pulled = deltaX > 0 ? pullWithResistance(deltaX) : 0
-        setDrag(Math.max(0, pulled))
-      }
+      const next = Math.min(0, Math.max(-REVEAL_WIDTH, state.base + deltaX))
+      setDrag(next)
     }
 
     function armClickSuppression() {
-      // Any recognized horizontal swipe — reveal or quick-mark, armed or
-      // not — was not a tap, so the click that may follow it must never
-      // reach the navigating Link.
+      // A recognized Remove-reveal swipe was not a tap, so the click that
+      // may follow it must never reach the navigating Link.
       suppressNextClickRef.current = true
       if (suppressClickTimerRef.current) clearTimeout(suppressClickTimerRef.current)
       suppressClickTimerRef.current = setTimeout(() => {
@@ -188,22 +183,13 @@ export default function WatchingRow({
         const current = dragXRef.current !== null ? dragXRef.current : state.base
         const shouldOpen = current < -REVEAL_WIDTH / 2
         onOpenChange(shouldOpen ? show.id : null)
-        if (state.family === 'quickmark' && current >= RIGHT_ACTIVATION_DISTANCE) {
-          onQuickMarkRef.current(showRef.current)
-          setShowSuccessFlash(true)
-          if (successTimerRef.current) clearTimeout(successTimerRef.current)
-          successTimerRef.current = setTimeout(() => {
-            successTimerRef.current = null
-            setShowSuccessFlash(false)
-          }, SUCCESS_FLASH_DURATION)
-        }
       }
       setDrag(null)
     }
 
     function handleTouchCancel() {
-      // A cancelled sequence never activates quick mark and never commits a
-      // Remove-reveal state change — it just snaps back to rest.
+      // A cancelled sequence never commits a Remove-reveal state change —
+      // it just snaps back to rest.
       dragState.current = null
       setDrag(null)
     }
@@ -256,35 +242,46 @@ export default function WatchingRow({
     handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)
   }
 
-  function handleQuickMarkClick(e) {
+  // notReady: this load's mutation context for the show isn't populated yet
+  // — must never read as a false "caught up" just because the episode field
+  // is temporarily absent. accepted: the brief post-tap confirmation.
+  // available: a released unwatched episode can be quick-marked. caughtUp:
+  // no released unwatched episode remains — permanent until data changes.
+  const visualState = !canQuickMark
+    ? 'notReady'
+    : confirmState
+      ? 'accepted'
+      : episode
+        ? 'available'
+        : 'caughtUp'
+
+  function handleStatusClick(e) {
     e.preventDefault()
     e.stopPropagation()
-    if (isQuickMarking || !quickMarkEpisode) return
+    if (visualState !== 'available' || isQuickMarking) return
+    const marked = {
+      season_number: episode.season_number,
+      episode_number: episode.episode_number,
+      key: currentEpisodeKey,
+    }
     onQuickMark(show)
+    startConfirmation(marked)
   }
 
-  const rightSwipePulling = dragX !== null && dragX > 0
-  const rightSwipeArmed = rightSwipePulling && dragX >= RIGHT_ACTIVATION_DISTANCE
-  const underlayOpacity = rightSwipePulling ? Math.min(1, dragX / RIGHT_ACTIVATION_DISTANCE) : 0
+  const isInteractive = visualState === 'available' && !isQuickMarking
+  const statusLabel = visualState === 'available'
+    ? `Mark S${episode.season_number}E${episode.episode_number} of ${show.name} watched`
+    : visualState === 'accepted'
+      ? `Marked S${confirmState.season_number}E${confirmState.episode_number} of ${show.name} watched`
+      : visualState === 'caughtUp'
+        ? `Caught up with ${show.name}`
+        : `Loading watch status for ${show.name}`
 
   return (
     <div
       ref={rowRef}
       className="watching-row content-row relative overflow-hidden"
     >
-      {quickMarkEpisode && (
-        <div
-          aria-hidden="true"
-          className={`watching-swipe-underlay absolute inset-0${
-            rightSwipeArmed ? ' watching-swipe-underlay--armed' : ''
-          }`}
-          style={{
-            opacity: underlayOpacity,
-            transition: dragX !== null ? 'none' : 'opacity 200ms ease',
-          }}
-        />
-      )}
-
       <button
         type="button"
         onClick={() => onRemove(show)}
@@ -298,8 +295,6 @@ export default function WatchingRow({
       <div
         ref={frontRef}
         className="watching-row-front relative flex touch-pan-y gap-3 bg-(--color-surface) p-3"
-        data-success-flash={showSuccessFlash ? 'true' : undefined}
-        data-swipe-glow={rightSwipeArmed ? 'armed' : rightSwipePulling ? 'pulling' : undefined}
         style={{
           transform: `translateX(${translateX}px)`,
           transition: dragX !== null ? 'none' : 'transform 200ms ease',
@@ -363,32 +358,22 @@ export default function WatchingRow({
           </svg>
         </button>
 
-        {quickMarkEpisode && (
-          <button
-            type="button"
-            onClick={handleQuickMarkClick}
-            disabled={isQuickMarking}
-            aria-busy={isQuickMarking}
-            // While pending, the row may already have optimistically advanced
-            // to the NEXT episode (see Watching.jsx's commitWatched, which
-            // runs before the Supabase call resolves) — quickMarkEpisode at
-            // that point names the episode after the one actually in flight,
-            // so the label must not claim that episode is being marked.
-            aria-label={isQuickMarking
-              ? `Updating watched status for ${show.name}`
-              : `Mark S${quickMarkEpisode.season_number}E${quickMarkEpisode.episode_number} of ${show.name} watched`}
-            className="motion-press watching-quick-mark absolute top-1/2 right-1 -translate-y-1/2 disabled:cursor-default"
+        <button
+          type="button"
+          onClick={handleStatusClick}
+          disabled={!isInteractive}
+          aria-busy={isQuickMarking || undefined}
+          aria-label={statusLabel}
+          data-status={visualState}
+          className="motion-press watching-status-button absolute top-1/2 right-2 -translate-y-1/2"
+        >
+          <svg
+            viewBox="0 0 24 24" aria-hidden="true" className="watching-status-button__check" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
           >
-            <span className="watching-quick-mark__chip">
-              <svg
-                viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none"
-                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-              >
-                <path d="m5 12 4 4L19 6" />
-              </svg>
-            </span>
-          </button>
-        )}
+            <path d="m5 12 4 4L19 6" />
+          </svg>
+        </button>
       </div>
     </div>
   )
