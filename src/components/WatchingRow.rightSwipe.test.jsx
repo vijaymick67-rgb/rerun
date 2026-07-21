@@ -215,6 +215,16 @@ describe('right-swipe quick mark — gesture intent and safety', () => {
     expect(transformOf(front)).toBe('translateX(0px)')
   })
 
+  it('touchcancel clears the edge-glow attribute along with the rest of the drag state', async () => {
+    const { front } = await mount(baseShow())
+    await fire(front, 'touchstart', 40, 40)
+    await fire(front, 'touchmove', 40 + RIGHT_ACTIVATION_DISTANCE, 40)
+    expect(container.querySelector('.watching-row-front').getAttribute('data-swipe-glow')).toBe('armed')
+
+    await fire(front, 'touchcancel', 40 + RIGHT_ACTIVATION_DISTANCE, 40)
+    expect(container.querySelector('.watching-row-front').getAttribute('data-swipe-glow')).toBeNull()
+  })
+
   it('crossing the threshold and dragging back below it before release does not invoke', async () => {
     const { onQuickMark, front } = await mount(baseShow())
     await fire(front, 'touchstart', 40, 40)
@@ -422,17 +432,17 @@ describe('right-swipe quick mark — visual state', () => {
     await fire(front, 'touchmove', 130, 40)
     await fire(front, 'touchend', 130, 40)
 
-    expect(container.querySelector('.watching-row').getAttribute('data-success-flash')).toBe('true')
+    expect(container.querySelector('.watching-row-front').getAttribute('data-success-flash')).toBe('true')
 
     await act(async () => { vi.advanceTimersByTime(450) })
-    expect(container.querySelector('.watching-row').getAttribute('data-success-flash')).toBeNull()
+    expect(container.querySelector('.watching-row-front').getAttribute('data-success-flash')).toBeNull()
   })
 
   it('a caught-up row never shows right-swipe visual feedback (no underlay, no success flash)', async () => {
     const { front } = await mount(caughtUpShow)
     expect(container.querySelector('.watching-swipe-underlay')).toBeNull()
     await drag(front, { dx: 90 })
-    expect(container.querySelector('.watching-row').getAttribute('data-success-flash')).toBeNull()
+    expect(container.querySelector('.watching-row-front').getAttribute('data-success-flash')).toBeNull()
   })
 })
 
@@ -495,7 +505,7 @@ describe('right-swipe quick mark — mobile visual polish', () => {
 
   it('a pulling (unarmed) row carries the pulling edge-glow attribute, which clears back to nothing at rest', async () => {
     const { front } = await mount(baseShow())
-    const row = () => container.querySelector('.watching-row')
+    const row = () => container.querySelector('.watching-row-front')
     expect(row().getAttribute('data-swipe-glow')).toBeNull()
 
     await fire(front, 'touchstart', 40, 40)
@@ -508,7 +518,7 @@ describe('right-swipe quick mark — mobile visual polish', () => {
 
   it('an armed row carries the stronger "armed" edge-glow attribute deterministically at the activation threshold', async () => {
     const { front } = await mount(baseShow())
-    const row = () => container.querySelector('.watching-row')
+    const row = () => container.querySelector('.watching-row-front')
 
     await fire(front, 'touchstart', 40, 40)
     await fire(front, 'touchmove', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
@@ -524,18 +534,18 @@ describe('right-swipe quick mark — mobile visual polish', () => {
   it('a caught-up (ineligible) row never carries the swipe edge-glow attribute', async () => {
     const { front } = await mount(caughtUpShow)
     await drag(front, { dx: 90 })
-    expect(container.querySelector('.watching-row').getAttribute('data-swipe-glow')).toBeNull()
+    expect(container.querySelector('.watching-row-front').getAttribute('data-swipe-glow')).toBeNull()
   })
 
   it('the edge-glow CSS is a layered inset box-shadow (perimeter bloom, not a large opaque fill), richer once armed', () => {
-    const pullingStart = indexCss.indexOf(".watching-row[data-swipe-glow] {")
+    const pullingStart = indexCss.indexOf(".watching-row-front[data-swipe-glow] {")
     expect(pullingStart).toBeGreaterThan(-1)
     const pullingRule = indexCss.slice(pullingStart, indexCss.indexOf('}', pullingStart) + 1)
     expect(pullingRule).toContain('box-shadow:')
     expect(pullingRule).toContain('inset 0 0 0 1px')
     expect(pullingRule).toContain('inset 0 0 22px 0')
 
-    const armedStart = indexCss.indexOf(".watching-row[data-swipe-glow='armed'] {")
+    const armedStart = indexCss.indexOf(".watching-row-front[data-swipe-glow='armed'] {")
     expect(armedStart).toBeGreaterThan(-1)
     const armedRule = indexCss.slice(armedStart, indexCss.indexOf('}', armedStart) + 1)
     expect(armedRule).toContain('inset 0 0 0 1.5px')
@@ -551,6 +561,60 @@ describe('right-swipe quick mark — mobile visual polish', () => {
     const flashBlock = indexCss.slice(flashStart, indexCss.indexOf('\n}\n', flashStart) + 3)
     expect(flashBlock).not.toContain('9999px')
     expect(flashBlock).toContain('inset 0 0 30px 0')
+  })
+
+  // PR #110 put the glow attributes/CSS on the outer .watching-row, but that
+  // element sits *underneath* the opaque bg-(--color-surface) front row in
+  // paint order, so the glow was fully invisible on a real device — jsdom's
+  // getAttribute check couldn't have caught that, since it doesn't render or
+  // composite. These tests pin the fix: the glow now lives on the visible
+  // .watching-row-front layer, never on the obscured outer wrapper.
+  it('the swipe-glow and success-flash attributes are applied to the visible front row, never to the obscured outer wrapper', async () => {
+    const { front } = await mount(baseShow())
+    await fire(front, 'touchstart', 40, 40)
+    await fire(front, 'touchmove', 40 + RIGHT_ACTIVATION_DISTANCE, 40)
+
+    const outerRow = container.querySelector('.watching-row')
+    const frontRow = container.querySelector('.watching-row-front')
+    expect(outerRow.getAttribute('data-swipe-glow')).toBeNull()
+    expect(frontRow.getAttribute('data-swipe-glow')).toBe('armed')
+
+    await fire(front, 'touchend', 40 + RIGHT_ACTIVATION_DISTANCE, 40)
+  })
+
+  it('the glow CSS targets .watching-row-front, not the outer .watching-row, so it paints on the visible surface', () => {
+    expect(indexCss).toContain('.watching-row-front[data-swipe-glow]')
+    expect(indexCss).toContain(".watching-row-front[data-swipe-glow='armed']")
+    expect(indexCss).toContain(".watching-row-front[data-success-flash='true']")
+    expect(indexCss).not.toContain('.watching-row[data-swipe-glow]')
+    expect(indexCss).not.toContain(".watching-row[data-swipe-glow='armed']")
+    expect(indexCss).not.toContain(".watching-row[data-success-flash='true']")
+  })
+
+  it('the front row inherits the card border-radius so the glow follows the rounded card shape, not a square box', () => {
+    const ruleStart = indexCss.indexOf('.watching-row-front {')
+    expect(ruleStart).toBeGreaterThan(-1)
+    const rule = indexCss.slice(ruleStart, indexCss.indexOf('}', ruleStart) + 1)
+    expect(rule).toContain('border-radius: inherit;')
+  })
+
+  it('the emerald underlay is still the first swipeable child, painting behind the translated front row', async () => {
+    const { front } = await mount(baseShow())
+    await fire(front, 'touchstart', 40, 40)
+    await fire(front, 'touchmove', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
+
+    const outerRow = container.querySelector('.watching-row')
+    const underlay = outerRow.querySelector('.watching-swipe-underlay')
+    const frontRow = outerRow.querySelector('.watching-row-front')
+    expect(underlay).not.toBeNull()
+    expect(frontRow).not.toBeNull()
+    // Earlier in DOM order (and thus painted first / below in normal flow)
+    // than the front row it sits behind.
+    expect(
+      underlay.compareDocumentPosition(frontRow) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+
+    await fire(front, 'touchend', 40 + (RIGHT_ACTIVATION_DISTANCE - 10), 40)
   })
 })
 

@@ -183,7 +183,7 @@ describe('Watching — mobile right-swipe quick mark (real route, real gesture)'
     upsertImpl = () => new Promise((_resolve, reject) => { rejectUpsert = reject })
     await mountWatching()
     const front = container.querySelector('.touch-pan-y')
-    const row = () => container.querySelector('.watching-row')
+    const row = () => container.querySelector('.watching-row-front')
 
     await rightSwipe(front)
     await flush()
