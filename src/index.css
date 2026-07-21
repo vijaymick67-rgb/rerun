@@ -842,7 +842,9 @@ body {
 
 /* Understated emerald underlay revealed on the left as the row is pulled
    right (see WatchingRow.jsx's quick-mark swipe). Sits behind the front row
-   in DOM/paint order, so it's invisible until the row actually translates. */
+   in DOM/paint order, so it's invisible until the row actually translates.
+   Clean color only — no glyph/chip — the edge glow below (data-swipe-glow)
+   carries the "this is armed" signal instead. */
 .watching-swipe-underlay {
   background: var(--color-success-muted);
   color: var(--color-success);
@@ -852,42 +854,87 @@ body {
   background: color-mix(in srgb, var(--color-success) 30%, var(--color-success-muted));
 }
 
-.watching-swipe-underlay__glyph {
-  display: flex;
-  width: 1.75rem;
-  height: 1.75rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-compact);
-  border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
-  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+/* Perimeter glow while a right swipe is in progress. Uses only inset
+   box-shadows (never a bare outer glow) so it can never escape the row's own
+   overflow-hidden clip and bleed into a neighbouring row — the blur is
+   strongest near the edges and fades inward, reading as a soft bloom around
+   the card rather than a flat colored fill. Richer once the pull crosses the
+   armed threshold; cleared entirely (no attribute) at rest. */
+.watching-row[data-swipe-glow] {
+  transition: box-shadow 150ms ease;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-success) 38%, transparent),
+    inset 0 0 22px 0 color-mix(in srgb, var(--color-success) 24%, transparent);
 }
 
-/* Brief post-quick-mark success wash. A soft inset tint (not a full green
-   fill) so poster art and text are never obscured; auto-clears via the
-   animation itself plus WatchingRow's own timer, so it can never get stuck
-   on a failed mutation. */
+.watching-row[data-swipe-glow='armed'] {
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 55%, transparent),
+    inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 34%, transparent);
+}
+
+/* Brief post-quick-mark success wash — the same edge-glow treatment as
+   data-swipe-glow, momentarily richer, so "gesture accepted" reads as a
+   continuation of the swipe's own glow rather than a different effect. A
+   soft inset edge tint (never a large opaque fill) so poster art and text
+   are never obscured; auto-clears via the animation itself plus
+   WatchingRow's own timer, so it can never get stuck on a failed mutation. */
 @keyframes watching-row-success-flash {
-  0% { box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--color-success) 0%, transparent); }
-  30% { box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--color-success) 20%, transparent); }
-  100% { box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--color-success) 0%, transparent); }
+  0% {
+    box-shadow:
+      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 0%, transparent),
+      inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 0%, transparent);
+  }
+  30% {
+    box-shadow:
+      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 62%, transparent),
+      inset 0 0 34px 0 color-mix(in srgb, var(--color-success) 42%, transparent);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 1.5px color-mix(in srgb, var(--color-success) 0%, transparent),
+      inset 0 0 30px 0 color-mix(in srgb, var(--color-success) 0%, transparent);
+  }
 }
 
 .watching-row[data-success-flash='true'] {
   animation: watching-row-success-flash 400ms ease-out;
 }
 
+/* Reclaimed right-side space on mobile now that the standalone tick is
+   hidden there (see .watching-quick-mark below) — only the right-swipe
+   gesture handles quick mark on touch. Desktop still reserves room so title/
+   status text never collides with the visible tick. */
+.watching-row-link {
+  padding-right: 0.75rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .watching-row-link {
+    padding-right: 3.5rem;
+  }
+}
+
 /* Compact quick-mark control: a full 44px touch target via invisible padding
    around a visually smaller, lighter soft-edged chip than WatchedCircle's
-   filled circular bulk-watch control. */
+   filled circular bulk-watch control. Touch/coarse-pointer layouts hide it
+   entirely — the right-swipe gesture is the mobile quick-mark action, and a
+   redundant on-screen tick has no reason to reserve space or paint there.
+   Desktop/fine-pointer layouts keep it exactly as before. */
 .watching-quick-mark {
-  display: flex;
+  display: none;
   min-height: 2.75rem;
   min-width: 2.75rem;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .watching-quick-mark {
+    display: flex;
+  }
 }
 
 .watching-quick-mark:focus-visible {
