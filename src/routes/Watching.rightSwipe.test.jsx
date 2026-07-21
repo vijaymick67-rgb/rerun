@@ -177,6 +177,34 @@ describe('Watching — mobile right-swipe quick mark (real route, real gesture)'
     expect(button.disabled).toBe(false)
   })
 
+  it('success feedback is "gesture accepted" feedback: it fires immediately and self-clears on a fixed schedule, independent of the mutation eventually failing', async () => {
+    vi.useFakeTimers()
+    let rejectUpsert
+    upsertImpl = () => new Promise((_resolve, reject) => { rejectUpsert = reject })
+    await mountWatching()
+    const front = container.querySelector('.touch-pan-y')
+    const row = () => container.querySelector('.watching-row')
+
+    await rightSwipe(front)
+    await flush()
+    // Fires the instant the swipe is recognized — well before the mutation
+    // (still pending) has resolved either way.
+    expect(row().getAttribute('data-success-flash')).toBe('true')
+
+    // Clears itself on its own fixed timer, not tied to the mutation result.
+    await act(async () => { vi.advanceTimersByTime(450) })
+    expect(row().getAttribute('data-success-flash')).toBeNull()
+
+    // Only now does the mutation actually fail. Rollback — not the flash,
+    // which is already long gone — is what's authoritative for the row.
+    await act(async () => { rejectUpsert(new Error('network down')) })
+    await flush()
+    expect(row().getAttribute('data-success-flash')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+
+    vi.useRealTimers()
+  })
+
   it('a swipe cannot double-mutate while the row is pending (blocked exactly like a second tick tap)', async () => {
     let resolveUpsert
     upsertImpl = () => new Promise((resolve) => { resolveUpsert = resolve })

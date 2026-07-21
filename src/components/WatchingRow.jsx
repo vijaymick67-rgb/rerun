@@ -30,7 +30,23 @@ const RIGHT_RESISTANCE_DIVISOR = 3
 // How long the post-quick-mark success wash stays visible before it clears
 // itself — independent of the Supabase mutation's own timing, since the row
 // must never look "stuck" green regardless of how the mutation resolves.
+// This is deliberately "gesture accepted" feedback, not a persistence
+// confirmation: it starts the instant a valid right-swipe is recognized and
+// always finishes on its own fixed schedule, exactly like the tick button's
+// own optimistic (no-spinner, no-confirmation) contract. If the mutation
+// later fails, Watching.jsx's rollback is what's authoritative — the row's
+// text/progress revert — while this wash has already cleared on its own.
 const SUCCESS_FLASH_DURATION = 400
+
+// Bounded window during which a click event that immediately follows a
+// recognized horizontal swipe (Remove-reveal or quick-mark) is swallowed.
+// Mobile browsers can still synthesize a click after touchend even though
+// touchmove already called preventDefault() on the drag itself, and that
+// synthetic click must never be allowed to navigate the row — a completed
+// swipe is not a tap. The flag is consumed (and cleared) the moment a click
+// actually arrives; this timeout only guards the case where the browser
+// never emits one at all, so it never swallows an unrelated, later tap.
+const CLICK_SUPPRESS_WINDOW = 500
 
 function pullWithResistance(deltaX) {
   if (deltaX <= RIGHT_ACTIVATION_DISTANCE) return deltaX
@@ -51,6 +67,8 @@ export default function WatchingRow({
   const [dragX, setDragX] = useState(null)
   const successTimerRef = useRef(null)
   const [showSuccessFlash, setShowSuccessFlash] = useState(false)
+  const suppressNextClickRef = useRef(false)
+  const suppressClickTimerRef = useRef(null)
 
   const baseX = isOpen ? -REVEAL_WIDTH : 0
   const translateX = dragX !== null ? dragX : baseX
@@ -83,6 +101,7 @@ export default function WatchingRow({
 
   useEffect(() => () => {
     if (successTimerRef.current) clearTimeout(successTimerRef.current)
+    if (suppressClickTimerRef.current) clearTimeout(suppressClickTimerRef.current)
   }, [])
 
   useEffect(() => {
@@ -149,10 +168,23 @@ export default function WatchingRow({
       }
     }
 
+    function armClickSuppression() {
+      // Any recognized horizontal swipe — reveal or quick-mark, armed or
+      // not — was not a tap, so the click that may follow it must never
+      // reach the navigating Link.
+      suppressNextClickRef.current = true
+      if (suppressClickTimerRef.current) clearTimeout(suppressClickTimerRef.current)
+      suppressClickTimerRef.current = setTimeout(() => {
+        suppressClickTimerRef.current = null
+        suppressNextClickRef.current = false
+      }, CLICK_SUPPRESS_WINDOW)
+    }
+
     function handleTouchEnd() {
       const state = dragState.current
       dragState.current = null
       if (state && state.isHorizontal) {
+        armClickSuppression()
         const current = dragXRef.current !== null ? dragXRef.current : state.base
         const shouldOpen = current < -REVEAL_WIDTH / 2
         onOpenChange(shouldOpen ? show.id : null)
@@ -205,6 +237,17 @@ export default function WatchingRow({
   }, [isOpen, onOpenChange])
 
   function handleLinkClick(e) {
+    if (suppressNextClickRef.current) {
+      // The click a browser may synthesize right after a recognized swipe's
+      // touchend — never a real tap, so it never opens or closes anything.
+      suppressNextClickRef.current = false
+      if (suppressClickTimerRef.current) {
+        clearTimeout(suppressClickTimerRef.current)
+        suppressClickTimerRef.current = null
+      }
+      e.preventDefault()
+      return
+    }
     if (isOpen) {
       e.preventDefault()
       onOpenChange(null)

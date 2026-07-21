@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WatchingRow from './WatchingRow'
 
@@ -76,6 +76,57 @@ async function mount(show, props = {}) {
   })
   const front = container.querySelector('.touch-pan-y')
   return { onQuickMark, onOpenChange, onRemove, front }
+}
+
+// Mounts through a real <Routes> switch (rather than a bare MemoryRouter)
+// so a click reaching the Link's default react-router-dom navigation
+// actually renders different content — the only reliable way to prove
+// navigation did or didn't happen, since MemoryRouter's history isn't
+// reflected on window.location.
+async function mountRouted(show, props = {}) {
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  const onQuickMark = props.onQuickMark ?? vi.fn()
+  const onOpenChange = props.onOpenChange ?? vi.fn()
+  const onRemove = props.onRemove ?? vi.fn()
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={['/watching']}>
+        <Routes>
+          <Route
+            path="/watching"
+            element={(
+              <WatchingRow
+                show={show}
+                isRemoving={false}
+                isOpen={props.isOpen ?? false}
+                onOpenChange={onOpenChange}
+                onRemove={onRemove}
+                onQuickMark={onQuickMark}
+                isQuickMarking={props.isQuickMarking ?? false}
+                canQuickMark={props.canQuickMark ?? true}
+              />
+            )}
+          />
+          <Route path="/watching/:id" element={<div data-testid="detail-marker">Detail</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  })
+  const front = container.querySelector('.touch-pan-y')
+  const link = container.querySelector('a')
+  return { onQuickMark, onOpenChange, onRemove, front, link }
+}
+
+function navigated() {
+  return container.querySelector('[data-testid="detail-marker"]') !== null
+}
+
+async function clickAnchor(link) {
+  const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+  await act(async () => { link.dispatchEvent(event) })
+  return event
 }
 
 function touchEvent(type, x, y) {
@@ -293,6 +344,43 @@ describe('right-swipe quick mark — eligibility', () => {
     const { onOpenChange, front } = await mount(baseShow())
     await drag(front, { dx: -60 })
     expect(onOpenChange).toHaveBeenCalledWith(1)
+  })
+})
+
+describe('right-swipe quick mark — post-swipe navigation suppression', () => {
+  it('the click that follows a recognized right swipe never navigates, but a later fresh tap still does', async () => {
+    const { front, link } = await mountRouted(baseShow())
+    await drag(front, { dx: 90 })
+    await clickAnchor(link)
+    expect(navigated()).toBe(false)
+
+    // A second, unrelated click — standing in for a genuine later tap —
+    // must not be swallowed by the same suppression.
+    await clickAnchor(link)
+    expect(navigated()).toBe(true)
+  })
+
+  it('the click that follows a recognized left swipe (Remove reveal) never navigates', async () => {
+    const { front, link } = await mountRouted(baseShow())
+    await drag(front, { dx: -60 })
+    await clickAnchor(link)
+    expect(navigated()).toBe(false)
+  })
+
+  it('a swipe that never crosses the intent threshold (a genuine tap) still navigates normally', async () => {
+    const { front, link } = await mountRouted(baseShow())
+    await drag(front, { dx: 2, dy: 1, steps: 1 })
+    await clickAnchor(link)
+    expect(navigated()).toBe(true)
+  })
+
+  it('suppression auto-clears after its bounded window if the browser never synthesizes a click', async () => {
+    vi.useFakeTimers()
+    const { front, link } = await mountRouted(baseShow())
+    await drag(front, { dx: 90 })
+    await act(async () => { vi.advanceTimersByTime(600) })
+    await clickAnchor(link)
+    expect(navigated()).toBe(true)
   })
 })
 
