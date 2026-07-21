@@ -346,7 +346,7 @@ export default function WatchingRow({
           onClick={() => onRemove(show)}
           disabled={isRemoving}
           aria-label={`Remove ${show.name}`}
-          className="motion-press watching-row-hover-remove absolute top-2 right-2 flex h-7 w-7 items-center justify-center rounded-full text-(--color-text-muted) hover:text-(--color-destructive) disabled:opacity-60"
+          className="motion-press watching-row-hover-remove absolute top-1/2 right-[3.75rem] -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-full text-(--color-text-muted) hover:text-(--color-destructive) disabled:opacity-60"
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
             <path
@@ -369,9 +369,9 @@ export default function WatchingRow({
         >
           <svg
             viewBox="0 0 24 24" aria-hidden="true" className="watching-status-button__check" fill="none"
-            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+            stroke="currentColor" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"
           >
-            <path d="m5 12 4 4L19 6" />
+            <path d="M4.5 12.5 9.5 17.5 19.5 6.5" />
           </svg>
         </button>
       </div>

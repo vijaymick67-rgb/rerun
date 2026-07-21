@@ -161,7 +161,7 @@ describe('status button — shape and dimensions', () => {
     ]) {
       const html = staticHtml(show, props)
       expect(html).toContain('watching-status-button__check')
-      expect(html).toContain('d="m5 12 4 4L19 6"')
+      expect(html).toContain('d="M4.5 12.5 9.5 17.5 19.5 6.5"')
     }
   })
 
@@ -185,6 +185,117 @@ describe('status button — shape and dimensions', () => {
     expect(container.querySelector('.watching-row').getAttribute('data-success-flash')).toBeNull()
     expect(container.querySelector('.watching-row-front').getAttribute('data-swipe-glow')).toBeNull()
     expect(container.querySelector('.watching-row-front').getAttribute('data-success-flash')).toBeNull()
+  })
+})
+
+// The square body is one premium dark-graphite surface in every state — the
+// only thing that changes between available/accepted/caughtUp/notReady is
+// the check glyph's color (and a tiny supporting tint in the border/inner
+// highlight immediately around it). See the review correction this design
+// implements: no flat grey-filled slab, no emerald/lime-filled tile.
+describe('status button — surface stays neutral graphite in every state', () => {
+  function ruleBlockFor(selector) {
+    const start = indexCss.indexOf(selector)
+    expect(start).toBeGreaterThan(-1)
+    return indexCss.slice(start, indexCss.indexOf('}', start) + 1)
+  }
+
+  it('the base button rule declares one dark graphite background — no per-state background override', () => {
+    const base = ruleBlockFor('.watching-status-button {')
+    expect(base).toMatch(/background: linear-gradient\(175deg, #171b25, #11151e\)/i)
+
+    for (const status of ['available', 'caughtUp', 'accepted', 'notReady']) {
+      const start = indexCss.indexOf(`.watching-status-button[data-status='${status}']`)
+      expect(start).toBeGreaterThan(-1)
+      const block = indexCss.slice(start, indexCss.indexOf('\n\n', start))
+      // Per-state blocks that target the button itself (not the .__check
+      // descendant) must never declare a background — only border/box-shadow
+      // supporting tints are allowed there.
+      const buttonOnlyBlock = block
+        .split('\n\n')
+        .filter((chunk) => !chunk.includes('.watching-status-button__check'))
+        .join('\n\n')
+      expect(buttonOnlyBlock).not.toMatch(/\bbackground:/)
+    }
+  })
+
+  it('available, caughtUp and notReady all reach the DOM with the expected data-status', () => {
+    for (const status of ['available', 'caughtUp', 'notReady']) {
+      const html = staticHtml(baseShow({
+        status: status === 'available' ? { type: 'nextUp', season_number: 1, episode_number: 1 } : { type: 'caughtUp' },
+        nextReleasedUnwatchedEpisode: status === 'available'
+          ? { season_number: 1, episode_number: 1, name: 'Ep', runtime: 30 }
+          : null,
+      }), status === 'notReady' ? { canQuickMark: false } : {})
+      expect(html).toContain(`data-status="${status}"`)
+    }
+  })
+
+  it('the button element never carries an inline background style or a Tailwind bg- utility class, in any state', async () => {
+    function buttonTagFrom(html) {
+      const buttonStart = html.indexOf('watching-status-button absolute')
+      return html.slice(html.lastIndexOf('<button', buttonStart), html.indexOf('>', buttonStart) + 1)
+    }
+
+    // available (static) and notReady (static) — the surface comes solely
+    // from the one shared CSS rule, never an inline style or bg- class.
+    for (const html of [staticHtml(nextUpShow), staticHtml(nextUpShow, { canQuickMark: false }), staticHtml(caughtUpShow)]) {
+      const buttonTag = buttonTagFrom(html)
+      expect(buttonTag).not.toMatch(/\bbg-/)
+      expect(buttonTag).not.toContain('style=')
+    }
+
+    // accepted only exists after a real tap — verify the same holds live.
+    const { button, onQuickMark: _onQuickMark } = await mount(nextUpShow)
+    await click(button())
+    expect(button().getAttribute('data-status')).toBe('accepted')
+    expect(button().className).not.toMatch(/\bbg-/)
+    expect(button().getAttribute('style')).toBeNull()
+  })
+
+  it('never uses a flat grey/green/emerald/lime/chartreuse fill token as the square background', () => {
+    const base = ruleBlockFor('.watching-status-button {')
+    expect(base).not.toContain('--color-success')
+    expect(base).not.toContain('--color-status-check-done')
+    expect(base).not.toContain('--color-surface-interactive')
+  })
+
+  it('no emerald token (--color-success) is used anywhere in the status button rules', () => {
+    const start = indexCss.indexOf('.watching-status-button {')
+    const end = indexCss.indexOf('.watching-countdown-pill', start)
+    const section = indexCss.slice(start, end)
+    expect(section).not.toContain('--color-success')
+  })
+
+  it('no row-wide or button-wide glow — box-shadow spread stays tight (no large blurred outer glow)', () => {
+    const start = indexCss.indexOf('.watching-status-button {')
+    const end = indexCss.indexOf('.watching-countdown-pill', start)
+    const section = indexCss.slice(start, end)
+    // No box-shadow rule in this section should use a blur radius larger
+    // than 8px, which would read as a glow rather than a restrained shadow.
+    const blurs = [...section.matchAll(/0\s+(-?\d+)px\s+(\d+)px/g)].map((m) => Number(m[2]))
+    for (const blur of blurs) {
+      expect(blur).toBeLessThanOrEqual(8)
+    }
+  })
+
+  it('state is conveyed primarily through the check glyph color, not the button background', () => {
+    const availableCheck = ruleBlockFor("[data-status='available'] .watching-status-button__check {")
+    expect(availableCheck).toContain('var(--color-status-check-idle)')
+
+    const doneCheckStart = indexCss.indexOf("[data-status='caughtUp'] .watching-status-button__check,")
+    expect(doneCheckStart).toBeGreaterThan(-1)
+    const doneCheck = indexCss.slice(doneCheckStart, indexCss.indexOf('}', doneCheckStart) + 1)
+    expect(doneCheck).toContain('var(--color-status-check-done)')
+  })
+
+  it('available check uses the muted smoky periwinkle-grey palette', () => {
+    expect(indexCss).toContain('--color-status-check-idle: #8d93b4;')
+  })
+
+  it('accepted/caughtUp check uses the pistachio-lime palette, not emerald', () => {
+    expect(indexCss).toContain('--color-status-check-done: #a7e85b;')
+    expect(indexCss.toLowerCase()).not.toMatch(/--color-status-check-done:\s*#72c9a4/)
   })
 })
 
@@ -401,5 +512,81 @@ describe('status button — weekly/House of the Dragon-style flow', () => {
     const { button, update } = await mount(nextUpShow)
     await update(countdownShow)
     expect(button().getAttribute('data-status')).toBe('caughtUp')
+  })
+})
+
+// Desktop review blocker: the permanent status button and the desktop-hover
+// Remove control used to share the same right-2 anchor and could visually
+// collide. The hover Remove now sits immediately to the left of the status
+// button (right-[3.75rem] vs right-2), vertically centered like it, with a
+// dedicated desktop-only text reserve so long titles never run under either.
+describe('desktop layout — status button and hover Remove occupy distinct positions', () => {
+  it('the hover Remove control is anchored to the left of the status button, both vertically centered', () => {
+    const html = staticHtml(nextUpShow)
+    expect(html).toMatch(
+      /class="motion-press watching-row-hover-remove absolute top-1\/2 right-\[3\.75rem\] -translate-y-1\/2 flex h-7 w-7[^"]*"/,
+    )
+    expect(html).toMatch(/class="motion-press watching-status-button absolute top-1\/2 right-2 -translate-y-1\/2"/)
+  })
+
+  it('mobile reserves text width only for the status button; desktop reserves extra width for both controls', () => {
+    const baseRuleStart = indexCss.indexOf('.watching-row-link {')
+    const baseRule = indexCss.slice(baseRuleStart, indexCss.indexOf('}', baseRuleStart) + 1)
+    expect(baseRule).toContain('padding-right: 3.5rem')
+
+    const hoverBlockStart = indexCss.indexOf(
+      '@media (hover: hover) and (pointer: fine) {\n  /* The hover-revealed Remove control',
+    )
+    expect(hoverBlockStart).toBeGreaterThan(-1)
+    const hoverBlockEnd = indexCss.indexOf('\n}', indexCss.indexOf('padding-right: 6rem', hoverBlockStart)) + 2
+    const hoverBlock = indexCss.slice(hoverBlockStart, hoverBlockEnd)
+    expect(hoverBlock).toContain('padding-right: 6rem')
+  })
+
+  it('the status button and hover Remove are two separate elements that each invoke only their own handler', async () => {
+    const onRemove = vi.fn()
+    const onQuickMark = vi.fn()
+    const localContainer = document.createElement('div')
+    document.body.appendChild(localContainer)
+    const localRoot = createRoot(localContainer)
+    await act(async () => {
+      localRoot.render(
+        <MemoryRouter>
+          <WatchingRow
+            show={nextUpShow}
+            isRemoving={false}
+            isOpen={false}
+            onOpenChange={vi.fn()}
+            onRemove={onRemove}
+            onQuickMark={onQuickMark}
+            isQuickMarking={false}
+            canQuickMark={true}
+          />
+        </MemoryRouter>,
+      )
+    })
+
+    const hoverRemove = localContainer.querySelector('.watching-row-hover-remove')
+    const statusButton = localContainer.querySelector('.watching-status-button')
+    expect(hoverRemove).not.toBeNull()
+    expect(statusButton).not.toBeNull()
+    expect(hoverRemove).not.toBe(statusButton)
+
+    await act(async () => {
+      hoverRemove.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(onRemove).toHaveBeenCalledTimes(1)
+    expect(onRemove).toHaveBeenCalledWith(nextUpShow)
+    expect(onQuickMark).not.toHaveBeenCalled()
+
+    await act(async () => {
+      statusButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(onQuickMark).toHaveBeenCalledTimes(1)
+    expect(onQuickMark).toHaveBeenCalledWith(nextUpShow)
+    expect(onRemove).toHaveBeenCalledTimes(1)
+
+    await act(async () => localRoot.unmount())
+    localContainer.remove()
   })
 })
