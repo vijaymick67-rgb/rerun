@@ -11,6 +11,10 @@ import {
   readDetailCache,
   writeDetailCache,
   patchEpisodeWatchedCaches,
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+  reconcileWatchedListWithOverlay,
+  getOptimisticWatchRevision,
 } from '../lib/detailCache'
 import SeasonDetailSkeleton from '../components/SeasonDetailSkeleton'
 import WatchedCircle from '../components/WatchedCircle'
@@ -45,6 +49,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
     async function load() {
       const mutationVersion = mutationQueueRef.current.version
+      const overlayRevision = getOptimisticWatchRevision()
       setError(null)
       try {
         // getShowAirstamps never throws (any failure → {}), so it's safe to
@@ -88,8 +93,16 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
 
         setShowName(nextShowName)
         setEpisodes(seasonEpisodes)
-        const nextWatched = mutationQueueRef.current.version === mutationVersion
-          ? new Set(watchedList)
+        // Trust the fetched rows only if no local mutation happened during the
+        // load AND no cross-route optimistic overlay changed while it was in
+        // flight; even then, reconcile against any still-pending overlay so a
+        // stale snapshot can't drop an unsettled optimistic mark. Otherwise
+        // keep the live (optimistic) watched set. See detailCache.js.
+        const overlayUnchanged = getOptimisticWatchRevision() === overlayRevision
+        const nextWatched = mutationQueueRef.current.version === mutationVersion && overlayUnchanged
+          ? new Set(reconcileWatchedListWithOverlay(numericTmdbId, watchedList, {
+            seasonNumber: numericSeasonNumber,
+          }))
           : watchedRef.current
         watchedRef.current = nextWatched
         setWatched(nextWatched)
@@ -134,11 +147,21 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
     const next = new Set(nextWatchedSet)
     watchedRef.current = next
     setWatched(next)
+    const watched = next.has(episodeKey(numericSeasonNumber, episodeNumber))
     patchEpisodeWatchedCaches({
       tmdbShowId: numericTmdbId,
       seasonNumber: numericSeasonNumber,
       episodeNumber,
-      watched: next.has(episodeKey(numericSeasonNumber, episodeNumber)),
+      watched,
+    })
+    // Hold a cross-route overlay while this toggle's upsert is pending, so the
+    // parent Show Detail page opened right after can't revert it from a stale
+    // read (see detailCache.js).
+    setOptimisticWatchOverlay({
+      tmdbShowId: numericTmdbId,
+      seasonNumber: numericSeasonNumber,
+      episodeNumber,
+      watched,
     })
   }
 
@@ -155,6 +178,11 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       commitWatched: (next) => commitWatchedEpisode(next, episode.episode_number),
     })
       .catch((err) => setError(err?.message || 'Could not update this episode. Try again.'))
+      .finally(() => clearOptimisticWatchOverlay({
+        tmdbShowId: numericTmdbId,
+        seasonNumber: numericSeasonNumber,
+        episodeNumber: episode.episode_number,
+      }))
   }
 
   return (

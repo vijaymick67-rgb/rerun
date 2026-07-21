@@ -41,6 +41,13 @@ vi.mock('../lib/tvmaze', () => ({
 }))
 
 import { getSeasonEpisodes, getShowDetails } from '../lib/tmdb'
+import {
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+  resetOptimisticWatchOverlay,
+  showDetailCacheKey,
+  readDetailCache,
+} from '../lib/detailCache'
 import ShowDetail from './ShowDetail'
 
 let container = null
@@ -81,6 +88,7 @@ afterEach(async () => {
   vi.useRealTimers()
   vi.clearAllMocks()
   localStorage.clear()
+  resetOptimisticWatchOverlay()
 })
 
 describe('ShowDetail — released-only hero progress', () => {
@@ -133,5 +141,41 @@ describe('ShowDetail — released-only hero progress', () => {
     expect(container.textContent).toContain('2/2 episodes watched')
     const fill = container.querySelector('.progress-fill')
     expect(fill.style.width).toBe('100%')
+  })
+})
+
+describe('ShowDetail — cross-route stale-refresh protection', () => {
+  it('does not let a stale watched fetch revert an in-flight quick tick from another route', async () => {
+    trackedShowResult = { data: { id: 3, tmdb_id: 601, name: 'Race Show' }, error: null }
+    // The background read captured its snapshot before the quick tick's upsert
+    // was visible, so it is missing episode 2.
+    watchedRowsResult = {
+      data: [{ season_number: 1, episode_number: 1 }],
+      error: null,
+    }
+    getShowDetails.mockResolvedValue({ seasons: [{ season_number: 1 }] })
+    getSeasonEpisodes.mockResolvedValue({
+      episodes: [
+        { episode_number: 1, name: 'E1', air_date: '2026-01-01', runtime: 40 },
+        { episode_number: 2, name: 'E2', air_date: '2026-01-08', runtime: 40 },
+      ],
+    })
+
+    // A Watching quick tick just marked S1E2 watched; its upsert is still
+    // pending, so the cross-route overlay is live.
+    setOptimisticWatchOverlay({ tmdbShowId: 601, seasonNumber: 1, episodeNumber: 2, watched: true })
+
+    await renderShowDetail(601)
+
+    // The stale fetch (1/2) must be reconciled up to the optimistic 2/2, and
+    // the cache ShowDetail rewrote must keep the optimistic key rather than the
+    // stale server snapshot.
+    expect(container.textContent).toContain('2/2 episodes watched')
+    const cached = readDetailCache(showDetailCacheKey(601))
+    expect(cached.watchedList.sort()).toEqual(['1:1', '1:2'])
+
+    // Once the mutation settles the overlay is dropped; a later fetch is free
+    // to be authoritative again.
+    clearOptimisticWatchOverlay({ tmdbShowId: 601, seasonNumber: 1, episodeNumber: 2 })
   })
 })

@@ -13,6 +13,9 @@ import {
   seasonDetailCacheKey,
   writeDetailCache,
   readDetailCache,
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+  resetOptimisticWatchOverlay,
 } from '../lib/detailCache'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -114,6 +117,7 @@ afterEach(async () => {
   vi.useRealTimers()
   vi.clearAllMocks()
   localStorage.clear()
+  resetOptimisticWatchOverlay()
 })
 
 describe('SeasonDetail — individual episode toggle syncs the shared cache helper', () => {
@@ -168,5 +172,21 @@ describe('SeasonDetail — individual episode toggle syncs the shared cache help
 
     const showCache = readDetailCache(showDetailCacheKey(900))
     expect(showCache.watchedList).toEqual(['2:1'])
+  })
+
+  it('does not let a stale watched fetch revert an in-flight quick tick for this season', async () => {
+    // The season's background read is missing episode 2 (its snapshot predates
+    // the quick tick's upsert), while the cross-route overlay marks it watched.
+    watchedRowsResult = { data: [{ episode_number: 1 }], error: null }
+    setOptimisticWatchOverlay({ tmdbShowId: 900, seasonNumber: 2, episodeNumber: 2, watched: true })
+
+    await renderSeasonDetail()
+
+    // Episode 2 must render watched (reconciled), not reverted to unwatched.
+    expect(container.querySelector('[aria-label="Mark episode 2 unwatched"]')).not.toBeNull()
+    const seasonCache = readDetailCache(seasonDetailCacheKey(900, 2))
+    expect(seasonCache.watchedList.sort()).toEqual(['2:1', '2:2'])
+
+    clearOptimisticWatchOverlay({ tmdbShowId: 900, seasonNumber: 2, episodeNumber: 2 })
   })
 })

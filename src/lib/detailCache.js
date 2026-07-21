@@ -48,6 +48,7 @@ const DETAIL_CACHE_PREFIXES = ['showdetail_cache:v1:', 'seasondetail_cache:v1:']
 // since one exists per show/season ever opened. Used on sign-out so watched
 // state cached here can't be read back before the next owner signs in.
 export function clearAllDetailCaches() {
+  resetOptimisticWatchOverlay()
   try {
     const keysToRemove = []
     for (let i = 0; i < localStorage.length; i += 1) {
@@ -62,6 +63,77 @@ export function clearAllDetailCaches() {
   }
 }
 
+// --- Cross-route optimistic watch overlay ---------------------------------
+// A Watching quick tick (or a Season Detail toggle) patches the localStorage
+// caches synchronously, but the Supabase upsert behind it is still in flight.
+// If the user immediately opens Show/Season Detail, that route mounts, seeds
+// its watched set from the just-patched cache, and ALSO kicks off its own
+// background watched_episodes read. That read can have captured its snapshot
+// before the upsert became visible, so it returns the pre-tick rows — which
+// would revert the optimistic state the instant it resolves and rewrite the
+// cache stale.
+//
+// The route's own mutationQueue.version guard can't catch this: the tick ran
+// in a different component's queue, before this route even mounted, so the
+// captured version already matches. This registry closes that gap. It records
+// the exact episodes with an in-flight cross-route optimistic change, plus a
+// monotonic revision bumped whenever the registry changes. A detail loader
+// (a) reconciles its fetched watched list against any still-pending overlay,
+// and (b) if the overlay set changed at all while its fetch was in flight,
+// keeps its live optimistic state rather than the possibly-stale snapshot.
+// Together those cover an overlay still pending at commit and one that settled
+// mid-fetch. Entries clear when the originating mutation settles (success or
+// failure) — on failure the cache patch has already rolled back; on success
+// the server reflects the change and later reads are authoritative.
+const optimisticWatchOverlay = new Map() // `${tmdbShowId}:${season}:${episode}` -> watched(boolean)
+let optimisticWatchRevision = 0
+
+function overlayKey(tmdbShowId, seasonNumber, episodeNumber) {
+  return `${Number(tmdbShowId)}:${Number(seasonNumber)}:${Number(episodeNumber)}`
+}
+
+export function getOptimisticWatchRevision() {
+  return optimisticWatchRevision
+}
+
+export function setOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeNumber, watched }) {
+  optimisticWatchOverlay.set(overlayKey(tmdbShowId, seasonNumber, episodeNumber), watched)
+  optimisticWatchRevision += 1
+}
+
+export function clearOptimisticWatchOverlay({ tmdbShowId, seasonNumber, episodeNumber }) {
+  if (optimisticWatchOverlay.delete(overlayKey(tmdbShowId, seasonNumber, episodeNumber))) {
+    optimisticWatchRevision += 1
+  }
+}
+
+export function resetOptimisticWatchOverlay() {
+  if (optimisticWatchOverlay.size > 0) {
+    optimisticWatchOverlay.clear()
+    optimisticWatchRevision += 1
+  }
+}
+
+// Applies every still-pending overlay entry for this show (optionally scoped
+// to a single season, for the Season Detail loader whose watched list only
+// ever holds that season's keys) on top of a freshly fetched watched-key
+// list, so a detail load that read stale rows can't drop an episode whose
+// optimistic mutation hasn't settled yet. Returns a new array; keys not named
+// by a pending overlay are carried through untouched.
+export function reconcileWatchedListWithOverlay(tmdbShowId, watchedList, { seasonNumber } = {}) {
+  const next = new Set(Array.isArray(watchedList) ? watchedList : [])
+  for (const [k, watched] of optimisticWatchOverlay) {
+    const [showPart, seasonPart, episodePart] = k.split(':')
+    if (Number(showPart) !== Number(tmdbShowId)) continue
+    const season = Number(seasonPart)
+    if (seasonNumber != null && season !== Number(seasonNumber)) continue
+    const key = episodeKey(season, Number(episodePart))
+    if (watched) next.add(key)
+    else next.delete(key)
+  }
+  return [...next]
+}
+
 export function patchShowDetailState(tmdbId, patch) {
   const key = showDetailCacheKey(tmdbId)
   const cached = readDetailCache(key)
@@ -73,7 +145,10 @@ export function patchShowDetailState(tmdbId, patch) {
 }
 
 function withPatchedWatchedKey(watchedList, key, watched) {
-  const next = new Set(watchedList ?? [])
+  // Only an array is a valid watched list. A malformed non-array value (e.g. a
+  // string) is iterable and would seed the Set with individual characters, so
+  // normalise it to empty rather than spreading garbage into the cache.
+  const next = new Set(Array.isArray(watchedList) ? watchedList : [])
   if (watched) next.add(key)
   else next.delete(key)
   return [...next]

@@ -12,6 +12,11 @@ import {
   readDetailCache,
   writeDetailCache,
   patchEpisodeWatchedCaches,
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+  resetOptimisticWatchOverlay,
+  reconcileWatchedListWithOverlay,
+  getOptimisticWatchRevision,
 } from './detailCache'
 
 const TMDB_ID = 900
@@ -40,6 +45,7 @@ function seasonCacheFixture(overrides = {}) {
 
 beforeEach(() => {
   localStorage.clear()
+  resetOptimisticWatchOverlay()
 })
 
 describe('patchEpisodeWatchedCaches', () => {
@@ -175,5 +181,74 @@ describe('patchEpisodeWatchedCaches', () => {
 
     const cached = readDetailCache(showDetailCacheKey(TMDB_ID))
     expect(cached.watchedList.filter((key) => key === '2:2')).toHaveLength(1)
+  })
+
+  it('normalizes a malformed non-array watchedList to empty instead of spreading characters', () => {
+    // A cache whose watchedList somehow became a string must not turn into a
+    // set of single-character keys — the patch should start from empty.
+    writeDetailCache(showDetailCacheKey(TMDB_ID), showCacheFixture({ watchedList: 'oops' }))
+
+    patchEpisodeWatchedCaches({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 2, watched: true })
+
+    const cached = readDetailCache(showDetailCacheKey(TMDB_ID))
+    expect(cached.watchedList).toEqual(['2:2'])
+  })
+})
+
+describe('cross-route optimistic watch overlay', () => {
+  it('reconciles a fetched watched list against a still-pending overlay (adds the unsettled key)', () => {
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+
+    // A stale ShowDetail fetch that missed the in-flight upsert.
+    const reconciled = reconcileWatchedListWithOverlay(TMDB_ID, ['1:1'])
+
+    expect(reconciled.sort()).toEqual(['1:1', '2:5'])
+  })
+
+  it('reconciles an unwatch overlay by removing the key from a stale fetched list', () => {
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: false })
+
+    const reconciled = reconcileWatchedListWithOverlay(TMDB_ID, ['1:1', '2:5'])
+
+    expect(reconciled.sort()).toEqual(['1:1'])
+  })
+
+  it('only applies overlay entries for the requested show', () => {
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+    setOptimisticWatchOverlay({ tmdbShowId: 555, seasonNumber: 1, episodeNumber: 1, watched: true })
+
+    expect(reconcileWatchedListWithOverlay(TMDB_ID, []).sort()).toEqual(['2:5'])
+    expect(reconcileWatchedListWithOverlay(555, []).sort()).toEqual(['1:1'])
+  })
+
+  it('scopes reconciliation to a single season when asked (Season Detail loader)', () => {
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 3, episodeNumber: 1, watched: true })
+
+    const reconciled = reconcileWatchedListWithOverlay(TMDB_ID, [], { seasonNumber: 2 })
+
+    expect(reconciled).toEqual(['2:5'])
+  })
+
+  it('bumps the revision on set and on a clear that removed an entry, but not on a no-op clear', () => {
+    const start = getOptimisticWatchRevision()
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+    const afterSet = getOptimisticWatchRevision()
+    expect(afterSet).toBe(start + 1)
+
+    clearOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5 })
+    const afterClear = getOptimisticWatchRevision()
+    expect(afterClear).toBe(afterSet + 1)
+
+    // Clearing something that was never there must not move the revision.
+    clearOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 9, episodeNumber: 9 })
+    expect(getOptimisticWatchRevision()).toBe(afterClear)
+  })
+
+  it('leaves the fetched list untouched once the overlay is cleared', () => {
+    setOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5, watched: true })
+    clearOptimisticWatchOverlay({ tmdbShowId: TMDB_ID, seasonNumber: 2, episodeNumber: 5 })
+
+    expect(reconcileWatchedListWithOverlay(TMDB_ID, ['1:1'])).toEqual(['1:1'])
   })
 })

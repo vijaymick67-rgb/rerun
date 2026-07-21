@@ -11,7 +11,11 @@ import {
   selectTrackedShowsForWatching,
 } from '../lib/watchingShows'
 import { createWatchMutationQueue, toggleEpisodeOptimistically } from '../lib/seasonWatchMutations'
-import { patchEpisodeWatchedCaches } from '../lib/detailCache'
+import {
+  patchEpisodeWatchedCaches,
+  setOptimisticWatchOverlay,
+  clearOptimisticWatchOverlay,
+} from '../lib/detailCache'
 import { loadWatchingCache, saveWatchingCache } from '../lib/watchingCache'
 import { advanceCachedWatchingRows } from '../lib/watchingCacheTransition'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
@@ -488,17 +492,36 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
             show.id,
             deriveWatchingFields(context.episodesBySeason, nextWatched, context.details),
           )
+          const isWatched =
+            nextWatched.has(episodeKey(episode.season_number, episode.episode_number))
           patchEpisodeWatchedCaches({
             tmdbShowId: show.tmdb_id,
             seasonNumber: episode.season_number,
             episodeNumber: episode.episode_number,
-            watched: nextWatched.has(episodeKey(episode.season_number, episode.episode_number)),
+            watched: isWatched,
+          })
+          // Keep a cross-route overlay alive while this upsert is pending, so
+          // a Show/Season Detail page opened immediately after the tap can't
+          // revert it from a stale background read (see detailCache.js).
+          setOptimisticWatchOverlay({
+            tmdbShowId: show.tmdb_id,
+            seasonNumber: episode.season_number,
+            episodeNumber: episode.episode_number,
+            watched: isWatched,
           })
         },
       })
     } catch {
       setQuickMarkError('Couldn\'t mark that episode watched. Try again.')
     } finally {
+      // The mutation has settled (committed on success, rolled back on
+      // failure); the cache/live state is now authoritative, so drop the
+      // overlay and let later detail reads win.
+      clearOptimisticWatchOverlay({
+        tmdbShowId: show.tmdb_id,
+        seasonNumber: episode.season_number,
+        episodeNumber: episode.episode_number,
+      })
       setQuickMarkingIds((prev) => {
         const next = new Set(prev)
         next.delete(show.id)

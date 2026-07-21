@@ -63,7 +63,12 @@ vi.mock('../lib/tvmaze', () => ({
 
 import { getSeasonEpisodes, getShowDetails } from '../lib/tmdb'
 import Watching from './Watching'
-import { showDetailCacheKey, seasonDetailCacheKey, writeDetailCache } from '../lib/detailCache'
+import {
+  showDetailCacheKey,
+  seasonDetailCacheKey,
+  writeDetailCache,
+  resetOptimisticWatchOverlay,
+} from '../lib/detailCache'
 
 const SHOW = { id: 1, tmdb_id: 900, name: 'The Sopranos', poster_path: null, added_at: '2026-01-01T00:00:00Z', finished_at: null, hidden_at: null }
 
@@ -126,6 +131,8 @@ afterEach(async () => {
   container = null
   root = null
   vi.clearAllMocks()
+  localStorage.clear()
+  resetOptimisticWatchOverlay()
 })
 
 describe('Watching quick mark — one episode at a time', () => {
