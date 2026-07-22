@@ -283,14 +283,18 @@ body {
    slice of the history. Poster width is derived from the row's own
    available width via calc() (not vw/JS) so "~3 full + 1 partial" falls out
    of actual layout at iPhone width instead of a hard-coded breakpoint. The
-   posters are not interactive — only .stats-all-preview__more-link is. */
+   posters are not interactive — only .stats-all-preview__more-link is.
+   No right padding: the partial 4th poster runs flush to the card's own
+   right edge, clipped into its rounded corner by this overflow: hidden. */
 .stats-all-preview {
   position: relative;
   display: block;
-  padding: 0.75rem 0.75rem 0.875rem;
+  overflow: hidden;
+  padding: 0.75rem 0 0.875rem 0.75rem;
 }
 
 .stats-all-preview__row {
+  position: relative;
   display: flex;
   gap: 0.5rem;
   overflow: hidden;
@@ -302,7 +306,7 @@ body {
    bounds outside the narrow-iPhone width this was tuned for. */
 .stats-all-preview__poster {
   flex: 0 0 auto;
-  width: clamp(4.5rem, calc((100% - 3.875rem) / 3), 5.75rem);
+  width: clamp(4.5rem, calc((100% - 3.875rem) / 3), 6rem);
   aspect-ratio: 2 / 3;
   overflow: hidden;
   border-radius: var(--radius-poster);
@@ -317,44 +321,45 @@ body {
   box-shadow: none;
 }
 
-/* Right-edge navigation overlay — the only interactive element in the
-   preview. Anchored to the card's true right edge and spanning its full
-   height (well past the 44px minimum touch target), it doubles as the
-   gradient + chevron "more" affordance. Its width intentionally covers the
-   partial poster's reveal and reaches slightly into the 3rd poster so the
-   gradient — and the seam between them — sits inside its own covered area. */
+/* Purely decorative darkening over the visible sliver of the partial 4th
+   poster — flat translucent tint, not a gradient, and only as wide as the
+   reveal itself so it never reaches the 3rd poster. Never receives pointer
+   events; the separate .stats-all-preview__more-link is what's tappable. */
+.stats-all-preview__partial-shade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2.375rem;
+  background: rgb(8 10 18 / 0.45);
+  pointer-events: none;
+}
+
+/* The literal ">>" and its padded hit area — the only interactive element
+   in the preview. A small fixed box (44x44, the touch-target minimum)
+   vertically centered on the card and anchored to its right edge, not the
+   card's full height and not the full partial-poster width, so it stays
+   localized over ">>" instead of swallowing the whole 4th poster or
+   reaching far into the 3rd. */
 .stats-all-preview__more-link {
   position: absolute;
-  inset: 0 0 0 auto;
+  top: 50%;
+  right: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  transform: translateY(-50%);
   display: flex;
-  width: 4.5rem;
-  min-height: 2.75rem;
   align-items: center;
   justify-content: center;
-  border-radius: 0 var(--radius-card) var(--radius-card) 0;
-  background: linear-gradient(to right, transparent, rgb(3 6 14 / 0.7) 45%, rgb(3 6 14 / 0.82));
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  color: rgb(255 255 255 / 0.92);
 }
 
 .stats-all-preview__more-link:focus-visible {
   outline: 2px solid var(--color-accent-strong);
   outline-offset: 2px;
-}
-
-.stats-all-preview__chevron {
-  display: inline-flex;
-  height: 2.75rem;
-  width: 2.75rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: rgb(17 24 39 / 0.55);
-  color: var(--color-text);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
-}
-
-.stats-all-preview__chevron svg {
-  height: 1.125rem;
-  width: 1.125rem;
 }
 
 .progress-track {

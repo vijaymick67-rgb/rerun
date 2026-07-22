@@ -16,9 +16,10 @@ const MIN_SHOWS_WITHOUT_CLIPPING = 3
 
 // Compact single-row entry point into /stats/all. The posters themselves are
 // a passive visual preview — not a link — so tapping a poster does nothing.
-// Only the right-edge overlay is interactive: one Link with a generous touch
-// target, anchored to the card's right edge, doubling as the "more" gradient
-// + chevron affordance. No nested interactive controls.
+// The partial 4th poster gets a slight shade (purely decorative, pointer-events
+// none) and a literal ">>" — that text is the only interactive element, with a
+// small padded hit area around it. No circular button, no SVG icon, no
+// card-wide overlay. No nested interactive controls.
 export default function StatsAllPreview({ shows }) {
   if (shows.length === 0) return null
 
@@ -40,6 +41,7 @@ export default function StatsAllPreview({ shows }) {
               />
             </div>
           ))}
+          {hasMore && <div className="stats-all-preview__partial-shade" aria-hidden="true" />}
         </div>
         {hasMore && (
           <Link
@@ -47,11 +49,7 @@ export default function StatsAllPreview({ shows }) {
             aria-label={`View all ${shows.length} show${shows.length === 1 ? '' : 's'}`}
             className="stats-all-preview__more-link motion-press"
           >
-            <span className="stats-all-preview__chevron" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="m9 5 7 7-7 7" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </span>
+            <span aria-hidden="true">&gt;&gt;</span>
           </Link>
         )}
       </div>
