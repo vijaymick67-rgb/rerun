@@ -537,7 +537,6 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
   return (
     <div className="app-page phase2-watching px-4 pb-4">
       <header className="route-heading watching-heading">
-        <p className="route-kicker">Your viewing ledger</p>
         <div className="route-heading__line">
           <h1 className="type-page-title"><span>Watching</span></h1>
           {!loading && !error && (
@@ -546,7 +545,6 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
             </span>
           )}
         </div>
-        <p className="route-heading__support">Released episodes, upcoming returns and watch progress.</p>
       </header>
 
       {loading && (

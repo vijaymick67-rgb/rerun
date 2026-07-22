@@ -310,12 +310,8 @@ function ShowDetailInner({ tmdbId }) {
             </div>
           </section>
 
-          <div className="route-section-heading">
-            <div>
-              <p className="route-kicker">Episode ledger</p>
-              <h2>Seasons</h2>
-            </div>
-            <p>{seasons.length} total</p>
+          <div className="route-section-heading detail-seasons-heading">
+            <h2>Seasons ({seasons.length})</h2>
           </div>
 
           <section className="detail-season-list" aria-label="Seasons">

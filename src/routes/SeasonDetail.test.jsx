@@ -121,6 +121,16 @@ afterEach(async () => {
 })
 
 describe('SeasonDetail — individual episode toggle syncs the shared cache helper', () => {
+  it('renders compact dynamic episode and released-progress copy', async () => {
+    await renderSeasonDetail()
+
+    expect(container.querySelector('.season-episode-heading h2').textContent).toBe('Episodes (2)')
+    expect(container.querySelector('.season-progress-summary__copy').textContent).toContain('1 of 2 watched')
+    expect(container.textContent).not.toContain('Season ledger')
+    expect(container.textContent).not.toContain('Released episodes')
+    expect(container.textContent).not.toContain('2 total')
+  })
+
   it("patches this season's own cache and the parent Show Detail cache on a watch tap", async () => {
     writeDetailCache(showDetailCacheKey(900), {
       show: { id: 1, tmdb_id: 900, name: 'The Sopranos' },

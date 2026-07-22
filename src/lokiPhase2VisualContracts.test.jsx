@@ -11,6 +11,20 @@ function rule(selector) {
 }
 
 describe('Loki Armour Phase 2 visual contracts', () => {
+  it('keeps the polished route headings compact, dynamic, and accessible', () => {
+    const watching = source('./routes/Watching.jsx')
+    const showDetail = source('./routes/ShowDetail.jsx')
+    const seasonDetail = source('./routes/SeasonDetail.jsx')
+
+    expect(watching).toContain('aria-label={`${visibleShows.length} active shows`}')
+    expect(watching).not.toMatch(/Your viewing ledger|Released episodes, upcoming returns/)
+    expect(showDetail).toContain('<h2>Seasons ({seasons.length})</h2>')
+    expect(showDetail).not.toMatch(/Episode ledger|\{seasons\.length\} total/)
+    expect(seasonDetail).toContain('<h2>Episodes ({episodes.length})</h2>')
+    expect(seasonDetail).toContain('<strong>{watchedReleasedCount}</strong> of {releasedEpisodes.length} watched')
+    expect(seasonDetail).not.toMatch(/Season ledger|Released episodes|\{episodes\.length\} total/)
+  })
+
   it('uses semantic roles for navigation, progress, completion, warning, and danger', () => {
     const nextUp = rule('.watching-status-copy--next')
     const caughtUp = rule('.watching-status-copy--complete')

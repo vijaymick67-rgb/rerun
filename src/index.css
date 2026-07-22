@@ -342,11 +342,16 @@ body {
 }
 
 .phase2-watching {
-  padding-top: max(1.25rem, var(--safe-area-inset-top));
+  padding-top: max(1.5rem, calc(var(--safe-area-inset-top) + 0.625rem));
 }
 
 .watching-heading {
+  margin-bottom: var(--space-section);
   padding-inline: var(--space-micro);
+}
+
+.watching-heading .route-heading__line {
+  margin-top: 0;
 }
 
 .watching-list {
@@ -387,8 +392,6 @@ body {
   overflow: hidden;
   border-color: var(--color-border-standard);
   background:
-    linear-gradient(90deg, var(--color-armour-edge-strong), var(--color-armour-edge)) top left / 2.75rem 1px no-repeat,
-    linear-gradient(var(--color-armour-edge-strong), var(--color-armour-edge)) top left / 1px 2.75rem no-repeat,
     radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-gold-accent) 8%, transparent), transparent 42%),
     linear-gradient(155deg, var(--color-leather-highlight), transparent 28%),
     var(--color-surface-raised);
@@ -399,6 +402,20 @@ body {
   align-items: stretch;
   gap: var(--space-standard);
   padding: var(--space-related);
+}
+
+.show-detail-hero::before {
+  position: absolute;
+  top: 0.625rem;
+  right: 0.625rem;
+  width: 2.5rem;
+  height: 1.75rem;
+  border-top: 1px solid var(--color-armour-edge-strong);
+  border-right: 1px solid var(--color-armour-edge);
+  border-radius: 0 0.375rem 0 0;
+  pointer-events: none;
+  content: '';
+  opacity: 0.82;
 }
 
 .show-detail-poster {
@@ -437,6 +454,11 @@ body {
   gap: var(--space-compact);
 }
 
+.detail-seasons-heading {
+  margin-top: var(--space-section);
+  margin-bottom: var(--space-related);
+}
+
 .detail-season-row {
   min-height: 4rem;
 }
@@ -469,9 +491,9 @@ body {
 }
 
 .season-progress-summary__copy {
-  margin-top: var(--space-micro);
   color: var(--color-text-secondary);
   font-size: var(--type-metadata-size);
+  line-height: 1.4;
 }
 
 .season-progress-summary__copy strong {
@@ -481,6 +503,7 @@ body {
 }
 
 .season-episode-heading {
+  margin-top: var(--space-section);
   margin-bottom: var(--space-compact);
 }
 

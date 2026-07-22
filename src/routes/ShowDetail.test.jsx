@@ -120,6 +120,9 @@ describe('ShowDetail — released-only hero progress', () => {
     const hero = container.querySelector('.content-surface')
     expect(hero.textContent).toContain('22/23 episodes watched')
     expect(hero.textContent).not.toContain('22/26')
+    expect(container.querySelector('.detail-seasons-heading h2').textContent).toBe('Seasons (1)')
+    expect(container.textContent).not.toContain('Episode ledger')
+    expect(container.textContent).not.toContain('1 total')
   })
 
   it('clamps the progress bar width at 100% even if watched somehow reaches every released episode', async () => {

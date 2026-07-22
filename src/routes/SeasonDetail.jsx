@@ -246,23 +246,16 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       {!loading && episodes && (
         <>
           <section className="route-progress-summary season-progress-summary" aria-label={`Season ${numericSeasonNumber} progress`}>
-            <div>
-              <p className="route-kicker">Released episodes</p>
-              <p className="season-progress-summary__copy">
-                <strong>{watchedReleasedCount}</strong> of {releasedEpisodes.length} watched
-              </p>
-            </div>
+            <p className="season-progress-summary__copy">
+              <strong>{watchedReleasedCount}</strong> of {releasedEpisodes.length} watched
+            </p>
             <div className="progress-track" role="progressbar" aria-label={`Season ${numericSeasonNumber} watch progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={seasonProgressPercent}>
               <div className="progress-fill" style={{ width: `${seasonProgressPercent}%` }} />
             </div>
           </section>
 
           <div className="route-section-heading season-episode-heading">
-            <div>
-              <p className="route-kicker">Season ledger</p>
-              <h2>Episodes</h2>
-            </div>
-            <p>{episodes.length} total</p>
+            <h2>Episodes ({episodes.length})</h2>
           </div>
 
           <section className="season-episodes" aria-label="Episodes">
