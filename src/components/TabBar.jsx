@@ -21,11 +21,7 @@ export default function TabBar() {
             key={tab.to}
             to={tab.to}
             aria-current={isActive ? 'page' : undefined}
-            className={`app-tab-bar__link motion-press flex-1 py-3 text-center ${
-              isActive
-                ? 'text-(--color-accent)'
-                : 'text-(--color-text-muted)'
-            }`}
+            className="app-tab-bar__link motion-press flex-1 py-3 text-center"
           >
             {tab.label}
           </Link>

@@ -384,8 +384,8 @@ describe('Remove surface — refreshed destructive treatment (unchanged)', () =>
     expect(rule).toContain('color: var(--color-text);')
   })
 
-  it('does not alter the shared --color-destructive token used elsewhere in the app', () => {
-    expect(indexCss).toContain('--color-destructive: #f0808a;')
+  it('uses the approved shared destructive role without changing swipe ownership', () => {
+    expect(indexCss).toContain('--color-destructive: #dc7e79;')
   })
 
   it('gives the desktop hover/focus Remove affordance a matching richer treatment', () => {

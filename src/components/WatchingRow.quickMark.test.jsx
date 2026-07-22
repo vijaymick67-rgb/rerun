@@ -304,13 +304,14 @@ describe('status button — surface stays neutral graphite in every state', () =
     expect(doneCheck).toContain('var(--color-status-check-done)')
   })
 
-  it('available check uses the muted smoky periwinkle-grey palette', () => {
-    expect(indexCss).toContain('--color-status-check-idle: #8d93b4;')
+  it('available check uses the neutral muted-text role', () => {
+    expect(indexCss).toContain('--color-status-check-idle: var(--color-text-muted);')
   })
 
-  it('accepted/caughtUp check uses the pistachio-lime palette, not emerald', () => {
-    expect(indexCss).toContain('--color-status-check-done: #a7e85b;')
-    expect(indexCss.toLowerCase()).not.toMatch(/--color-status-check-done:\s*#72c9a4/)
+  it('accepted/caughtUp check uses completion without recoloring the body', () => {
+    expect(indexCss).toContain('--color-status-check-done: var(--color-completion);')
+    expect(indexCss).toContain('--color-completion: var(--color-emerald-strong);')
+    expect(ruleBlockFor('.watching-status-button {')).not.toContain('--color-completion')
   })
 })
 
