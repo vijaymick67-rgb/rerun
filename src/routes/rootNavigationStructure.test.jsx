@@ -47,6 +47,17 @@ describe('root navigation polish', () => {
     expect(html).toContain('>Settings</a>')
   })
 
+  it('keeps the Insights tab active while on the nested /stats/all route', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter initialEntries={['/stats/all']}>
+        <TabBar />
+      </MemoryRouter>,
+    )
+
+    expect((html.match(/aria-current="page"/g) ?? [])).toHaveLength(1)
+    expect(html).toMatch(/<a[^>]*(?:href="\/stats"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/stats")/)
+  })
+
   it.each(rootPages)('removes the redundant %s root heading', (path, heading) => {
     expect(source(path)).not.toMatch(new RegExp(`<h1[^>]*>${heading}</h1>`))
   })
@@ -71,15 +82,22 @@ describe('root navigation polish', () => {
     expect(renderApp('/watching/123/season/1')).toContain('nested-page')
     // Unknown paths still fall through to NotFound.
     expect(renderApp('/no-such-page')).toContain('Page not found')
+    // The nested Stats child route renders directly (no NotFound) and stays
+    // on the Insights tab layout even before any data has loaded.
+    expect(renderApp('/stats/all')).toContain('All Shows')
+    expect(renderApp('/stats/all')).toContain('route-content route-content--tab')
   })
 
   it('keeps the poster action accessible, visible, and behaviorally unchanged', () => {
-    const stats = source('./Stats.jsx')
+    // The show-card poster + three-dot action control was extracted from
+    // Stats.jsx into its own component so the main preview and the
+    // /stats/all grid can share exactly one rendering path.
+    const card = source('../components/StatsShowCard.jsx')
     const actionLabel = 'aria-label={`Actions for ${show.name}`}'
-    const actionLabelIndex = stats.indexOf(actionLabel)
-    const actionStart = stats.lastIndexOf('<button', actionLabelIndex)
-    const actionEnd = stats.indexOf('</button>', actionLabelIndex) + '</button>'.length
-    const actionControl = stats.slice(actionStart, actionEnd)
+    const actionLabelIndex = card.indexOf(actionLabel)
+    const actionStart = card.lastIndexOf('<button', actionLabelIndex)
+    const actionEnd = card.indexOf('</button>', actionLabelIndex) + '</button>'.length
+    const actionControl = card.slice(actionStart, actionEnd)
 
     expect(actionLabelIndex).toBeGreaterThan(-1)
     expect(actionStart).toBeGreaterThan(-1)
@@ -89,8 +107,8 @@ describe('root navigation polish', () => {
     expect(actionControl).toContain(
       'className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11',
     )
-    expect(actionControl).toContain('toggleStatsActionSheet(openActionId, show.tmdb_id)')
-    expect(stats).toContain('to={`/watching/${show.tmdb_id}`}')
+    expect(actionControl).toContain('onOpenActions(show.tmdb_id)')
+    expect(card).toContain('to={`/watching/${show.tmdb_id}`}')
     expect(actionControl).toContain('viewBox="0 0 14 4"')
     expect(actionControl).toContain('className="h-2 w-3.5"')
     expect((actionControl.match(/fill="white"/g) ?? []).length).toBe(3)
@@ -101,5 +119,10 @@ describe('root navigation polish', () => {
     expect(actionControl).not.toContain('h-7 w-7')
     expect(actionControl).not.toContain('h-1 w-3.5')
     expect(actionControl).not.toContain('h-9 w-9')
+
+    // The toggle call itself now lives one level up, in Stats.jsx, shared by
+    // both the card's onOpenActions callback and the action sheet it opens.
+    const stats = source('./Stats.jsx')
+    expect(stats).toContain('toggleStatsActionSheet(openActionId, tmdbId)')
   })
 })

@@ -79,7 +79,7 @@ function OtherRoutes() {
     <div key={getRouteShellKey(location.pathname)} className="route-content route-content--tab">
       <Routes>
         <Route path="/browse" element={<Browse />} />
-        <Route path="/stats" element={<Stats />} />
+        <Route path="/stats/*" element={<Stats />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

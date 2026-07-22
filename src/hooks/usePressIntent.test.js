@@ -154,10 +154,10 @@ describe('cinematic-midnight semantic token CSS', () => {
 describe('navigation-delay coordination is narrowly scoped to card/show navigation Links', () => {
   it('wires WatchingRow, ShowDetail season rows, and Stats posters through handleTapNavigateClick', () => {
     const showDetail = src('../routes/ShowDetail.jsx')
-    const stats = src('../routes/Stats.jsx')
+    const statsShowCard = src('../components/StatsShowCard.jsx')
     expect(watchingRow).toContain('handleTapNavigateClick(e, navigate,')
     expect(showDetail).toContain('handleTapNavigateClick(')
-    expect(stats).toContain('handleTapNavigateClick(')
+    expect(statsShowCard).toContain('handleTapNavigateClick(')
   })
 
   it('never preventDefaults on the pointer/touch phase — only the resulting click of an already-classified tap', () => {

@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { getShowDetails, getSeasonEpisodes, POSTER_BASE } from '../lib/tmdb'
+import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
 import { episodeKey, localTodayISO } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
-import { handleTapNavigateClick } from '../lib/pressIntent'
 import {
   hideTrackedShow,
   isRepresentedInStats,
@@ -13,13 +12,11 @@ import {
 import { patchShowDetailState } from '../lib/detailCache'
 import { clearWatchingCache, removeWatchingShow } from '../lib/watchingCache'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
-import ConfirmDialog from '../components/ConfirmDialog'
-import ProgressiveImage from '../components/ProgressiveImage'
+import StatsAllPreview from '../components/StatsAllPreview'
+import StatsAllShows from './StatsAllShows'
 import {
   filterVisibleStatsRows,
-  isStatsShowBusy,
   removeShowFromStatsState,
-  statsActionItems,
   toggleStatsActionSheet,
 } from '../lib/showState'
 
@@ -245,108 +242,7 @@ function buildVisibleStatsState(shows, watchedRows) {
   return { shows, watchedRows, totalMinutes, insights }
 }
 
-function StatsActionSheet({ show, busy, onClose, onRestore, onRemove }) {
-  useEffect(() => {
-    if (!show) return undefined
-    function handleKeyDown(event) {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, show])
-
-  if (!show) return null
-
-  const titleId = `stats-actions-title-${show.tmdb_id}`
-
-  return (
-    <div
-      className="stats-action-sheet-backdrop safe-area-overlay fixed inset-0 z-40 flex items-end justify-center px-4"
-      onClick={onClose}
-    >
-      <div
-        id="stats-actions-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="stats-action-sheet max-h-[calc(100dvh-6rem)] w-full max-w-md overflow-y-auto p-4"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <h2 id={titleId} className="min-w-0 break-words text-base font-semibold text-(--color-text)">
-            Actions for {show.name}
-          </h2>
-          <button
-            type="button"
-            aria-label="Close actions"
-            onClick={onClose}
-            className="motion-press min-h-11 min-w-11 shrink-0 rounded-lg text-xl leading-none text-(--color-text-muted)"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="mt-3 flex flex-col gap-2">
-          {statsActionItems(show).map((item) => {
-            if (item.id === 'details') {
-              return (
-                <Link
-                  key={item.id}
-                  to={`/watching/${show.tmdb_id}`}
-                  aria-disabled={busy}
-                  onClick={(event) => {
-                    if (busy) {
-                      event.preventDefault()
-                      return
-                    }
-                    onClose()
-                  }}
-                  className="surface-interactive motion-press flex min-h-11 w-full items-center px-3 text-left text-sm font-medium text-(--color-text)"
-                >
-                  {item.label}
-                </Link>
-              )
-            }
-
-            if (item.id === 'cancel') {
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={onClose}
-                  className="motion-press min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium text-(--color-text-muted)"
-                >
-                  {item.label}
-                </button>
-              )
-            }
-
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  onClose()
-                  if (item.id === 'restore') onRestore()
-                  if (item.id === 'remove') onRemove()
-                }}
-                disabled={busy}
-                  className={`motion-press stats-action-${item.destructive ? 'destructive' : 'secondary'} min-h-11 w-full rounded-lg px-3 text-left text-sm font-medium disabled:opacity-60 ${
-                  item.destructive ? 'text-(--color-destructive)' : 'text-(--color-text-secondary)'
-                }`}
-              >
-                {busy && item.id === 'restore' ? 'Restoring…' : item.label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function Stats() {
-  const navigate = useNavigate()
   const [cached] = useState(() => loadCache())
   const [shows, setShows] = useState(() => cached?.shows ?? [])
   const [watchedRows, setWatchedRows] = useState(() => cached?.watchedRows ?? [])
@@ -361,10 +257,6 @@ export default function Stats() {
   const [busyIds, setBusyIds] = useState(new Set())
   const busyIdsRef = useRef(new Set())
   const [confirmingShow, setConfirmingShow] = useState(null)
-
-  const actionShow = openActionId === null
-    ? null
-    : shows.find((show) => show.tmdb_id === openActionId) ?? null
 
   useEffect(() => {
     let ignore = false
@@ -635,6 +527,63 @@ export default function Stats() {
 
   const hasData = shows.length > 0
 
+  function handleRetry() {
+    setLoading(cached === null)
+    setLoadAttempt((attempt) => attempt + 1)
+  }
+
+  function handleOpenActions(tmdbId) {
+    setActionError(null)
+    setActionSuccess(null)
+    setOpenActionId(toggleStatsActionSheet(openActionId, tmdbId))
+  }
+
+  return (
+    <Routes>
+      <Route
+        index
+        element={
+          <StatsMainView
+            loading={loading}
+            error={error}
+            hasData={hasData}
+            totalMinutes={totalMinutes}
+            insight={insight}
+            shows={shows}
+            onRetry={handleRetry}
+          />
+        }
+      />
+      <Route
+        path="all"
+        element={
+          <StatsAllShows
+            loading={loading}
+            error={error}
+            shows={shows}
+            busyIds={busyIds}
+            openActionId={openActionId}
+            actionError={actionError}
+            actionSuccess={actionSuccess}
+            confirmingShow={confirmingShow}
+            onOpenActions={handleOpenActions}
+            onCloseActions={() => setOpenActionId(null)}
+            onRestore={restoreShow}
+            onRequestRemove={setConfirmingShow}
+            onConfirmRemove={() => confirmingShow && removeShow(confirmingShow)}
+            onCancelRemove={() => setConfirmingShow(null)}
+            onRetry={handleRetry}
+          />
+        }
+      />
+    </Routes>
+  )
+}
+
+// The main compact Insights view — summary, personal insight, and the
+// All(n) collection preview. Kept inline (rather than split into its own
+// file) so this file still visibly owns the "app-page" main-tab layout.
+function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, onRetry }) {
   return (
     <div className="app-page px-4 pb-4">
       <h1 className="sr-only">Insights</h1>
@@ -653,26 +602,11 @@ export default function Stats() {
           <span>{error.message} <span className="whitespace-nowrap">({error.code})</span></span>
           <button
             type="button"
-            onClick={() => {
-              setLoading(cached === null)
-              setLoadAttempt((attempt) => attempt + 1)
-            }}
+            onClick={onRetry}
             className="focus-ring motion-press min-h-11 shrink-0 rounded-md px-3 font-semibold text-(--color-destructive)"
           >
             Retry
           </button>
-        </div>
-      )}
-
-      {actionError && (
-        <div role="alert" className="status-banner status-banner--destructive motion-banner mt-4 min-w-0 break-words text-sm">
-          {actionError}
-        </div>
-      )}
-
-      {actionSuccess && (
-        <div role="status" className="status-banner status-banner--success motion-banner mt-4 min-w-0 break-words text-sm">
-          {actionSuccess}
         </div>
       )}
 
@@ -700,87 +634,9 @@ export default function Stats() {
             </section>
           )}
 
-          <section className="mt-6" aria-labelledby="show-history-title">
-            <h2 id="show-history-title" className="type-section-title mb-3">Show history</h2>
-            <div className="grid grid-cols-3 gap-x-3 gap-y-6">
-            {shows.map((show) => {
-              const isBusy = isStatsShowBusy(busyIds, show.tmdb_id)
-              const actionsOpen = openActionId === show.tmdb_id
-
-              return (
-                <article key={show.tmdb_id} className="stats-show-card min-w-0">
-                  <div className="relative">
-                    <Link
-                      to={`/watching/${show.tmdb_id}`}
-                      onClick={(e) => handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)}
-                      className="motion-press block"
-                    >
-                      <ProgressiveImage
-                        src={show.poster_path ? POSTER_BASE + show.poster_path : null}
-                        alt={show.name}
-                        fallbackLabel="No poster"
-                        className="poster-card aspect-[2/3] w-full"
-                      />
-                    </Link>
-
-                    <button
-                      type="button"
-                      aria-label={`Actions for ${show.name}`}
-                      aria-expanded={actionsOpen}
-                      aria-controls="stats-actions-sheet"
-                      onClick={() => {
-                        setActionError(null)
-                        setActionSuccess(null)
-                        setOpenActionId(toggleStatsActionSheet(openActionId, show.tmdb_id))
-                      }}
-                      disabled={isBusy}
-                      className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-60"
-                    >
-                      <svg
-                        viewBox="0 0 14 4"
-                        className="h-2 w-3.5"
-                        aria-hidden="true"
-                      >
-                        <circle cx="2" cy="2" r="1.5" fill="white" stroke="rgba(0, 0, 0, 0.85)" strokeWidth="0.75" paintOrder="stroke fill" />
-                        <circle cx="7" cy="2" r="1.5" fill="white" stroke="rgba(0, 0, 0, 0.85)" strokeWidth="0.75" paintOrder="stroke fill" />
-                        <circle cx="12" cy="2" r="1.5" fill="white" stroke="rgba(0, 0, 0, 0.85)" strokeWidth="0.75" paintOrder="stroke fill" />
-                      </svg>
-                    </button>
-                  </div>
-
-                  <p className="type-show-title mt-1.5 truncate text-(--color-text)">
-                    {show.name}
-                  </p>
-                </article>
-              )
-            })}
-            </div>
-          </section>
+          <StatsAllPreview shows={shows} />
         </>
       )}
-
-      <StatsActionSheet
-        show={actionShow}
-        busy={actionShow ? isStatsShowBusy(busyIds, actionShow.tmdb_id) : false}
-        onClose={() => setOpenActionId(null)}
-        onRestore={() => actionShow && restoreShow(actionShow)}
-        onRemove={() => actionShow && setConfirmingShow(actionShow)}
-      />
-
-      <ConfirmDialog
-        open={confirmingShow !== null}
-        title={confirmingShow ? `Remove ${confirmingShow.name} from Rerun?` : 'Remove show?'}
-        message={
-          confirmingShow
-            ? `It will disappear from Insights and Watching, but your watched episodes and watch dates will be preserved. Adding it again later will restore your progress.`
-            : ''
-        }
-        confirmLabel="Remove from Insights"
-        cancelLabel="Cancel"
-        danger
-        onConfirm={() => confirmingShow && removeShow(confirmingShow)}
-        onCancel={() => setConfirmingShow(null)}
-      />
     </div>
   )
 }

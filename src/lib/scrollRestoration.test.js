@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import {
   createBoundedScrollRestorer,
   flushPendingScrollPosition,
+  getRouteShellKey,
   getScrollNavigationAction,
   getScrollRouteKey,
   isNestedParentPath,
@@ -78,6 +79,53 @@ describe('scroll restoration route policy', () => {
   it('keeps scroll memory in session only', () => {
     expect(source).not.toContain('localStorage')
     expect(source).not.toContain('sessionStorage')
+  })
+})
+
+describe('Stats nested route (/stats/all) scroll + shell policy', () => {
+  it('gives /stats and /stats/all the same shell identity, so entering the expanded page never remounts the shared Stats data owner', () => {
+    expect(getRouteShellKey('/stats/all')).toBe(getRouteShellKey('/stats'))
+    expect(getRouteShellKey('/stats/all')).toBe('/stats')
+  })
+
+  it('does not fold /stats/all into any other tab or the Watching subtree', () => {
+    expect(getRouteShellKey('/stats/all')).not.toBe(getRouteShellKey('/watching'))
+    expect(getRouteShellKey('/stats/all')).not.toBe(getRouteShellKey('/browse'))
+    expect(getRouteShellKey('/stats/all')).not.toBe(getRouteShellKey('/settings'))
+  })
+
+  it('/stats/all keeps its own scroll-position key, independent of /stats', () => {
+    expect(getScrollRouteKey('/stats/all')).toBe('/stats/all')
+    expect(getScrollRouteKey('/stats/all')).not.toBe(getScrollRouteKey('/stats'))
+  })
+
+  it('entering /stats/all from the main preview link starts at the top', () => {
+    expect(getScrollNavigationAction({
+      isInitial: false,
+      navigationType: 'PUSH',
+      previousPathname: '/stats',
+      pathname: '/stats/all',
+    })).toEqual({ type: 'top', key: '/stats/all' })
+  })
+
+  it('a forward (redo) POP back into /stats/all restores its own previously-captured position, same as the Watching subtree already does for nested forward POPs', () => {
+    expect(getScrollNavigationAction({
+      isInitial: false,
+      navigationType: 'POP',
+      previousPathname: '/stats',
+      pathname: '/stats/all',
+    })).toEqual({ type: 'restore', key: '/stats/all' })
+  })
+
+  it('returning to /stats from /stats/all restores the parent scroll position, via the visible back link, browser Back, or any other route landing on /stats', () => {
+    for (const navigationType of ['PUSH', 'POP']) {
+      expect(getScrollNavigationAction({
+        isInitial: false,
+        navigationType,
+        previousPathname: '/stats/all',
+        pathname: '/stats',
+      })).toEqual({ type: 'restore', key: '/stats' })
+    }
   })
 })
 
