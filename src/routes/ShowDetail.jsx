@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes, getExternalIds, POSTER_BASE } from '../lib/tmdb'
 import { getShowReleaseMap } from '../lib/tvmaze'
-import { computeReleasedProgress, episodeKey, hasAired } from '../lib/watchHelpers'
+import { episodeKey, hasAired } from '../lib/watchHelpers'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { attachReleaseData } from '../lib/watchingShows'
 import { handleTapNavigateClick } from '../lib/pressIntent'
@@ -12,6 +12,7 @@ import {
   seasonDetailCacheKey,
   readDetailCache,
   writeDetailCache,
+  mergeDetailCache,
   clearDetailCache,
   setOptimisticWatchOverlay,
   clearOptimisticWatchOverlay,
@@ -24,6 +25,12 @@ import ProgressiveImage from '../components/ProgressiveImage'
 import { createWatchMutationQueue, toggleSeasonOptimistically } from '../lib/seasonWatchMutations'
 import { withTimeout } from '../lib/dataLoading'
 
+const SYNOPSIS_FALLBACK = 'Synopsis unavailable.'
+
+function usableSynopsis(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 // tmdbId changes are handled by remounting (see the keyed wrapper below)
 // rather than resetting state in an effect, so the cache-on-mount
 // initializers below always read the correct show's cache.
@@ -34,6 +41,7 @@ function ShowDetailInner({ tmdbId }) {
 
   const [cached] = useState(() => readDetailCache(cacheKey))
   const [show, setShow] = useState(() => cached?.show ?? null)
+  const [synopsis, setSynopsis] = useState(() => usableSynopsis(cached?.synopsis))
   const [seasons, setSeasons] = useState(() => cached?.seasons ?? [])
   const [episodesBySeason, setEpisodesBySeason] = useState(() => cached?.episodesBySeason ?? {})
   const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
@@ -115,7 +123,10 @@ function ShowDetailInner({ tmdbId }) {
           episodeKey(row.season_number, row.episode_number),
         )
 
+        const nextSynopsis = usableSynopsis(details.overview) || usableSynopsis(cached?.synopsis)
+
         setShow(trackedShow)
+        setSynopsis(nextSynopsis)
         setSeasons(seasonList)
         setEpisodesBySeason(bySeason)
         // Trust the fetched rows only if no local mutation happened during the
@@ -130,8 +141,9 @@ function ShowDetailInner({ tmdbId }) {
           : watchedRef.current
         watchedRef.current = nextWatched
         setWatched(nextWatched)
-        writeDetailCache(cacheKey, {
+        mergeDetailCache(cacheKey, {
           show: trackedShow,
+          synopsis: nextSynopsis,
           seasons: seasonList,
           episodesBySeason: bySeason,
           watchedList: [...nextWatched],
@@ -163,21 +175,12 @@ function ShowDetailInner({ tmdbId }) {
     setLoadAttempt((attempt) => attempt + 1)
   }
 
-  // Released-only progress: the denominator is episodes that have actually
-  // aired per the existing release/timezone engine (hasAired), never every
-  // TMDB row including future unaired episodes. See computeReleasedProgress.
-  const {
-    releasedCount: totalEpisodeCount,
-    watchedCount: totalWatchedCount,
-    percent: totalProgressPercent,
-  } = computeReleasedProgress(episodesBySeason, watched)
-
   function commitWatched(nextWatchedSet, seasonNumber, overlayTokens) {
     const next = new Set(nextWatchedSet)
     watchedRef.current = next
     setWatched(next)
     const watchedList = [...next]
-    writeDetailCache(cacheKey, { show, seasons, episodesBySeason, watchedList })
+    mergeDetailCache(cacheKey, { show, seasons, episodesBySeason, watchedList })
     const seasonCacheKey = seasonDetailCacheKey(numericTmdbId, seasonNumber)
     const seasonCached = readDetailCache(seasonCacheKey)
     writeDetailCache(seasonCacheKey, {
@@ -279,7 +282,7 @@ function ShowDetailInner({ tmdbId }) {
 
       {!loading && show && (
         <>
-          <section className="route-hero show-detail-hero content-surface mt-4 flex gap-3 p-3" aria-label={`${show.name} progress summary`}>
+          <section className="route-hero show-detail-hero content-surface mt-4 flex gap-3 p-3" aria-label={`${show.name} synopsis`}>
             <ProgressiveImage
               src={show.poster_path ? POSTER_BASE + show.poster_path : null}
               alt={show.name}
@@ -289,24 +292,9 @@ function ShowDetailInner({ tmdbId }) {
               className="phase2-poster-frame show-detail-poster h-32 w-24 shrink-0"
             />
             <div className="show-detail-hero__copy min-w-0 flex-1">
-              <p className="route-kicker">Viewing progress</p>
-              <p className="show-detail-hero__seasons">
-                {seasons.length} season{seasons.length === 1 ? '' : 's'}
+              <p className="show-detail-hero__synopsis">
+                {synopsis || SYNOPSIS_FALLBACK}
               </p>
-
-              {totalEpisodeCount > 0 && (
-                <>
-                  <p className="show-detail-hero__progress-copy">
-                    {totalWatchedCount}/{totalEpisodeCount} episodes watched
-                  </p>
-                  <div className="progress-track mt-3 w-full" role="progressbar" aria-label={`${show.name} watch progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={totalProgressPercent}>
-                    <div
-                      className="progress-fill"
-                      style={{ width: `${totalProgressPercent}%` }}
-                    />
-                  </div>
-                </>
-              )}
             </div>
           </section>
 

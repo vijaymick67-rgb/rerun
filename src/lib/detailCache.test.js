@@ -11,6 +11,7 @@ import {
   seasonDetailCacheKey,
   readDetailCache,
   writeDetailCache,
+  mergeDetailCache,
   patchEpisodeWatchedCaches,
   setOptimisticWatchOverlay,
   clearOptimisticWatchOverlay,
@@ -30,6 +31,7 @@ function showCacheFixture(overrides = {}) {
       2: [{ episode_number: 1, name: 'S2E1' }, { episode_number: 2, name: 'S2E2' }],
     },
     watchedList: ['1:1'],
+    synopsis: 'A cached series synopsis.',
     ...overrides,
   }
 }
@@ -169,6 +171,7 @@ describe('patchEpisodeWatchedCaches', () => {
 
     const showCached = readDetailCache(showDetailCacheKey(TMDB_ID))
     expect(showCached.show).toEqual({ id: 1, tmdb_id: TMDB_ID, name: 'The Sopranos' })
+    expect(showCached.synopsis).toBe('A cached series synopsis.')
     const seasonCached = readDetailCache(seasonDetailCacheKey(TMDB_ID, 2))
     expect(seasonCached.showName).toBe('The Sopranos')
   })
@@ -192,6 +195,32 @@ describe('patchEpisodeWatchedCaches', () => {
 
     const cached = readDetailCache(showDetailCacheKey(TMDB_ID))
     expect(cached.watchedList).toEqual(['2:2'])
+  })
+})
+
+describe('mergeDetailCache', () => {
+  it('adds synopsis to an old entry without erasing the existing cache shape', () => {
+    const key = showDetailCacheKey(TMDB_ID)
+    const oldEntry = showCacheFixture()
+    delete oldEntry.synopsis
+    writeDetailCache(key, oldEntry)
+
+    mergeDetailCache(key, { synopsis: 'Fresh TMDB overview.' })
+
+    expect(readDetailCache(key)).toEqual({
+      ...oldEntry,
+      synopsis: 'Fresh TMDB overview.',
+    })
+  })
+
+  it('lets watched-state rewrites preserve a valid synopsis', () => {
+    const key = showDetailCacheKey(TMDB_ID)
+    writeDetailCache(key, showCacheFixture())
+
+    mergeDetailCache(key, { watchedList: ['1:1', '2:1'] })
+
+    expect(readDetailCache(key).synopsis).toBe('A cached series synopsis.')
+    expect(readDetailCache(key).watchedList).toEqual(['1:1', '2:1'])
   })
 })
 

@@ -41,12 +41,14 @@ vi.mock('../lib/tvmaze', () => ({
 }))
 
 import { getSeasonEpisodes, getShowDetails } from '../lib/tmdb'
+import { computeReleasedProgress } from '../lib/watchHelpers'
 import {
   setOptimisticWatchOverlay,
   clearOptimisticWatchOverlay,
   resetOptimisticWatchOverlay,
   showDetailCacheKey,
   readDetailCache,
+  writeDetailCache,
 } from '../lib/detailCache'
 import ShowDetail from './ShowDetail'
 
@@ -66,13 +68,21 @@ async function renderShowDetail(tmdbId) {
       </MemoryRouter>,
     )
   })
-  // Flush the data-load effect's pending microtasks (mocked Supabase/TMDB/TVmaze
-  // calls all resolve on the microtask queue, no real timers involved).
   await act(async () => {
     await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
   })
+}
+
+function cachedShow(tmdbId, synopsis) {
+  return {
+    show: { id: tmdbId, tmdb_id: tmdbId, name: `Show ${tmdbId}` },
+    synopsis,
+    seasons: [{ season_number: 1 }],
+    episodesBySeason: { 1: [] },
+    watchedList: [],
+  }
 }
 
 beforeEach(() => {
@@ -91,72 +101,129 @@ afterEach(async () => {
   resetOptimisticWatchOverlay()
 })
 
-describe('ShowDetail — released-only hero progress', () => {
-  it('shows 22/23 (released-only), not 22/26 (raw TMDB total), with 3 future episodes listed', async () => {
+describe('ShowDetail - cached show-level synopsis hero', () => {
+  it('renders cached synopsis immediately while the existing details refresh is pending', async () => {
+    trackedShowResult = { data: { id: 9, tmdb_id: 509, name: 'Pending Refresh' }, error: null }
+    watchedRowsResult = { data: [], error: null }
+    writeDetailCache(showDetailCacheKey(509), cachedShow(509, 'Visible before refresh settles.'))
+    getShowDetails.mockReturnValue(new Promise(() => {}))
+
+    await renderShowDetail(509)
+
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('Visible before refresh settles.')
+  })
+
+  it('renders the existing TMDB show overview and removes progress presentation', async () => {
     trackedShowResult = { data: { id: 1, tmdb_id: 501, name: 'Example Show' }, error: null }
-    watchedRowsResult = {
-      data: Array.from({ length: 22 }, (_, i) => ({ season_number: 1, episode_number: i + 1 })),
-      error: null,
-    }
-    getShowDetails.mockResolvedValue({ seasons: [{ season_number: 1 }] })
+    watchedRowsResult = { data: [{ season_number: 1, episode_number: 1 }], error: null }
+    getShowDetails.mockResolvedValue({
+      overview: 'A family confronts the cost of an extraordinary legacy.',
+      seasons: [{ season_number: 1 }, { season_number: 2 }],
+    })
     getSeasonEpisodes.mockResolvedValue({
-      episodes: [
-        ...Array.from({ length: 23 }, (_, i) => ({
-          episode_number: i + 1, name: `E${i + 1}`, air_date: '2026-01-01', runtime: 40,
-        })),
-        // 3 future TMDB rows already listed — must not inflate the denominator.
-        ...Array.from({ length: 3 }, (_, i) => ({
-          episode_number: 24 + i, name: `Future ${i}`, air_date: '2099-01-01', runtime: 40,
-        })),
-      ],
+      episodes: [{ episode_number: 1, overview: 'Episode-specific copy.', air_date: '2026-01-01' }],
     })
 
     await renderShowDetail(501)
 
-    // The hero count is released-only (22/23). The season row below it
-    // intentionally keeps its own established raw-total semantics (22/26)
-    // per spec — so this asserts the hero text specifically, not the whole
-    // page, to avoid a false negative against that legitimate season row.
-    const hero = container.querySelector('.content-surface')
-    expect(hero.textContent).toContain('22/23 episodes watched')
-    expect(hero.textContent).not.toContain('22/26')
-    expect(container.querySelector('.detail-seasons-heading h2').textContent).toBe('Seasons (1)')
-    expect(container.textContent).not.toContain('Episode ledger')
-    expect(container.textContent).not.toContain('1 total')
+    const hero = container.querySelector('.show-detail-hero')
+    expect(hero.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('A family confronts the cost of an extraordinary legacy.')
+    expect(hero.textContent).not.toMatch(/Viewing progress|episodes watched|season count/i)
+    expect(hero.querySelector('[role="progressbar"]')).toBeNull()
+    expect(container.querySelector('.detail-seasons-heading h2').textContent).toBe('Seasons (2)')
+    expect(getShowDetails).toHaveBeenCalledTimes(1)
+    expect(readDetailCache(showDetailCacheKey(501)).synopsis)
+      .toBe('A family confronts the cost of an extraordinary legacy.')
   })
 
-  it('clamps the progress bar width at 100% even if watched somehow reaches every released episode', async () => {
+  it('keeps a valid cached synopsis when refresh returns an empty overview', async () => {
     trackedShowResult = { data: { id: 2, tmdb_id: 502, name: 'Finished Run' }, error: null }
-    watchedRowsResult = {
-      data: [{ season_number: 1, episode_number: 1 }, { season_number: 1, episode_number: 2 }],
-      error: null,
-    }
-    getShowDetails.mockResolvedValue({ seasons: [{ season_number: 1 }] })
-    getSeasonEpisodes.mockResolvedValue({
-      episodes: [
-        { episode_number: 1, name: 'E1', air_date: '2026-01-01', runtime: 40 },
-        { episode_number: 2, name: 'E2', air_date: '2026-01-08', runtime: 40 },
-      ],
-    })
+    watchedRowsResult = { data: [], error: null }
+    writeDetailCache(showDetailCacheKey(502), cachedShow(502, 'The durable cached series synopsis.'))
+    getShowDetails.mockResolvedValue({ overview: '   ', seasons: [{ season_number: 1 }] })
+    getSeasonEpisodes.mockResolvedValue({ episodes: [] })
 
     await renderShowDetail(502)
 
-    expect(container.textContent).toContain('2/2 episodes watched')
-    const fill = container.querySelector('.progress-fill')
-    expect(fill.style.width).toBe('100%')
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('The durable cached series synopsis.')
+    expect(readDetailCache(showDetailCacheKey(502)).synopsis)
+      .toBe('The durable cached series synopsis.')
+  })
+
+  it('replaces an older cached synopsis with a fresh non-empty TMDB overview', async () => {
+    trackedShowResult = { data: { id: 6, tmdb_id: 506, name: 'Fresh Copy' }, error: null }
+    watchedRowsResult = { data: [], error: null }
+    writeDetailCache(showDetailCacheKey(506), cachedShow(506, 'Older cached synopsis.'))
+    getShowDetails.mockResolvedValue({
+      overview: 'Fresh show-level TMDB synopsis.',
+      seasons: [{ season_number: 1 }],
+    })
+    getSeasonEpisodes.mockResolvedValue({ episodes: [] })
+
+    await renderShowDetail(506)
+
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('Fresh show-level TMDB synopsis.')
+    expect(readDetailCache(showDetailCacheKey(506)).synopsis)
+      .toBe('Fresh show-level TMDB synopsis.')
+  })
+
+  it('does not substitute season or episode overviews when show overview is missing', async () => {
+    trackedShowResult = { data: { id: 3, tmdb_id: 503, name: 'No Overview' }, error: null }
+    watchedRowsResult = { data: [], error: null }
+    getShowDetails.mockResolvedValue({
+      overview: null,
+      seasons: [{ season_number: 1, overview: 'Season copy must not appear.' }],
+    })
+    getSeasonEpisodes.mockResolvedValue({
+      episodes: [{ episode_number: 1, overview: 'Episode copy must not appear.' }],
+    })
+
+    await renderShowDetail(503)
+
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('Synopsis unavailable.')
+    expect(container.textContent).not.toMatch(/Season copy|Episode copy/)
+  })
+
+  it('keeps cached synopsis visible when the background TMDB refresh fails', async () => {
+    trackedShowResult = { data: { id: 4, tmdb_id: 504, name: 'Cached Failure' }, error: null }
+    watchedRowsResult = { data: [], error: null }
+    writeDetailCache(showDetailCacheKey(504), cachedShow(504, 'Still available while offline.'))
+    getShowDetails.mockRejectedValue(new Error('TMDB unavailable'))
+
+    await renderShowDetail(504)
+
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('Still available while offline.')
+    expect(readDetailCache(showDetailCacheKey(504)).synopsis)
+      .toBe('Still available while offline.')
+  })
+
+  it('is backward-compatible with old cache entries lacking synopsis', async () => {
+    trackedShowResult = { data: { id: 5, tmdb_id: 505, name: 'Old Cache' }, error: null }
+    watchedRowsResult = { data: [], error: null }
+    const oldEntry = cachedShow(505, undefined)
+    delete oldEntry.synopsis
+    writeDetailCache(showDetailCacheKey(505), oldEntry)
+    getShowDetails.mockResolvedValue({ overview: '', seasons: [{ season_number: 1 }] })
+    getSeasonEpisodes.mockResolvedValue({ episodes: [] })
+
+    await renderShowDetail(505)
+
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('Synopsis unavailable.')
   })
 })
 
-describe('ShowDetail — cross-route stale-refresh protection', () => {
+describe('ShowDetail - cross-route stale-refresh protection', () => {
   it('does not let a stale watched fetch revert an in-flight quick tick from another route', async () => {
     trackedShowResult = { data: { id: 3, tmdb_id: 601, name: 'Race Show' }, error: null }
-    // The background read captured its snapshot before the quick tick's upsert
-    // was visible, so it is missing episode 2.
-    watchedRowsResult = {
-      data: [{ season_number: 1, episode_number: 1 }],
-      error: null,
-    }
-    getShowDetails.mockResolvedValue({ seasons: [{ season_number: 1 }] })
+    watchedRowsResult = { data: [{ season_number: 1, episode_number: 1 }], error: null }
+    getShowDetails.mockResolvedValue({ overview: 'Series overview.', seasons: [{ season_number: 1 }] })
     getSeasonEpisodes.mockResolvedValue({
       episodes: [
         { episode_number: 1, name: 'E1', air_date: '2026-01-01', runtime: 40 },
@@ -164,21 +231,35 @@ describe('ShowDetail — cross-route stale-refresh protection', () => {
       ],
     })
 
-    // A Watching quick tick just marked S1E2 watched; its upsert is still
-    // pending, so the cross-route overlay is live.
     setOptimisticWatchOverlay({ tmdbShowId: 601, seasonNumber: 1, episodeNumber: 2, watched: true })
 
     await renderShowDetail(601)
 
-    // The stale fetch (1/2) must be reconciled up to the optimistic 2/2, and
-    // the cache ShowDetail rewrote must keep the optimistic key rather than the
-    // stale server snapshot.
-    expect(container.textContent).toContain('2/2 episodes watched')
     const cached = readDetailCache(showDetailCacheKey(601))
     expect(cached.watchedList.sort()).toEqual(['1:1', '1:2'])
+    expect(cached.synopsis).toBe('Series overview.')
 
-    // Once the mutation settles the overlay is dropped; a later fetch is free
-    // to be authoritative again.
     clearOptimisticWatchOverlay({ tmdbShowId: 601, seasonNumber: 1, episodeNumber: 2 })
+  })
+})
+
+describe('ShowDetail protected released-progress calculation', () => {
+  it('still calculates 22/23 from released episodes without future TMDB rows', () => {
+    const episodes = [
+      ...Array.from({ length: 23 }, (_, index) => ({
+        episode_number: index + 1,
+        air_date: '2026-01-01',
+      })),
+      ...Array.from({ length: 3 }, (_, index) => ({
+        episode_number: index + 24,
+        air_date: '2099-01-01',
+      })),
+    ]
+    const watched = new Set(Array.from({ length: 22 }, (_, index) => `1:${index + 1}`))
+
+    const progress = computeReleasedProgress({ 1: episodes }, watched)
+    expect(progress.releasedCount).toBe(23)
+    expect(progress.watchedCount).toBe(22)
+    expect(progress.percent).toBeCloseTo((22 / 23) * 100)
   })
 })

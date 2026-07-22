@@ -68,6 +68,18 @@ describe('Loki Armour Phase 2 visual contracts', () => {
     expect(css).not.toContain('.show-detail-hero::before')
   })
 
+  it('presents only muted show-level synopsis copy beside the Show Detail poster', () => {
+    const showDetail = source('./routes/ShowDetail.jsx')
+    const synopsis = rule('.show-detail-hero__synopsis')
+
+    expect(showDetail).toContain('details.overview')
+    expect(showDetail).toContain('className="show-detail-hero__synopsis"')
+    expect(showDetail).not.toMatch(/Viewing progress|show-detail-hero__seasons|show-detail-hero__progress-copy/)
+    expect(synopsis).toContain('var(--color-gold-accent)')
+    expect(synopsis).not.toContain('var(--color-gold-accent-strong)')
+    expect(synopsis).not.toMatch(/glow|text-shadow/)
+  })
+
   it('preserves route ownership, destinations, and future-episode gating', () => {
     const app = source('./App.jsx')
     const row = source('./components/WatchingRow.jsx')
