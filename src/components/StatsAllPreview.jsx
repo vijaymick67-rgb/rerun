@@ -8,18 +8,22 @@ import ProgressiveImage from './ProgressiveImage'
 const PREVIEW_LIMIT = 6
 
 // The narrowest supported width (~390px iPhone) only guarantees 3 full
-// posters before the row clips — see .stats-all-preview__poster's clamp() in
-// index.css. Below that count nothing is actually hidden, so the "more"
-// affordance must stay off; at or above it, content is always clipped even
-// though up to PREVIEW_LIMIT posters may be mounted in the DOM.
+// posters before the row clips — see .stats-all-preview__poster's width
+// calc() in index.css. Below that count nothing is actually hidden, so the
+// "more" affordance must stay off; at or above it, content is always clipped
+// even though up to PREVIEW_LIMIT posters may be mounted in the DOM.
 const MIN_SHOWS_WITHOUT_CLIPPING = 3
 
 // Compact single-row entry point into /stats/all. The posters themselves are
-// a passive visual preview — not a link — so tapping a poster does nothing.
-// The partial 4th poster gets a slight shade (purely decorative, pointer-events
-// none) and a literal ">>" — that text is the only interactive element, with a
-// small padded hit area around it. No circular button, no SVG icon, no
-// card-wide overlay. No nested interactive controls.
+// a passive visual preview inside an aria-hidden row — tapping a poster does
+// nothing. The visible sliver of the 4th poster is covered by a separate
+// "continuation" overlay: a decorative shade (pointer-events: none) plus one
+// small ">>" link. That overlay carries an explicit z-index ABOVE the poster
+// <img> (.progressive-image__img is position:relative; z-index:1, so without
+// this the loaded artwork paints over the shade and ">>" — the exact reason
+// the prior static-harness "fix" looked correct but vanished on a real device
+// once the posters actually loaded). No circular button, no SVG, no card-wide
+// overlay. The ">>" link is the only interactive element.
 export default function StatsAllPreview({ shows }) {
   if (shows.length === 0) return null
 
@@ -41,16 +45,18 @@ export default function StatsAllPreview({ shows }) {
               />
             </div>
           ))}
-          {hasMore && <div className="stats-all-preview__partial-shade" aria-hidden="true" />}
         </div>
         {hasMore && (
-          <Link
-            to="/stats/all"
-            aria-label={`View all ${shows.length} show${shows.length === 1 ? '' : 's'}`}
-            className="stats-all-preview__more-link motion-press"
-          >
-            <span aria-hidden="true">&gt;&gt;</span>
-          </Link>
+          <div className="stats-all-preview__continuation">
+            <div className="stats-all-preview__continuation-shade" aria-hidden="true" />
+            <Link
+              to="/stats/all"
+              aria-label={`View all ${shows.length} shows`}
+              className="stats-all-preview__more-link"
+            >
+              <span className="stats-all-preview__more-text" aria-hidden="true">{'>>'}</span>
+            </Link>
+          </div>
         )}
       </div>
     </section>

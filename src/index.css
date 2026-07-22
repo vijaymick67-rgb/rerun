@@ -281,7 +281,7 @@ body {
 /* Compact All(n) collection preview on the main Insights page — a single
    CSS-clipped row (no scrolling) of passive posters, previewing a bounded
    slice of the history. Poster width is derived from the row's own
-   available width via calc() (not vw/JS) so "~3 full + 1 partial" falls out
+   available width via calc() (not vw/JS) so "3 full + 1 partial" falls out
    of actual layout at iPhone width instead of a hard-coded breakpoint. The
    posters are not interactive — only .stats-all-preview__more-link is.
    No right padding: the partial 4th poster runs flush to the card's own
@@ -300,13 +300,19 @@ body {
   overflow: hidden;
 }
 
-/* Width = (100% - 3 gaps - one intentional ~38px partial reveal) / 3, so
-   exactly 3 posters render full-width and a controlled sliver of the 4th
-   stays visible before the row clips the rest — clamped to keep sane
-   bounds outside the narrow-iPhone width this was tuned for. */
+/* Width = (100% - 3 gaps - one intentional partial reveal) / 3, so exactly
+   3 posters render full-width and a controlled sliver of the 4th stays
+   visible before the row clips the rest. The subtracted 4.75rem is 3 gaps
+   (3 x 0.5rem = 1.5rem) + the partial reveal (3.25rem = 52px). Because that
+   reveal is a fixed constant baked into the formula, the visible sliver is
+   an exact 52px at every width where the calc() (not the floor) governs — so
+   .stats-all-preview__continuation's fixed 3.25rem width always matches the
+   real sliver. Only a lower floor is clamped (very narrow < ~292px widths);
+   NO upper ceiling, because a ceiling would cap poster width on wider
+   screens and let the reveal drift past its intended 52px. */
 .stats-all-preview__poster {
   flex: 0 0 auto;
-  width: clamp(4.5rem, calc((100% - 3.875rem) / 3), 6rem);
+  width: max(4.5rem, calc((100% - 4.75rem) / 3));
   aspect-ratio: 2 / 3;
   overflow: hidden;
   border-radius: var(--radius-poster);
@@ -321,45 +327,71 @@ body {
   box-shadow: none;
 }
 
-/* Purely decorative darkening over the visible sliver of the partial 4th
-   poster — flat translucent tint, not a gradient, and only as wide as the
-   reveal itself so it never reaches the 3rd poster. Never receives pointer
-   events; the separate .stats-all-preview__more-link is what's tappable. */
-.stats-all-preview__partial-shade {
+/* The continuation overlay sits over the visible sliver of the 4th poster.
+   It is a right-anchored box whose width equals the partial reveal (3.25rem
+   = 52px) and whose top/bottom exactly match the card's vertical padding
+   (0.75rem top, 0.875rem bottom) so it spans ONLY the poster-row area — never
+   the card's padding, so it cannot create a bottom strip. Explicit z-index: 2
+   lifts it (and its shade + link) above the loaded poster <img>, which is
+   position:relative; z-index:1 and would otherwise paint over both. */
+.stats-all-preview__continuation {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 0.75rem;
   right: 0;
-  width: 2.375rem;
+  bottom: 0.875rem;
+  width: 3.25rem;
+  z-index: 2;
+}
+
+/* Purely decorative darkening over the visible sliver — flat translucent
+   tint (no gradient), filling only the continuation box so it never reaches
+   the 3rd poster and never extends into the card's bottom padding. Never
+   receives pointer events; the .stats-all-preview__more-link is what's tappable. */
+.stats-all-preview__continuation-shade {
+  position: absolute;
+  inset: 0;
   background: rgb(8 10 18 / 0.45);
   pointer-events: none;
 }
 
-/* The literal ">>" and its padded hit area — the only interactive element
-   in the preview. A small fixed box (44x44, the touch-target minimum)
-   vertically centered on the card and anchored to its right edge, not the
-   card's full height and not the full partial-poster width, so it stays
-   localized over ">>" instead of swallowing the whole 4th poster or
-   reaching far into the 3rd. */
+/* The literal ">>" and its hit area — the only interactive element in the
+   preview. A fixed 44x44 box (the touch-target minimum) centered within the
+   52px continuation overlay, so it stays localized over the visible sliver
+   and does not reach into the 3rd poster or span the card's full height.
+   z-index: 1 keeps it above the sibling shade. No background/border/radius. */
 .stats-all-preview__more-link {
   position: absolute;
   top: 50%;
-  right: 0;
+  left: 50%;
   width: 2.75rem;
   height: 2.75rem;
-  transform: translateY(-50%);
+  transform: translate(-50%, -50%);
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.25rem;
-  font-weight: 600;
+}
+
+.stats-all-preview__more-text {
+  display: block;
+  color: #fff;
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1;
   letter-spacing: -0.05em;
-  color: rgb(255 255 255 / 0.92);
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.8);
+}
+
+/* Press feedback via opacity only — never a transform, so it can't disturb
+   the link's translate-based centering. */
+.stats-all-preview__more-link:active .stats-all-preview__more-text {
+  opacity: 0.6;
 }
 
 .stats-all-preview__more-link:focus-visible {
   outline: 2px solid var(--color-accent-strong);
   outline-offset: 2px;
+  border-radius: 6px;
 }
 
 .progress-track {
