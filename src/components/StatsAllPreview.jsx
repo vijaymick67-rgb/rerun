@@ -31,8 +31,14 @@ export default function StatsAllPreview({ shows }) {
   const hasMore = shows.length > MIN_SHOWS_WITHOUT_CLIPPING
 
   return (
-    <section className="mt-6" aria-labelledby="stats-all-title">
-      <h2 id="stats-all-title" className="type-section-title mb-3">All({shows.length})</h2>
+    <section className="stats-archive-preview" aria-labelledby="stats-all-title">
+      <div className="stats-archive-preview__heading">
+        <div>
+          <p className="type-badge text-(--color-gold-accent)">Show history</p>
+          <h2 id="stats-all-title" className="type-section-title">All({shows.length})</h2>
+        </div>
+        <span className="stats-archive-preview__hint type-caption" aria-hidden="true">Archive</span>
+      </div>
       <div className="stats-all-preview content-surface">
         <div className="stats-all-preview__row" aria-hidden="true">
           {previewShows.map((show) => (

@@ -395,34 +395,40 @@ body {
 }
 
 .show-detail-hero {
-  min-height: 10rem;
-  align-items: stretch;
-  gap: var(--space-standard);
   padding: var(--space-related);
 }
 
 .show-detail-poster {
-  align-self: stretch;
+  float: left;
+  width: 6rem;
+  height: 8rem;
+  margin: 0 var(--space-related) var(--space-compact) 0;
   object-fit: cover;
 }
 
-.show-detail-hero__copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding-block: var(--space-micro);
+.show-detail-hero__flow {
+  display: flow-root;
+  max-height: 13.5rem;
+  overflow: hidden;
 }
 
 .show-detail-hero__synopsis {
   display: -webkit-box;
   overflow: hidden;
+  margin: 0;
+  padding-block: 0.0625rem;
   color: var(--color-gold-accent);
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   font-weight: var(--weight-body);
-  line-height: 1.55;
+  line-height: 1.48;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 8;
+  -webkit-line-clamp: 10;
+  line-clamp: 10;
+}
+
+.show-detail-skeleton__copy {
+  min-width: 0;
 }
 
 .detail-season-list {
@@ -484,43 +490,70 @@ body {
   margin-bottom: var(--space-compact);
 }
 
+.stats-page {
+  width: 100%;
+  max-width: 42rem;
+  margin-inline: auto;
+}
+
+.stats-page__header {
+  display: grid;
+  gap: 0.125rem;
+  margin-bottom: var(--space-section);
+}
+
+.stats-page__header .type-badge,
+.stats-archive-preview__heading .type-badge,
+.stats-all-page .nested-header .type-badge {
+  font-weight: 720;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
 .stats-summary {
   position: relative;
   overflow: hidden;
-  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border-subtle));
+  min-height: 8.75rem;
+  padding: 1.125rem 1rem 1.25rem;
+  border-color: color-mix(in srgb, var(--color-armour-edge-strong) 34%, var(--color-border-subtle));
   background:
-    radial-gradient(circle at 92% 0%, rgb(139 120 255 / 0.16), transparent 44%),
-    radial-gradient(circle at 0% 100%, rgb(73 117 255 / 0.11), transparent 58%),
-    linear-gradient(135deg, color-mix(in srgb, var(--color-violet-muted) 86%, var(--color-surface)), var(--color-surface) 72%);
+    radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--color-gold-accent) 10%, transparent), transparent 44%),
+    linear-gradient(155deg, var(--color-leather-highlight), transparent 30%),
+    var(--color-surface-raised);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.06),
-    var(--elevation-raised),
-    0 18px 40px rgb(3 6 14 / 0.18);
+    inset 0 1px 0 var(--color-leather-highlight),
+    0 10px 26px rgb(0 0 0 / 0.34);
 }
 
 .stats-summary::after {
   position: absolute;
-  inset: 0.625rem;
-  border: 1px solid rgb(255 255 255 / 0.04);
-  border-radius: 0.5rem 0.25rem 0.5rem 0.25rem;
+  top: 0;
+  right: 1rem;
+  width: 3.25rem;
+  height: 1px;
+  background: var(--color-armour-edge-strong);
   pointer-events: none;
   content: '';
+  opacity: 0.78;
 }
 
 .stats-summary__duration {
   display: block;
   max-width: 100%;
+  color: var(--color-text-primary);
   text-wrap: balance;
 }
 
 .stats-insight {
   position: relative;
   overflow: hidden;
-  border-color: color-mix(in srgb, var(--color-accent-strong) 22%, var(--color-border-subtle));
+  margin-top: var(--space-related);
+  padding: 0.875rem 1rem 0.875rem 1.25rem;
+  border-color: color-mix(in srgb, var(--color-armour-edge) 28%, var(--color-border-subtle));
   background:
-    radial-gradient(circle at 100% 0%, rgb(139 120 255 / 0.09), transparent 48%),
-    linear-gradient(140deg, color-mix(in srgb, var(--color-accent-muted) 48%, var(--color-surface-raised)), var(--color-surface-raised) 72%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), var(--elevation-raised);
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-forest-tonal-surface) 34%, transparent), transparent 52%),
+    linear-gradient(155deg, color-mix(in srgb, var(--color-forest-tonal-surface) 68%, var(--color-surface-base)), var(--color-surface-base));
+  box-shadow: inset 0 1px 0 var(--color-leather-highlight);
 }
 
 .stats-insight::before {
@@ -530,7 +563,7 @@ body {
   left: 0;
   width: 0.1875rem;
   border-radius: 999px;
-  background: var(--color-accent);
+  background: var(--color-gold-accent);
   content: '';
   opacity: 0.78;
 }
@@ -539,8 +572,62 @@ body {
   max-width: 34rem;
 }
 
+.stats-loading {
+  display: grid;
+  gap: var(--space-related);
+}
+
+.stats-loading > * {
+  border-radius: var(--radius-card);
+}
+
+.stats-loading__summary { height: 8.75rem; }
+.stats-loading__insight { height: 4.75rem; }
+.stats-loading__label { width: 7.5rem; height: 1.5rem; margin-top: var(--space-related); }
+.stats-loading__archive { height: 8.75rem; }
+
+.stats-all-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.375rem 0.75rem;
+  margin-top: var(--space-section);
+}
+
+.stats-all-grid--loading {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .stats-show-card {
   min-width: 0;
+}
+
+.stats-show-card__poster {
+  border-radius: var(--radius-poster);
+  box-shadow: 0 7px 18px rgb(0 0 0 / 0.3);
+}
+
+.stats-show-card__actions {
+  border-radius: var(--radius-compact);
+  background: rgb(5 8 6 / 0.72);
+  box-shadow: inset 0 0 0 1px rgb(242 238 226 / 0.1), 0 2px 8px rgb(0 0 0 / 0.42);
+}
+
+.stats-archive-preview {
+  margin-top: var(--space-major);
+}
+
+.stats-archive-preview__heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-related);
+  margin-bottom: var(--space-related);
+}
+
+.stats-archive-preview__hint {
+  padding-bottom: 0.125rem;
+  color: var(--color-text-muted);
+  letter-spacing: 0.06em;
 }
 
 /* Compact All(n) collection preview on the main Insights page — a single
@@ -556,6 +643,11 @@ body {
   display: block;
   overflow: hidden;
   padding: 0.75rem 0 0.875rem 0.75rem;
+  border-color: color-mix(in srgb, var(--color-armour-edge) 42%, var(--color-border-subtle));
+  background:
+    linear-gradient(155deg, var(--color-leather-highlight), transparent 28%),
+    var(--color-surface-base);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.3);
 }
 
 .stats-all-preview__row {
@@ -582,6 +674,7 @@ body {
   overflow: hidden;
   border-radius: var(--radius-poster);
   background: var(--color-surface);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.34);
 }
 
 /* The shared .progressive-image base draws its own inset hairline border on
@@ -615,7 +708,7 @@ body {
 .stats-all-preview__continuation-shade {
   position: absolute;
   inset: 0;
-  background: rgb(8 10 18 / 0.45);
+  background: rgb(5 8 6 / 0.58);
   pointer-events: none;
 }
 
@@ -639,12 +732,12 @@ body {
 
 .stats-all-preview__more-text {
   display: block;
-  color: #fff;
+  color: var(--color-gold-accent-strong);
   font-size: 1.375rem;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.05em;
-  text-shadow: 0 1px 4px rgb(0 0 0 / 0.8);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.82);
 }
 
 /* Press feedback via opacity only — never a transform, so it can't disturb
@@ -986,19 +1079,38 @@ body {
 }
 
 .stats-action-sheet {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-overlay);
-  background: var(--color-surface-raised);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-gold-accent) 7%, transparent), transparent 46%),
+    linear-gradient(155deg, var(--color-leather-highlight), transparent 28%),
+    var(--color-surface-raised);
   box-shadow: var(--elevation-overlay);
 }
 
 .stats-action-destructive {
   border: 1px solid color-mix(in srgb, var(--color-destructive) 30%, transparent);
-  background: var(--color-destructive-muted);
+  background: color-mix(in srgb, var(--color-destructive-surface) 82%, var(--color-surface-raised));
 }
 
 .stats-action-secondary {
+  border: 1px solid transparent;
   color: var(--color-text-secondary);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .stats-action-secondary:hover {
+    border-color: var(--color-border-standard);
+    background: var(--color-surface-interactive);
+    color: var(--color-gold-accent-strong);
+  }
+}
+
+@media (min-width: 48rem) {
+  .stats-summary {
+    min-height: 9.5rem;
+    padding: 1.25rem 1.375rem 1.5rem;
+  }
 }
 
 .update-prompt {
