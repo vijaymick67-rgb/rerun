@@ -413,18 +413,15 @@ body {
 }
 
 .show-detail-hero__synopsis {
-  display: -webkit-box;
-  overflow: hidden;
   margin: 0;
   padding-block: 0.0625rem;
-  color: var(--color-gold-accent);
+  color: color-mix(in srgb, var(--color-gold-accent) 88%, #e8dcc0);
   font-size: 0.875rem;
-  font-weight: var(--weight-body);
-  line-height: 1.48;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 10;
-  line-clamp: 10;
+  font-weight: 450;
+  line-height: 1.55;
+  letter-spacing: 0.006em;
+  overflow-wrap: break-word;
+  text-wrap: pretty;
 }
 
 .show-detail-skeleton__copy {
@@ -525,18 +522,6 @@ body {
     0 10px 26px rgb(0 0 0 / 0.34);
 }
 
-.stats-summary::after {
-  position: absolute;
-  top: 0;
-  right: 1rem;
-  width: 3.25rem;
-  height: 1px;
-  background: var(--color-armour-edge-strong);
-  pointer-events: none;
-  content: '';
-  opacity: 0.78;
-}
-
 .stats-summary__duration {
   display: block;
   max-width: 100%;
@@ -606,10 +591,30 @@ body {
   box-shadow: 0 7px 18px rgb(0 0 0 / 0.3);
 }
 
+/* Plain three-dot control — no filled tile. The dots are warm-ivory with a
+   tight multi-direction drop-shadow halo so they stay legible over light,
+   dark and colourful poster artwork without a dark enclosure behind them.
+   The 44x44 hit target stays intact; only the visible glyph is compact. */
 .stats-show-card__actions {
+  color: #f4efe2;
+}
+
+.stats-show-card__actions svg circle {
+  fill: currentColor;
+}
+
+.stats-show-card__actions svg {
+  filter:
+    drop-shadow(0 1px 1px rgb(0 0 0 / 0.85))
+    drop-shadow(0 -1px 1px rgb(0 0 0 / 0.65))
+    drop-shadow(1px 0 1px rgb(0 0 0 / 0.65))
+    drop-shadow(-1px 0 1px rgb(0 0 0 / 0.65));
+}
+
+.stats-show-card__actions:focus-visible {
   border-radius: var(--radius-compact);
-  background: rgb(5 8 6 / 0.72);
-  box-shadow: inset 0 0 0 1px rgb(242 238 226 / 0.1), 0 2px 8px rgb(0 0 0 / 0.42);
+  outline: 2px solid var(--color-gold-accent-strong);
+  outline-offset: 1px;
 }
 
 .stats-archive-preview {

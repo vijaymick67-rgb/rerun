@@ -104,17 +104,22 @@ describe('root navigation polish', () => {
     expect(actionEnd).toBeGreaterThan('</button>'.length - 1)
     expect(actionControl).toContain('aria-expanded={actionsOpen}')
     expect(actionControl).toContain('aria-controls="stats-actions-sheet"')
+    // Repositioned to the poster's upper-left, keeping the full 44x44 hit
+    // target (h-11 w-11) even though the visible glyph is compact.
     expect(actionControl).toContain(
-      'className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11',
+      'className="motion-press absolute left-0 top-0 z-10 flex h-11 w-11',
     )
+    expect(actionControl).not.toContain('right-0.5 top-0.5')
+    expect(actionControl).toContain('h-11 w-11')
     expect(actionControl).toContain('onOpenActions(show.tmdb_id)')
     expect(card).toContain('to={`/watching/${show.tmdb_id}`}')
     expect(actionControl).toContain('viewBox="0 0 14 4"')
     expect(actionControl).toContain('className="h-2 w-3.5"')
-    expect((actionControl.match(/fill="white"/g) ?? []).length).toBe(3)
-    expect((actionControl.match(/stroke="rgba\(0, 0, 0, 0\.85\)"/g) ?? []).length).toBe(3)
-    expect((actionControl.match(/strokeWidth="0\.75"/g) ?? []).length).toBe(3)
-    expect((actionControl.match(/paintOrder="stroke fill"/g) ?? []).length).toBe(3)
+    // Three plain dots — no black stroke tile any more; contrast now comes
+    // from the ivory fill + drop-shadow halo defined in CSS.
+    expect((actionControl.match(/<circle/g) ?? []).length).toBe(3)
+    expect(actionControl).not.toContain('fill="white"')
+    expect(actionControl).not.toContain('stroke="rgba(0, 0, 0, 0.85)"')
     expect(actionControl).not.toMatch(/\bbg-/)
     expect(actionControl).not.toContain('h-7 w-7')
     expect(actionControl).not.toContain('h-1 w-3.5')

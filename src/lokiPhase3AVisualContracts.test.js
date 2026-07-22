@@ -37,14 +37,60 @@ describe('Loki Armour Phase 3A visual contracts', () => {
     const flow = rule('.show-detail-hero__flow')
     const synopsis = rule('.show-detail-hero__synopsis')
 
+    // One semantic synopsis paragraph, floated poster ahead of it in the same
+    // flow-root context — no duplicate copy, no JS splitting.
     expect(detail).toContain('<p className="show-detail-hero__synopsis">')
+    expect(detail.match(/show-detail-hero__synopsis/g)).toHaveLength(1)
     expect(detail).toContain('className="phase2-poster-frame show-detail-poster h-32 w-24"')
     expect(poster).toContain('float: left')
     expect(flow).toContain('display: flow-root')
+
+    // Long-copy control lives on the flow container (bounded height + clip),
+    // NOT a rectangular clamped box on the paragraph.
     expect(flow).toContain('max-height: 13.5rem')
+    expect(flow).toContain('overflow: hidden')
+
+    // The paragraph must be a normal block so prose wraps under the poster.
     expect(synopsis).toContain('font-size: 0.875rem')
-    expect(synopsis).toContain('line-height: 1.48')
-    expect(synopsis).toContain('-webkit-line-clamp: 10')
+    expect(synopsis).not.toContain('-webkit-box')
+    expect(synopsis).not.toContain('-webkit-line-clamp')
+    expect(synopsis).not.toMatch(/\bline-clamp\b/)
     expect(detail).toContain('<h2>Seasons ({seasons.length})</h2>')
+  })
+
+  it('drops the decorative eyebrows and the viewing-time corner stroke', () => {
+    const stats = source('./routes/Stats.jsx')
+    const allShows = source('./routes/StatsAllShows.jsx')
+
+    expect(stats).not.toMatch(/Personal archive/i)
+    expect(allShows).not.toMatch(/Viewing archive/i)
+    // The decorative gold line/corner pseudo-element on the viewing-time card
+    // is gone entirely.
+    expect(css).not.toMatch(/\.stats-summary::after\s*\{/)
+  })
+
+  it('keeps the All Shows back control pointing at /stats', () => {
+    const allShows = source('./routes/StatsAllShows.jsx')
+    expect(allShows).toContain('to="/stats"')
+    expect(allShows).toContain('aria-label="Back to Insights"')
+  })
+
+  it('renders the poster menu as plain upper-left dots with no tile, high-contrast shadow', () => {
+    const card = source('./components/StatsShowCard.jsx')
+    const actions = rule('.stats-show-card__actions')
+    const svgRule = rule('.stats-show-card__actions svg')
+
+    // 44x44 hit target retained, but positioned upper-left.
+    expect(card).toContain('h-11 w-11')
+    expect(card).toContain('left-0 top-0')
+    expect(card).not.toContain('right-0.5 top-0.5')
+
+    // No visible enclosure: no background/border tile behind the dots.
+    expect(actions).not.toMatch(/background\s*:/)
+    expect(actions).not.toMatch(/box-shadow\s*:/)
+
+    // Ivory dots with a multi-direction drop-shadow halo for contrast.
+    expect(actions).toContain('#f4efe2')
+    expect(svgRule).toContain('drop-shadow')
   })
 })

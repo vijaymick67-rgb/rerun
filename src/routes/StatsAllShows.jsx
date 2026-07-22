@@ -156,10 +156,7 @@ export default function StatsAllShows({
             <path d="m15 5-7 7 7 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </Link>
-        <div className="nested-header__copy">
-          <p className="type-badge text-(--color-gold-accent)">Viewing archive</p>
-          <h1 className="nested-header__title type-nested-title text-(--color-text)">All Shows</h1>
-        </div>
+        <h1 className="nested-header__copy nested-header__title type-nested-title text-(--color-text)">All Shows</h1>
       </div>
 
       {error && shows.length === 0 && (

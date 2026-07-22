@@ -32,16 +32,16 @@ export default function StatsShowCard({ show, busy, actionsOpen, onOpenActions }
           aria-controls="stats-actions-sheet"
           onClick={() => onOpenActions(show.tmdb_id)}
           disabled={busy}
-          className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11 items-center justify-center stats-show-card__actions disabled:opacity-60"
+          className="motion-press absolute left-0 top-0 z-10 flex h-11 w-11 items-start justify-start p-1.5 stats-show-card__actions disabled:opacity-60"
         >
           <svg
             viewBox="0 0 14 4"
             className="h-2 w-3.5"
             aria-hidden="true"
           >
-            <circle cx="2" cy="2" r="1.5" fill="white" stroke="rgba(0, 0, 0, 0.85)" strokeWidth="0.75" paintOrder="stroke fill" />
-            <circle cx="7" cy="2" r="1.5" fill="white" stroke="rgba(0, 0, 0, 0.85)" strokeWidth="0.75" paintOrder="stroke fill" />
-            <circle cx="12" cy="2" r="1.5" fill="white" stroke="rgba(0, 0, 0, 0.85)" strokeWidth="0.75" paintOrder="stroke fill" />
+            <circle cx="2" cy="2" r="1.5" />
+            <circle cx="7" cy="2" r="1.5" />
+            <circle cx="12" cy="2" r="1.5" />
           </svg>
         </button>
       </div>
