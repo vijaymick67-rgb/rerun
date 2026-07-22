@@ -198,6 +198,41 @@ describe('Watching quick mark — one episode at a time', () => {
     await flush()
   })
 
+  it('the underlying optimistic pipeline (row data + cache) advances immediately on tap, while the row\'s own visible "Up next" text stays pinned to the pre-tap episode until the accepted confirmation clears — the grey→green→(new episode)→grey desync fix', async () => {
+    let resolveUpsert
+    upsertImpl = () => new Promise((resolve) => { resolveUpsert = resolve })
+    await mountWatching()
+
+    expect(container.textContent).toContain('S2E5')
+
+    const button = statusButton()
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+
+    // The optimistic mutation has already advanced the underlying row data
+    // and persisted cache to S2E6 — the mutation pipeline is never delayed
+    // by this fix, and it settles well before the network call resolves.
+    const cachedDuringConfirm = JSON.parse(localStorage.getItem('watching_cache:v6'))
+    expect(cachedDuringConfirm.find((show) => show.tmdb_id === 900).nextReleasedUnwatchedEpisode)
+      .toMatchObject({ season_number: 2, episode_number: 6 })
+
+    // ...but the row's own visible text is still pinned to S2E5, and the
+    // button reads accepted-green, not grey — old episode + green together.
+    expect(statusButton().getAttribute('data-status')).toBe('accepted')
+    expect(container.textContent).toContain('S2E5')
+    expect(container.textContent).not.toContain('S2E6')
+
+    await act(async () => { resolveUpsert({ error: null }) })
+    await flush()
+    await act(async () => { vi.advanceTimersByTime(400) })
+    await flush()
+
+    // Once the accepted confirmation clears (dwell + advance both landed),
+    // the text and the button swap to the new episode in the same update.
+    expect(statusButton().getAttribute('data-status')).toBe('available')
+    expect(container.textContent).toContain('S2E6')
+    expect(container.textContent).not.toContain('S2E5')
+  })
+
   it('never sends more than one row per tap (no bulk marking) and no future episode can be reached', async () => {
     await mountWatching()
     await tap(statusButton())

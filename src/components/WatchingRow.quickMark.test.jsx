@@ -633,6 +633,143 @@ describe('status button — weekly/House of the Dragon-style flow', () => {
   })
 })
 
+// Regression coverage for the grey→green→(new episode)→grey desync bug: the
+// row's own "Up next" text used to read straight off the live show object,
+// so a fast optimistic advance (backlog shows like The Sopranos, where the
+// next episode is already released) could repaint the episode text before
+// the accepted-green confirmation released, producing an unsynchronized
+// old-episode+grey → new-episode+green → new-episode+grey sequence. The
+// text must stay pinned to the pre-tap episode for exactly as long as the
+// accepted confirmation is active, and swap in the same render that the
+// confirmation clears — never a frame apart, in either direction. The
+// underlying mutation/cache/optimistic pipeline itself is untouched by this
+// (see Watching.quickMark.test.jsx for that coverage) — only the row's own
+// presentational text is ever pinned here.
+describe('status button — visible status text stays synchronized with accepted confirmation', () => {
+  it('backlog: text stays pinned through dwell even after the row has already advanced, then swaps atomically with the button', async () => {
+    vi.useFakeTimers()
+    const { button, update } = await mount(nextUpShow)
+    await click(button())
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    // Optimistic advance lands almost immediately — well before the dwell.
+    await update(advancedShow, { isQuickMarking: true })
+    expect(button().getAttribute('data-status')).toBe('accepted')
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+    expect(container.textContent).not.toContain('S2E6')
+
+    await act(async () => { vi.advanceTimersByTime(340) })
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(container.textContent).toContain('Up next: S2E6 · Ep 6')
+    expect(container.textContent).not.toContain('S2E5')
+  })
+
+  it('opposite ordering: text stays pinned through the dwell window, then swaps atomically once the row later advances', async () => {
+    vi.useFakeTimers()
+    const { button, update } = await mount(nextUpShow)
+    await click(button())
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    await act(async () => { vi.advanceTimersByTime(340) })
+    expect(button().getAttribute('data-status')).toBe('accepted')
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    await update(advancedShow, { isQuickMarking: false })
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(container.textContent).toContain('Up next: S2E6 · Ep 6')
+  })
+
+  it('weekly/caught-up: keeps the pre-tap "Up next" text through confirmation, then swaps to caught-up text with the check staying green', async () => {
+    vi.useFakeTimers()
+    const { button, update } = await mount(nextUpShow)
+    await click(button())
+    await update(caughtUpShow, { isQuickMarking: true })
+    expect(button().getAttribute('data-status')).toBe('accepted')
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    await act(async () => { vi.advanceTimersByTime(340) })
+    await update(caughtUpShow, { isQuickMarking: false })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+    expect(container.textContent).toContain('Caught up')
+    expect(container.textContent).not.toContain('S2E5')
+  })
+
+  it('finished show: keeps the pre-tap episode text through confirmation, then swaps to the completed caught-up text with the check staying green', async () => {
+    vi.useFakeTimers()
+    const { button, update } = await mount(nextUpShow)
+    await click(button())
+    await update(completedShow, { isQuickMarking: true })
+    expect(button().getAttribute('data-status')).toBe('accepted')
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    await act(async () => { vi.advanceTimersByTime(340) })
+    await update(completedShow, { isQuickMarking: false })
+    expect(button().getAttribute('data-status')).toBe('caughtUp')
+    expect(container.textContent).toContain('Caught up')
+  })
+
+  it('failure/rollback: clears the pinned snapshot immediately — text and button both revert to the original available state', async () => {
+    vi.useFakeTimers()
+    const { button, update } = await mount(nextUpShow)
+    await click(button())
+    await update(advancedShow, { isQuickMarking: true })
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    // Mutation fails and Watching.jsx rolls the row back well before dwell.
+    await act(async () => { vi.advanceTimersByTime(50) })
+    await update(nextUpShow, { isQuickMarking: false })
+
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(button().getAttribute('aria-label')).toBe('Mark S2E5 of The Sopranos watched')
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+  })
+
+  it('no active confirmation: an ordinary live status update renders immediately, with no pinning', async () => {
+    const { update } = await mount(nextUpShow)
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+    await update(advancedShow)
+    expect(container.textContent).toContain('Up next: S2E6 · Ep 6')
+  })
+
+  it('does not leak a captured status snapshot across a show-identity change while accepted confirmation is active', async () => {
+    vi.useFakeTimers()
+    const { button, update } = await mount(nextUpShow)
+    await click(button())
+    expect(container.textContent).toContain('Up next: S2E5 · Ep 5')
+
+    const otherShow = baseShow({
+      id: 2,
+      tmdb_id: 200,
+      name: 'Better Call Saul',
+      status: { type: 'nextUp', season_number: 1, episode_number: 1, name: 'Uno' },
+      nextReleasedUnwatchedEpisode: { season_number: 1, episode_number: 1, name: 'Uno', runtime: 47 },
+    })
+    await update(otherShow)
+
+    expect(container.textContent).toContain('Up next: S1E1 · Uno')
+    expect(container.textContent).not.toContain('S2E5')
+    expect(button().getAttribute('data-status')).toBe('available')
+    expect(button().getAttribute('aria-label')).toBe('Mark S1E1 of Better Call Saul watched')
+
+    // The stale timer from the abandoned confirmation must not fire a stray
+    // update against the new show later.
+    await act(async () => { vi.advanceTimersByTime(400) })
+    expect(container.textContent).toContain('Up next: S1E1 · Uno')
+  })
+
+  it('clears its confirmation timer safely on unmount mid-dwell, with no post-unmount state update', async () => {
+    vi.useFakeTimers()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { button } = await mount(nextUpShow)
+    await click(button())
+    await act(async () => { root.unmount() })
+    root = null
+    await act(async () => { vi.advanceTimersByTime(400) })
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+})
+
 // Desktop review blocker: the permanent status button and the desktop-hover
 // Remove control used to share the same right-2 anchor and could visually
 // collide. The hover Remove now sits immediately to the left of the status
