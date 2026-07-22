@@ -279,42 +279,65 @@ body {
 }
 
 /* Compact All(n) collection preview on the main Insights page — a single
-   CSS-clipped row (no scrolling) that previews a bounded slice of posters
-   and hands off to /stats/all. Sizing is intentionally viewport-relative
-   (clamp) rather than JS-measured so the "~3 full + 1 partial" reveal at
-   iPhone width falls out of layout instead of a hard-coded breakpoint. */
+   CSS-clipped row (no scrolling) of passive posters, previewing a bounded
+   slice of the history. Poster width is derived from the row's own
+   available width via calc() (not vw/JS) so "~3 full + 1 partial" falls out
+   of actual layout at iPhone width instead of a hard-coded breakpoint. The
+   posters are not interactive — only .stats-all-preview__more-link is. */
 .stats-all-preview {
+  position: relative;
   display: block;
   padding: 0.75rem 0.75rem 0.875rem;
 }
 
 .stats-all-preview__row {
-  position: relative;
   display: flex;
   gap: 0.5rem;
   overflow: hidden;
 }
 
+/* Width = (100% - 3 gaps - one intentional ~38px partial reveal) / 3, so
+   exactly 3 posters render full-width and a controlled sliver of the 4th
+   stays visible before the row clips the rest — clamped to keep sane
+   bounds outside the narrow-iPhone width this was tuned for. */
 .stats-all-preview__poster {
   flex: 0 0 auto;
-  width: clamp(4.75rem, 26vw, 5.75rem);
+  width: clamp(4.5rem, calc((100% - 3.875rem) / 3), 5.75rem);
   aspect-ratio: 2 / 3;
   overflow: hidden;
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-poster);
   background: var(--color-surface);
 }
 
-.stats-all-preview__edge {
+/* The shared .progressive-image base draws its own inset hairline border on
+   every poster edge — including the one right next to the row's gap, which
+   read as a stray seam/thread between the 3rd and clipped 4th poster.
+   Scoped to this preview only; .poster-card and the full grid are untouched. */
+.stats-all-preview__poster .progressive-image {
+  box-shadow: none;
+}
+
+/* Right-edge navigation overlay — the only interactive element in the
+   preview. Anchored to the card's true right edge and spanning its full
+   height (well past the 44px minimum touch target), it doubles as the
+   gradient + chevron "more" affordance. Its width intentionally covers the
+   partial poster's reveal and reaches slightly into the 3rd poster so the
+   gradient — and the seam between them — sits inside its own covered area. */
+.stats-all-preview__more-link {
   position: absolute;
   inset: 0 0 0 auto;
   display: flex;
-  width: 3rem;
+  width: 4.5rem;
+  min-height: 2.75rem;
   align-items: center;
   justify-content: center;
-  border-radius: 0 var(--radius-poster) var(--radius-poster) 0;
+  border-radius: 0 var(--radius-card) var(--radius-card) 0;
   background: linear-gradient(to right, transparent, rgb(3 6 14 / 0.7) 45%, rgb(3 6 14 / 0.82));
-  pointer-events: none;
+}
+
+.stats-all-preview__more-link:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
 }
 
 .stats-all-preview__chevron {

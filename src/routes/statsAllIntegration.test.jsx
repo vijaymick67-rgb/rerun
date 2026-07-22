@@ -126,9 +126,15 @@ function insightsTab() {
 }
 
 describe('Stats + StatsAllShows integration — shared state, no second loader', () => {
-  it('loads once, renders All(2) on the main page, and does not refetch TMDB/Supabase when entering /stats/all', async () => {
+  it('loads once, renders All(4) on the main page, and does not refetch TMDB/Supabase when entering /stats/all', async () => {
+    // The preview's chevron/more-link only renders once a history actually
+    // clips (4+ shows) — bump past the 2-show default fixture so there's a
+    // link to click at all.
+    trackedShowsResult.data.push(trackedShow(503, 'Gamma Show'), trackedShow(504, 'Delta Show'))
+    watchedEpisodesResult.data.push(watchedRow(503, 1, 1), watchedRow(504, 1, 1))
+
     await mount(['/stats'])
-    expect(container.textContent).toContain('All(2)')
+    expect(container.textContent).toContain('All(4)')
     const callsBeforeNav = getShowDetails.mock.calls.length
     expect(callsBeforeNav).toBeGreaterThan(0)
 
