@@ -587,7 +587,6 @@ function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, 
   return (
     <div className="stats-page app-page px-4 pb-4">
       <header className="stats-page__header">
-        <p className="type-badge text-(--color-gold-accent)">Personal archive</p>
         <h1 className="type-page-title text-(--color-text)">Insights</h1>
       </header>
 

@@ -53,6 +53,8 @@ function ShowDetailInner({ tmdbId }) {
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const retryingRef = useRef(false)
+  const synopsisFlowRef = useRef(null)
+  const [synopsisClipped, setSynopsisClipped] = useState(false)
 
   useEffect(() => {
     let ignore = false
@@ -171,6 +173,21 @@ function ShowDetailInner({ tmdbId }) {
     }
   }, [numericTmdbId, cacheKey, loadAttempt, cached])
 
+  // Only fade the synopsis when it genuinely overflows the bounded flow
+  // container — never on short copy, which never reaches that height in the
+  // first place. Re-measured on resize (font scaling, orientation change)
+  // since that can shift where the text actually wraps.
+  useEffect(() => {
+    const node = synopsisFlowRef.current
+    if (!node) return undefined
+    function measure() {
+      setSynopsisClipped(node.scrollHeight > node.clientHeight + 1)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [synopsis])
+
   function retryLoad() {
     if (retryingRef.current) return
     retryingRef.current = true
@@ -287,7 +304,10 @@ function ShowDetailInner({ tmdbId }) {
       {!loading && show && (
         <>
           <section className="route-hero show-detail-hero content-surface mt-4" aria-label={`${show.name} synopsis`}>
-            <div className="show-detail-hero__flow">
+            <div
+              ref={synopsisFlowRef}
+              className={`show-detail-hero__flow${synopsisClipped ? ' show-detail-hero__flow--clipped' : ''}`}
+            >
               <ProgressiveImage
                 src={show.poster_path ? POSTER_BASE + show.poster_path : null}
                 alt={show.name}

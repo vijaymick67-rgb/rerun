@@ -18,7 +18,8 @@ describe('cinematic secondary surfaces', () => {
   it('keeps Stats behavior while simplifying the Insights presentation', () => {
     expect(stats).toContain('<h1 className="type-page-title text-(--color-text)">Insights</h1>')
     expect(stats).not.toContain('<h1 className="sr-only">Insights</h1>')
-    expect(stats).toContain('Personal archive')
+    // The decorative "Personal archive" eyebrow was removed — Insights only.
+    expect(stats).not.toContain('Personal archive')
     expect(stats).toContain('Time with your shows')
     expect(stats).not.toContain('Total time watched')
     expect(stats).toContain('{formatWatchTime(totalMinutes)}')
