@@ -14,25 +14,12 @@ window.addEventListener('unhandledrejection', removeShellOnStartupFailure, { onc
 
 const root = createRoot(document.getElementById('root'))
 
-if (
-  import.meta.env.DEV &&
-  (window.location.pathname === '/dev/loki' || window.location.pathname === '/dev/loki/')
-) {
-  import(/* @vite-ignore */ '/src/dev/LokiShowcase.jsx').then(({ default: LokiShowcase }) => {
-    root.render(
-      <StrictMode>
-        <LokiShowcase />
-      </StrictMode>,
-    )
-  })
-} else {
-  root.render(
-    <StrictMode>
-      <BrowserRouter>
-        <AuthProvider>
-          <AuthGate />
-        </AuthProvider>
-      </BrowserRouter>
-    </StrictMode>,
-  )
-}
+root.render(
+  <StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <AuthGate />
+      </AuthProvider>
+    </BrowserRouter>
+  </StrictMode>,
+)
