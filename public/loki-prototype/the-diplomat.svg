@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600" role="img" aria-labelledby="title desc">
+  <title id="title">The Diplomat prototype poster</title><desc id="desc">An original abstract bronze diplomatic seal composition.</desc>
+  <defs><radialGradient id="bg"><stop stop-color="#3b493a"/><stop offset="1" stop-color="#0a0e0b"/></radialGradient></defs>
+  <rect width="400" height="600" fill="url(#bg)"/><circle cx="200" cy="245" r="132" fill="none" stroke="#b69a57" stroke-width="8" opacity=".72"/><circle cx="200" cy="245" r="96" fill="#101511" stroke="#79633a" stroke-width="2"/><path d="m200 148 25 70 72 27-72 27-25 70-25-70-72-27 72-27Z" fill="#237046" stroke="#d1b86f" stroke-width="3"/><path d="M0 494h400v106H0z" fill="#080d09"/><text x="32" y="535" fill="#d1b86f" font-family="system-ui,sans-serif" font-size="18" font-weight="700" letter-spacing="5">THE</text><text x="32" y="573" fill="#f2eee2" font-family="system-ui,sans-serif" font-size="31" font-weight="700" letter-spacing="4">DIPLOMAT</text>
+</svg>

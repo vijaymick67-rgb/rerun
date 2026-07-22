@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600" role="img" aria-labelledby="title desc">
+  <title id="title">Silo prototype poster</title><desc id="desc">An original abstract underground ring composition.</desc>
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#131b15"/><stop offset=".55" stop-color="#1f3023"/><stop offset="1" stop-color="#050806"/></linearGradient></defs>
+  <rect width="400" height="600" fill="url(#bg)"/><g fill="none" stroke="#79633a" opacity=".8"><ellipse cx="200" cy="238" rx="148" ry="68" stroke-width="10"/><ellipse cx="200" cy="238" rx="108" ry="48" stroke-width="5"/><path d="M52 238v170c0 38 66 69 148 69s148-31 148-69V238M92 238v170m216-170v170" stroke-width="5"/></g><path d="M186 152h28v260h-28z" fill="#d1b86f" opacity=".2"/><path d="M0 500h400v100H0z" fill="#050806"/><text x="32" y="566" fill="#f2eee2" font-family="system-ui,sans-serif" font-size="54" font-weight="700" letter-spacing="18">SILO</text>
+</svg>
