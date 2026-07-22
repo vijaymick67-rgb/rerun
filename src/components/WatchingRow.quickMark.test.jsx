@@ -146,7 +146,7 @@ describe('status button — shape and dimensions', () => {
     const rule = indexCss.slice(ruleStart, indexCss.indexOf('}', ruleStart) + 1)
     expect(rule).toContain('width: 2.75rem')
     expect(rule).toContain('height: 2.75rem')
-    expect(rule).toContain('border-radius: 0.875rem')
+    expect(rule).toContain('border-radius: 0.625rem')
     expect(rule).not.toContain('border-radius: 50%')
     expect(rule).not.toContain('border-radius: 9999px')
     expect(rule).not.toContain('border-radius: 999px')
@@ -212,7 +212,7 @@ describe('status button — surface stays neutral graphite in every state', () =
 
   it('the base button rule declares one dark graphite background — no per-state background override', () => {
     const base = ruleBlockFor('.watching-status-button {')
-    expect(base).toMatch(/background: linear-gradient\(175deg, #171b25, #11151e\)/i)
+    expect(base).toMatch(/background: linear-gradient\(165deg, #171b18, #0e1310\)/i)
 
     for (const status of ['available', 'caughtUp', 'accepted', 'notReady']) {
       const start = indexCss.indexOf(`.watching-status-button[data-status='${status}']`)
@@ -271,20 +271,20 @@ describe('status button — surface stays neutral graphite in every state', () =
   it('never uses a flat grey/green/emerald/lime/chartreuse fill token as the square background', () => {
     const base = ruleBlockFor('.watching-status-button {')
     expect(base).not.toContain('--color-success')
-    expect(base).not.toContain('--color-status-check-done')
+    expect(base).not.toContain('--color-completion')
     expect(base).not.toContain('--color-surface-interactive')
   })
 
   it('no emerald token (--color-success) is used anywhere in the status button rules', () => {
     const start = indexCss.indexOf('.watching-status-button {')
-    const end = indexCss.indexOf('.watching-countdown-pill', start)
+    const end = indexCss.indexOf('.watching-upcoming-status', start)
     const section = indexCss.slice(start, end)
     expect(section).not.toContain('--color-success')
   })
 
   it('no row-wide or button-wide glow — box-shadow spread stays tight (no large blurred outer glow)', () => {
     const start = indexCss.indexOf('.watching-status-button {')
-    const end = indexCss.indexOf('.watching-countdown-pill', start)
+    const end = indexCss.indexOf('.watching-upcoming-status', start)
     const section = indexCss.slice(start, end)
     // No box-shadow rule in this section should use a blur radius larger
     // than 8px, which would read as a glow rather than a restrained shadow.
@@ -294,24 +294,24 @@ describe('status button — surface stays neutral graphite in every state', () =
     }
   })
 
-  it('state is conveyed primarily through the check glyph color, not the button background', () => {
+  it('state is conveyed without changing the button background', () => {
     const availableCheck = ruleBlockFor("[data-status='available'] .watching-status-button__check {")
-    expect(availableCheck).toContain('var(--color-status-check-idle)')
+    expect(availableCheck).toContain('opacity: 0.88')
 
     const doneCheckStart = indexCss.indexOf("[data-status='caughtUp'] .watching-status-button__check,")
     expect(doneCheckStart).toBeGreaterThan(-1)
     const doneCheck = indexCss.slice(doneCheckStart, indexCss.indexOf('}', doneCheckStart) + 1)
-    expect(doneCheck).toContain('var(--color-status-check-done)')
+    expect(doneCheck).toContain('opacity: 1')
   })
 
-  it('available check uses the neutral muted-text role', () => {
-    expect(indexCss).toContain('--color-status-check-idle: var(--color-text-muted);')
-  })
-
-  it('accepted/caughtUp check uses completion without recoloring the body', () => {
-    expect(indexCss).toContain('--color-status-check-done: var(--color-completion);')
-    expect(indexCss).toContain('--color-completion: var(--color-emerald-strong);')
-    expect(ruleBlockFor('.watching-status-button {')).not.toContain('--color-completion')
+  it('all states use a gold principal glyph without recoloring the body', () => {
+    expect(indexCss).toContain('--color-status-check: var(--color-gold-accent-strong);')
+    const section = indexCss.slice(
+      indexCss.indexOf('.watching-status-button {'),
+      indexCss.indexOf('.watching-upcoming-status'),
+    )
+    expect(section).not.toContain('--color-completion')
+    expect(section).not.toContain('--color-emerald')
   })
 })
 

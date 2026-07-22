@@ -44,12 +44,28 @@ describe('Loki Armour Phase 2 visual contracts', () => {
     const statusButton = rule('.watching-status-button')
     expect(statusButton).toContain('width: 2.75rem')
     expect(statusButton).toContain('height: 2.75rem')
-    expect(statusButton).toContain('border-radius: 0.875rem')
-    expect(statusButton).toContain('linear-gradient(175deg, #171b25, #11151e)')
+    expect(statusButton).toContain('border-radius: 0.625rem')
+    expect(statusButton).toContain('linear-gradient(165deg, #171b18, #0e1310)')
 
     for (const state of ['available', 'caughtUp', 'accepted', 'notReady']) {
       expect(rule(`.watching-status-button[data-status='${state}']`)).not.toContain('background:')
     }
+  })
+
+  it('uses gold quick-mark semantics and a muted upcoming treatment', () => {
+    const row = source('./components/WatchingRow.jsx')
+    const upcoming = rule('.watching-upcoming-status')
+
+    expect(css).toContain('--color-status-check: var(--color-gold-accent-strong)')
+    expect(row).toContain('className="watching-upcoming-status type-caption mt-1"')
+    expect(row).not.toContain('watching-countdown-pill')
+    expect(upcoming).toContain('var(--color-forest-tonal-surface)')
+    expect(upcoming).toContain('var(--color-text-secondary)')
+    expect(upcoming).not.toContain('var(--color-warning)')
+  })
+
+  it('keeps the Show Detail hero free of a decorative corner pseudo-element', () => {
+    expect(css).not.toContain('.show-detail-hero::before')
   })
 
   it('preserves route ownership, destinations, and future-episode gating', () => {

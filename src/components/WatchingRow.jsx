@@ -23,8 +23,8 @@ const HORIZONTAL_DOMINANCE_RATIO = 1.3
 // it never swallows an unrelated, later tap.
 const CLICK_SUPPRESS_WINDOW = 500
 
-// Minimum time the status button stays visibly green after a tap before it
-// is allowed to return to grey, even if the row has already advanced to the
+// Minimum time the status button stays visibly acknowledged after a tap
+// before it can return to its available state, even if the row has advanced
 // next episode by then — long enough to be consciously noticed, short
 // enough that the interaction never feels delayed. See handleStatusClick.
 const QUICK_MARK_MIN_DWELL_MS = 340
@@ -55,7 +55,7 @@ export default function WatchingRow({
     (show.releasedWatchedCount ?? 0) < (show.releasedEpisodeCount ?? 0)
 
   // Explicit, bounded presentation state for the status button's brief
-  // post-tap green confirmation — deliberately not derived solely from
+  // post-tap confirmation — deliberately not derived solely from
   // isQuickMarking, since the network request may resolve too fast or too
   // slow to read as a deliberate confirmation either way. `key` is the
   // episode identity that was quick-marked at tap time; the confirmation
@@ -66,7 +66,7 @@ export default function WatchingRow({
   // object keeps advancing immediately underneath (mutation, cache,
   // overlays are never delayed), but the row's own visible status text
   // must stay pinned to the pre-tap episode until that same clear, so the
-  // text and the button's grey/green swap happen in the same render. See
+  // text and the button's state swap happen in the same render. See
   // displayedStatus below.
   const [confirmState, setConfirmState] = useState(null)
   const confirmTimerRef = useRef(null)
@@ -106,7 +106,7 @@ export default function WatchingRow({
 
   // Normal path: both the minimum dwell and a genuine row advance are in —
   // release the confirmation and let the button fall back to its plain
-  // derived state (grey if another episode is available, green if caught up).
+  // derived state (available if another episode exists, caught-up otherwise).
   useEffect(() => {
     if (confirmState && confirmState.dwellDone && advanced) {
       setConfirmState(null)
@@ -375,7 +375,7 @@ export default function WatchingRow({
                 {displayedStatus.name ? ` · ${displayedStatus.name}` : ''}
               </p>
             ) : displayedStatus?.type === 'countdown' ? (
-              <span className="watching-countdown-pill type-caption mt-1">
+              <span className="watching-upcoming-status type-caption mt-1">
                 {watchingStatusLabel(displayedStatus)}
               </span>
             ) : (

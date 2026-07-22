@@ -151,7 +151,7 @@ describe('Watching cache pre-render transition (Feature 2)', () => {
     await mountWatching()
 
     expect(container.textContent).not.toContain('Up next')
-    expect(container.querySelector('.watching-countdown-pill')).not.toBeNull()
+    expect(container.querySelector('.watching-upcoming-status')).not.toBeNull()
 
     await act(async () => releaseGate())
     await flush()
@@ -177,7 +177,7 @@ describe('Watching cache pre-render transition (Feature 2)', () => {
     // mutation context handleQuickMark needs) has resolved at all.
     expect(container.textContent).toContain('Up next: S2E1')
     expect(container.textContent).not.toContain('New episode soon')
-    expect(container.querySelector('.watching-countdown-pill')).toBeNull()
+    expect(container.querySelector('.watching-upcoming-status')).toBeNull()
     expect(container.querySelector('.progress-track')).not.toBeNull() // bar immediate
     // The cached row already knows a released unwatched episode exists, so
     // the check must be grey (available) from this very first frame — never
@@ -222,7 +222,7 @@ describe('Watching cache pre-render transition (Feature 2)', () => {
     // background enrichment — the source of truth — cleanly reverts it once
     // it discovers the schedule moved.
     expect(container.textContent).not.toContain('Up next')
-    expect(container.querySelector('.watching-countdown-pill')).not.toBeNull()
+    expect(container.querySelector('.watching-upcoming-status')).not.toBeNull()
   })
 
   it('sorts a cache-transitioned row into its proper rank before first render', async () => {
