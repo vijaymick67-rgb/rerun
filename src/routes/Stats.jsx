@@ -585,15 +585,18 @@ export default function Stats() {
 // file) so this file still visibly owns the "app-page" main-tab layout.
 function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, onRetry }) {
   return (
-    <div className="app-page px-4 pb-4">
-      <h1 className="sr-only">Insights</h1>
+    <div className="stats-page app-page px-4 pb-4">
+      <header className="stats-page__header">
+        <p className="type-badge text-(--color-gold-accent)">Personal archive</p>
+        <h1 className="type-page-title text-(--color-text)">Insights</h1>
+      </header>
 
       {loading && (
-        <div className="flex flex-col gap-3" aria-label="Loading insights" role="status">
-          <div className="skeleton-block h-24 rounded-xl" />
-          <div className="skeleton-block h-12 rounded-lg" />
-          <div className="skeleton-block mt-1 h-16 rounded-lg" />
-          <div className="skeleton-block h-16 rounded-lg" />
+        <div className="stats-loading" aria-label="Loading insights" role="status">
+          <div className="stats-loading__summary skeleton-block" />
+          <div className="stats-loading__insight skeleton-block" />
+          <div className="stats-loading__label skeleton-block" />
+          <div className="stats-loading__archive skeleton-block" />
         </div>
       )}
 
@@ -619,8 +622,8 @@ function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, 
 
       {!loading && hasData && (
         <>
-          <section className="stats-summary content-surface px-4 py-5" aria-labelledby="stats-summary-title">
-            <p id="stats-summary-title" className="type-badge text-(--color-accent-strong)">
+          <section className="stats-summary content-surface" aria-labelledby="stats-summary-title">
+            <p id="stats-summary-title" className="type-badge text-(--color-gold-accent-strong)">
               Time with your shows
             </p>
             <p className="stats-summary__duration type-display mt-1 text-(--color-text)">
@@ -629,7 +632,7 @@ function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, 
           </section>
 
           {insight && (
-            <section className="stats-insight content-surface mt-3 px-4 py-3 pl-5" aria-label="Personal insight">
+            <section className="stats-insight content-surface" aria-label="Personal insight">
               <p className="stats-insight__copy type-body text-(--color-text-secondary)">{insight}</p>
             </section>
           )}

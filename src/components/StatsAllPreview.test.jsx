@@ -289,9 +289,10 @@ describe('StatsAllPreview — literal ">>" continuation overlay', () => {
     expect(linkRule).not.toContain('background')
   })
 
-  it('the ">>" text is explicit white with a shadow for legibility over artwork', () => {
+  it('the ">>" text uses structural aged gold with a shadow for legibility over artwork', () => {
     const textRule = rule('.stats-all-preview__more-text')
-    expect(textRule).toContain('color: #fff;')
+    expect(textRule).toContain('color: var(--color-gold-accent-strong);')
+    expect(textRule).not.toMatch(/color:\s*var\(--color-(?:emerald|completion|progress)/)
     expect(textRule).toContain('text-shadow')
     const fontPx = remToPx(textRule.match(/font-size:\s*([\d.]+rem)/)[1])
     expect(fontPx).toBeGreaterThanOrEqual(20) // 1.25rem

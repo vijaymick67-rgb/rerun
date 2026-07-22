@@ -11,7 +11,7 @@ export default function StatsShowCard({ show, busy, actionsOpen, onOpenActions }
 
   return (
     <article className="stats-show-card min-w-0">
-      <div className="relative">
+      <div className="stats-show-card__poster relative">
         <Link
           to={`/watching/${show.tmdb_id}`}
           onClick={(e) => handleTapNavigateClick(e, navigate, `/watching/${show.tmdb_id}`)}
@@ -32,7 +32,7 @@ export default function StatsShowCard({ show, busy, actionsOpen, onOpenActions }
           aria-controls="stats-actions-sheet"
           onClick={() => onOpenActions(show.tmdb_id)}
           disabled={busy}
-          className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-60"
+          className="motion-press absolute right-0.5 top-0.5 z-10 flex h-11 w-11 items-center justify-center stats-show-card__actions disabled:opacity-60"
         >
           <svg
             viewBox="0 0 14 4"

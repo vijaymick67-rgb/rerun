@@ -286,16 +286,16 @@ function ShowDetailInner({ tmdbId }) {
 
       {!loading && show && (
         <>
-          <section className="route-hero show-detail-hero content-surface mt-4 flex gap-3 p-3" aria-label={`${show.name} synopsis`}>
-            <ProgressiveImage
-              src={show.poster_path ? POSTER_BASE + show.poster_path : null}
-              alt={show.name}
-              fallbackLabel="No poster"
-              loading="eager"
-              fetchPriority="high"
-              className="phase2-poster-frame show-detail-poster h-32 w-24 shrink-0"
-            />
-            <div className="show-detail-hero__copy min-w-0 flex-1">
+          <section className="route-hero show-detail-hero content-surface mt-4" aria-label={`${show.name} synopsis`}>
+            <div className="show-detail-hero__flow">
+              <ProgressiveImage
+                src={show.poster_path ? POSTER_BASE + show.poster_path : null}
+                alt={show.name}
+                fallbackLabel="No poster"
+                loading="eager"
+                fetchPriority="high"
+                className="phase2-poster-frame show-detail-poster h-32 w-24"
+              />
               <p className="show-detail-hero__synopsis">
                 {synopsis || SYNOPSIS_FALLBACK}
               </p>

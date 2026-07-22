@@ -145,7 +145,7 @@ export default function StatsAllShows({
   const showSkeleton = loading && shows.length === 0 && !error
 
   return (
-    <div className="nested-page px-4 pb-4">
+    <div className="stats-all-page nested-page px-4 pb-4">
       <div className="nested-header">
         <Link
           to="/stats"
@@ -156,9 +156,10 @@ export default function StatsAllShows({
             <path d="m15 5-7 7 7 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </Link>
-        <h1 className="nested-header__copy nested-header__title type-nested-title text-(--color-text)">
-          All Shows
-        </h1>
+        <div className="nested-header__copy">
+          <p className="type-badge text-(--color-gold-accent)">Viewing archive</p>
+          <h1 className="nested-header__title type-nested-title text-(--color-text)">All Shows</h1>
+        </div>
       </div>
 
       {error && shows.length === 0 && (
@@ -187,7 +188,7 @@ export default function StatsAllShows({
       )}
 
       {showSkeleton && (
-        <div className="mt-4 grid grid-cols-3 gap-x-3 gap-y-6" aria-label="Loading shows" role="status">
+        <div className="stats-all-grid stats-all-grid--loading" aria-label="Loading shows" role="status">
           {Array.from({ length: 9 }).map((_, index) => (
             <div key={index} className="skeleton-block aspect-[2/3] w-full rounded-[var(--radius-poster)]" />
           ))}
@@ -195,7 +196,7 @@ export default function StatsAllShows({
       )}
 
       {shows.length > 0 && (
-        <div className="mt-4 grid grid-cols-3 gap-x-3 gap-y-6">
+        <div className="stats-all-grid grid grid-cols-3">
           {shows.map((show) => (
             <StatsShowCard
               key={show.tmdb_id}
