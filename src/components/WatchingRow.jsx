@@ -346,7 +346,7 @@ export default function WatchingRow({
 
       <div
         ref={frontRef}
-        className="watching-row-front relative flex touch-pan-y gap-3 bg-(--color-surface) p-3"
+        className="watching-row-front loki-record-row relative flex touch-pan-y gap-3 p-3"
         style={{
           transform: `translateX(${translateX}px)`,
           transition: dragX !== null ? 'none' : 'transform 200ms ease',
@@ -361,7 +361,7 @@ export default function WatchingRow({
             src={show.poster_path ? POSTER_BASE + show.poster_path : null}
             alt={show.name}
             fallbackLabel="No poster"
-            className="h-24 w-16 shrink-0 rounded-md"
+            className="phase2-poster-frame h-24 w-16 shrink-0"
           />
 
           <div className="min-w-0 flex-1">
@@ -370,7 +370,7 @@ export default function WatchingRow({
             {show.loadError ? (
               <p className="type-caption mt-1 text-(--color-destructive)">Couldn't load episodes</p>
             ) : displayedStatus?.type === 'nextUp' ? (
-              <p className="type-caption mt-1 text-(--color-accent)">
+              <p className="watching-status-copy watching-status-copy--next type-caption mt-1">
                 Up next: S{displayedStatus.season_number}E{displayedStatus.episode_number}
                 {displayedStatus.name ? ` · ${displayedStatus.name}` : ''}
               </p>
@@ -379,7 +379,7 @@ export default function WatchingRow({
                 {watchingStatusLabel(displayedStatus)}
               </span>
             ) : (
-              <p className="type-caption mt-1 text-(--color-text-muted)">Caught up</p>
+              <p className="watching-status-copy watching-status-copy--complete type-caption mt-1">Caught up</p>
             )}
 
             {showProgressBar && (

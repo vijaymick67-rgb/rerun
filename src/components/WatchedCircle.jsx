@@ -6,7 +6,7 @@ export default function WatchedCircle({ checked, disabled = false, label, onClic
       aria-pressed={checked}
       disabled={disabled}
       onClick={onClick}
-      className="motion-press flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-(--color-accent) disabled:cursor-default"
+      className="motion-press flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-(--color-focus-ring) disabled:cursor-default"
     >
       <span className={`watched-circle ${
         checked
