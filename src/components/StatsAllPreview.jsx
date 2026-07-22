@@ -14,10 +14,11 @@ const PREVIEW_LIMIT = 6
 // though up to PREVIEW_LIMIT posters may be mounted in the DOM.
 const MIN_SHOWS_WITHOUT_CLIPPING = 3
 
-// Compact single-row entry point into /stats/all. One clickable collection
-// link — no nested interactive controls — with the last rendered poster
-// deliberately clipped by the card's own overflow:hidden, plus an edge
-// gradient + chevron as a visual (not functional) "more" affordance.
+// Compact single-row entry point into /stats/all. The posters themselves are
+// a passive visual preview — not a link — so tapping a poster does nothing.
+// Only the right-edge overlay is interactive: one Link with a generous touch
+// target, anchored to the card's right edge, doubling as the "more" gradient
+// + chevron affordance. No nested interactive controls.
 export default function StatsAllPreview({ shows }) {
   if (shows.length === 0) return null
 
@@ -27,11 +28,7 @@ export default function StatsAllPreview({ shows }) {
   return (
     <section className="mt-6" aria-labelledby="stats-all-title">
       <h2 id="stats-all-title" className="type-section-title mb-3">All({shows.length})</h2>
-      <Link
-        to="/stats/all"
-        aria-label={`View all ${shows.length} show${shows.length === 1 ? '' : 's'}`}
-        className="stats-all-preview content-surface motion-press block"
-      >
+      <div className="stats-all-preview content-surface">
         <div className="stats-all-preview__row" aria-hidden="true">
           {previewShows.map((show) => (
             <div key={show.tmdb_id} className="stats-all-preview__poster">
@@ -43,17 +40,21 @@ export default function StatsAllPreview({ shows }) {
               />
             </div>
           ))}
-          {hasMore && (
-            <span className="stats-all-preview__edge">
-              <span className="stats-all-preview__chevron">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="m9 5 7 7-7 7" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </span>
-            </span>
-          )}
         </div>
-      </Link>
+        {hasMore && (
+          <Link
+            to="/stats/all"
+            aria-label={`View all ${shows.length} show${shows.length === 1 ? '' : 's'}`}
+            className="stats-all-preview__more-link motion-press"
+          >
+            <span className="stats-all-preview__chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m9 5 7 7-7 7" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          </Link>
+        )}
+      </div>
     </section>
   )
 }
