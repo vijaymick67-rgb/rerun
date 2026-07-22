@@ -11,6 +11,7 @@ function makeQuery(result) {
     select: () => builder,
     eq: () => builder,
     maybeSingle: () => Promise.resolve(result),
+    upsert: () => Promise.resolve({ error: watchedMutationError }),
     then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
   }
   return builder
@@ -18,6 +19,7 @@ function makeQuery(result) {
 
 let trackedShowResult
 let watchedRowsResult
+let watchedMutationError
 
 vi.mock('../lib/supabase', () => ({
   supabase: {
@@ -88,6 +90,7 @@ function cachedShow(tmdbId, synopsis) {
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-07-01T00:00:00Z'))
+  watchedMutationError = null
 })
 
 afterEach(async () => {
@@ -169,6 +172,62 @@ describe('ShowDetail - cached show-level synopsis hero', () => {
       .toBe('Fresh show-level TMDB synopsis.')
     expect(readDetailCache(showDetailCacheKey(506)).synopsis)
       .toBe('Fresh show-level TMDB synopsis.')
+  })
+
+  it('preserves the latest valid synopsis when Retry receives an empty overview', async () => {
+    trackedShowResult = { data: { id: 7, tmdb_id: 507, name: 'Retry Copy' }, error: null }
+    watchedRowsResult = { data: [], error: null }
+    getShowDetails
+      .mockResolvedValueOnce({
+        overview: 'The valid first TMDB overview.',
+        seasons: [{ season_number: 1 }],
+      })
+      .mockResolvedValueOnce({
+        overview: '   ',
+        seasons: [{ season_number: 1 }],
+      })
+    getSeasonEpisodes.mockResolvedValue({
+      episodes: [{
+        episode_number: 1,
+        name: 'Pilot',
+        air_date: '2026-01-01',
+        runtime: 45,
+      }],
+    })
+
+    await renderShowDetail(507)
+
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('The valid first TMDB overview.')
+    expect(readDetailCache(showDetailCacheKey(507)).synopsis)
+      .toBe('The valid first TMDB overview.')
+
+    // A failed mutation surfaces the route's existing Retry action. Its next
+    // details load returns whitespace, exercising two sequential loads on the
+    // same mounted route rather than remounting from the updated cache.
+    watchedMutationError = new Error('mutation unavailable')
+    const seasonToggle = container.querySelector('button[aria-label="Mark season 1 watched"]')
+    await act(async () => {
+      seasonToggle.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const retry = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Retry')
+    expect(retry).toBeTruthy()
+
+    await act(async () => {
+      retry.click()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(getShowDetails).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('.show-detail-hero__synopsis').textContent)
+      .toBe('The valid first TMDB overview.')
+    expect(readDetailCache(showDetailCacheKey(507)).synopsis)
+      .toBe('The valid first TMDB overview.')
   })
 
   it('does not substitute season or episode overviews when show overview is missing', async () => {

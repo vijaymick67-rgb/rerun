@@ -42,6 +42,7 @@ function ShowDetailInner({ tmdbId }) {
   const [cached] = useState(() => readDetailCache(cacheKey))
   const [show, setShow] = useState(() => cached?.show ?? null)
   const [synopsis, setSynopsis] = useState(() => usableSynopsis(cached?.synopsis))
+  const synopsisRef = useRef(synopsis)
   const [seasons, setSeasons] = useState(() => cached?.seasons ?? [])
   const [episodesBySeason, setEpisodesBySeason] = useState(() => cached?.episodesBySeason ?? {})
   const [watched, setWatched] = useState(() => new Set(cached?.watchedList ?? []))
@@ -123,9 +124,12 @@ function ShowDetailInner({ tmdbId }) {
           episodeKey(row.season_number, row.episode_number),
         )
 
-        const nextSynopsis = usableSynopsis(details.overview) || usableSynopsis(cached?.synopsis)
+        const nextSynopsis = usableSynopsis(details.overview)
+          || usableSynopsis(synopsisRef.current)
+          || usableSynopsis(readDetailCache(cacheKey)?.synopsis)
 
         setShow(trackedShow)
+        synopsisRef.current = nextSynopsis
         setSynopsis(nextSynopsis)
         setSeasons(seasonList)
         setEpisodesBySeason(bySeason)
