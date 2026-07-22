@@ -28,6 +28,12 @@ export function getRouteShellKey(pathname) {
   if (pathname === '/' || pathname === '/watching' || getRouteLevel(pathname) > 0) {
     return '/watching'
   }
+  // Stats owns one nested child route (/stats/all) that shares the parent's
+  // loaded data — same "one shell, no remount" reasoning as the Watching
+  // subtree above, just without Watching's multi-level detail nesting.
+  if (pathname === '/stats' || pathname === '/stats/all') {
+    return '/stats'
+  }
   return pathname || '/'
 }
 

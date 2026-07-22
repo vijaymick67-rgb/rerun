@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest'
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
 const stats = read('./Stats.jsx')
+const statsAllShows = read('./StatsAllShows.jsx')
+const statsShowCard = read('../components/StatsShowCard.jsx')
+const statsAllPreview = read('../components/StatsAllPreview.jsx')
 const settings = read('./Settings.jsx')
 const confirmDialog = read('../components/ConfirmDialog.jsx')
 const reloadPrompt = read('../components/ReloadPrompt.jsx')
@@ -20,23 +23,41 @@ describe('cinematic secondary surfaces', () => {
     expect(stats).toContain('{formatWatchTime(totalMinutes)}')
     expect(stats).toContain('aria-label="Personal insight"')
     expect(stats).not.toContain('Daily insight')
-    expect(stats).toContain('Show history')
+    // The long open "Show history" grid was collapsed into the compact
+    // All(n) preview — it must not linger on the main page alongside it.
+    expect(stats).not.toContain('Show history')
+    expect(stats).toContain('<StatsAllPreview shows={shows} />')
     expect(stats).toContain('className="stats-summary content-surface')
     expect(stats).toContain('className="stats-insight content-surface')
-    expect(stats).toContain('to={`/watching/${show.tmdb_id}`}')
-    expect(stats).toContain('className="motion-press block"')
-    expect(stats).toContain('aria-label={`Actions for ${show.name}`}')
-    expect(stats).not.toContain('className="type-caption">{show.watched} of {show.total}')
-    expect(stats).not.toContain('>Complete</span>')
-    expect(stats).not.toContain('aria-label={`${show.watched} of ${show.total} episodes watched`}')
-    expect(stats).toContain('role="dialog"')
-    expect(stats).toContain('aria-modal="true"')
-    expect(stats).toContain("if (event.key === 'Escape') onClose()")
-    expect(stats).toContain('onClick={(event) => event.stopPropagation()}')
-    expect(stats).toContain('onRestore')
-    expect(stats).toContain('onRemove')
-    expect(stats).not.toContain('bg-black/60')
-    expect(stats).not.toContain('text-red-400')
+
+    // Poster + three-dot action control now lives in the shared StatsShowCard,
+    // used by the /stats/all grid.
+    expect(statsShowCard).toContain('to={`/watching/${show.tmdb_id}`}')
+    expect(statsShowCard).toContain('className="motion-press block"')
+    expect(statsShowCard).toContain('aria-label={`Actions for ${show.name}`}')
+    expect(statsShowCard).not.toContain('className="type-caption">{show.watched} of {show.total}')
+    expect(statsShowCard).not.toContain('>Complete</span>')
+    expect(statsShowCard).not.toContain('aria-label={`${show.watched} of ${show.total} episodes watched`}')
+    expect(statsShowCard).not.toContain('bg-black/60')
+    expect(statsShowCard).not.toContain('text-red-400')
+
+    // The action sheet + confirm dialog now live on the expanded page, the
+    // only place the three-dot control appears.
+    expect(statsAllShows).toContain('role="dialog"')
+    expect(statsAllShows).toContain('aria-modal="true"')
+    expect(statsAllShows).toContain("if (event.key === 'Escape') onClose()")
+    expect(statsAllShows).toContain('onClick={(event) => event.stopPropagation()}')
+    expect(statsAllShows).toContain('onRestore')
+    expect(statsAllShows).toContain('onRemove')
+    expect(statsAllShows).not.toContain('bg-black/60')
+    expect(statsAllShows).not.toContain('text-red-400')
+
+    // The compact preview link carries the accessible collection name and
+    // never duplicates the "42 shows" count as a separate visible label.
+    expect(statsAllPreview).toContain('to="/stats/all"')
+    expect(statsAllPreview).toContain('aria-label={`View all ${shows.length} show')
+    expect(statsAllPreview).not.toContain('bg-black/60')
+    expect(statsAllPreview).not.toContain('text-red-400')
   })
 
   it('keeps the global atmosphere static, layered, and input-transparent', () => {
