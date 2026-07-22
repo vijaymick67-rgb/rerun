@@ -14,6 +14,13 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const css = readFileSync(new NodeURL('../index.css', import.meta.url), 'utf8')
 const previewCss = css.slice(css.indexOf('.stats-all-preview {'), css.indexOf('.progress-track {'))
 
+function rule(selector) {
+  // Escape regex metacharacters in the selector, then grab the single rule body.
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = previewCss.match(new RegExp(`${escaped}\\s*\\{[^}]*\\}`))
+  return match ? match[0] : null
+}
+
 function show(tmdbId, name) {
   return { tmdb_id: tmdbId, name, poster_path: `/poster-${tmdbId}.jpg` }
 }
@@ -34,68 +41,113 @@ function remToPx(remCss) {
   return parseFloat(remCss) * 16
 }
 
-describe('StatsAllPreview — literal ">>" overlay on the partial poster', () => {
-  it('1. the visible text contains a literal ">>"', () => {
+describe('StatsAllPreview — literal ">>" continuation overlay', () => {
+  it('1. renders the exact "All(90)" heading — no space before the parenthesis', () => {
+    const html = render(manyShows(90))
+    expect(html).toContain('All(90)')
+    expect(html).not.toContain('All (90)')
+  })
+
+  it('2. the visible text contains a literal ">>"', () => {
     const html = render(manyShows(90))
     const linkBlock = html.slice(html.indexOf('stats-all-preview__more-link'))
     expect(linkBlock).toContain('&gt;&gt;')
   })
 
-  it('2. no SVG chevron icon exists anywhere in the preview', () => {
+  it('3. no SVG icon exists anywhere in the preview (markup or source)', () => {
     const html = render(manyShows(90))
     expect(html).not.toContain('<svg')
+    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('<svg')
   })
 
-  it('3. no circular chevron class exists', () => {
+  it('4. no old circular chevron class exists (markup, source, or CSS)', () => {
     const html = render(manyShows(90))
+    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
     expect(html).not.toContain('stats-all-preview__chevron')
+    expect(source).not.toContain('stats-all-preview__chevron')
     expect(previewCss).not.toContain('.stats-all-preview__chevron')
   })
 
-  it('4. exactly one link exists for a history with more shows than fit in the preview', () => {
+  it('5. exactly one link exists for a history that overflows the preview', () => {
     const html = render(manyShows(90))
     expect((html.match(/<a /g) ?? []).length).toBe(1)
     expect(html).not.toContain('<button')
   })
 
-  it('5. the single link points to /stats/all', () => {
+  it('6. 1, 2, and 3 shows render zero links, no shade, and no ">>"', () => {
+    for (const count of [1, 2, 3]) {
+      const html = render(manyShows(count))
+      expect((html.match(/<a /g) ?? []).length).toBe(0)
+      expect(html).not.toContain('&gt;&gt;')
+      expect(html).not.toContain('stats-all-preview__continuation')
+    }
+  })
+
+  it('7. the single link points to /stats/all', () => {
     const html = render(manyShows(90))
     expect(html).toContain('href="/stats/all"')
   })
 
-  it('6. the link\'s accessible name includes the live count', () => {
+  it('8. the link\'s accessible name includes the live show count', () => {
+    expect(render(manyShows(90))).toMatch(/aria-label="View all 90 shows"/)
+    expect(render(manyShows(7))).toMatch(/aria-label="View all 7 shows"/)
+  })
+
+  it('9. the link is not inside an aria-hidden=true ancestor', () => {
     const html = render(manyShows(90))
-    expect(html).toMatch(/aria-label="View all 90 shows"/)
+    // The aria-hidden row is closed before the continuation/link opens.
+    const rowStart = html.indexOf('stats-all-preview__row')
+    const linkStart = html.indexOf('stats-all-preview__more-link')
+    const between = html.slice(rowStart, linkStart)
+    // The row div must be closed (its own subtree ended) before the link.
+    expect(between).toContain('</div>')
+    // The continuation wrapper that holds the link is not aria-hidden.
+    expect(html).not.toMatch(/stats-all-preview__continuation"[^>]*aria-hidden="true"/)
   })
 
-  it('7. the link\'s hit-target CSS is at least 44x44px', () => {
-    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
-    const width = remToPx(linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])
-    const height = remToPx(linkRule.match(/(?:^|\s)height:\s*([\d.]+rem)/)[1])
-    expect(width).toBeGreaterThanOrEqual(44)
-    expect(height).toBeGreaterThanOrEqual(44)
+  it('10. the continuation overlay has explicit higher stacking than the poster <img>', () => {
+    // The loaded poster image is position:relative; z-index:1 (.progressive-image__img).
+    // The continuation MUST carry a z-index strictly above that or the artwork
+    // paints over the shade and ">>" — the exact production regression.
+    const imgRule = css.match(/\.progressive-image__img\s*\{[^}]*\}/)[0]
+    const imgZ = Number(imgRule.match(/z-index:\s*(\d+)/)[1])
+    const contRule = rule('.stats-all-preview__continuation')
+    const contZ = Number(contRule.match(/z-index:\s*(\d+)/)[1])
+    expect(imgZ).toBe(1)
+    expect(contZ).toBeGreaterThan(imgZ)
   })
 
-  it('8. the link width is not the previous 72px full-edge zone', () => {
-    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
-    const width = remToPx(linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])
-    expect(width).toBeLessThan(72)
+  it('11. the shade has pointer-events: none', () => {
+    expect(rule('.stats-all-preview__continuation-shade')).toContain('pointer-events: none;')
   })
 
-  it('9. the link does not span the full preview card height', () => {
-    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
+  it('12. the shade uses a flat tint, not a gradient', () => {
+    expect(rule('.stats-all-preview__continuation-shade')).not.toContain('gradient')
+  })
+
+  it('13. the link hit target is at least 44x44px', () => {
+    const linkRule = rule('.stats-all-preview__more-link')
+    expect(remToPx(linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])).toBeGreaterThanOrEqual(44)
+    expect(remToPx(linkRule.match(/(?:^|\s)height:\s*([\d.]+rem)/)[1])).toBeGreaterThanOrEqual(44)
+  })
+
+  it('14. the continuation width is between 48px and ~60px (matches the partial reveal)', () => {
+    const width = remToPx(rule('.stats-all-preview__continuation').match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])
+    expect(width).toBeGreaterThanOrEqual(48)
+    expect(width).toBeLessThanOrEqual(60)
+  })
+
+  it('15. the link does not span the card\'s full height (fixed height, no inset:0)', () => {
+    const linkRule = rule('.stats-all-preview__more-link')
     expect(linkRule).not.toMatch(/inset:\s*0/)
-    expect(linkRule).not.toContain('min-height: 2.75rem')
     expect(linkRule).toMatch(/height:\s*2\.75rem/)
+    // Nor may the continuation overlay it lives in span the full padded card.
+    const contRule = rule('.stats-all-preview__continuation')
+    expect(contRule).not.toMatch(/inset:\s*0/)
   })
 
-  it('10. posters remain plain, passive divs — not links or buttons', () => {
-    const html = render(manyShows(90))
-    expect(html).not.toMatch(/<a [^>]*class="stats-all-preview__poster"/)
-    expect(html).not.toMatch(/<button[^>]*class="stats-all-preview__poster"/)
-  })
-
-  it('11-13. tapping posters or the shaded partial poster (outside the link) does not navigate', async () => {
+  it('16-18. taps on posters, card space, and the shaded partial poster do not navigate', async () => {
     let container = document.createElement('div')
     document.body.appendChild(container)
     let root = createRoot(container)
@@ -114,27 +166,26 @@ describe('StatsAllPreview — literal ">>" overlay on the partial poster', () =>
       )
     })
 
-    function locationPath() {
-      return container.querySelector('[data-testid="location-probe"]').textContent
-    }
-
-    function click(el) {
-      return act(async () => {
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-      })
-    }
+    const path = () => container.querySelector('[data-testid="location-probe"]').textContent
+    const click = (el) => act(async () => {
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
 
     const posters = container.querySelectorAll('.stats-all-preview__poster')
     await click(posters[0])
-    expect(locationPath()).toBe('/stats')
-
+    expect(path()).toBe('/stats')
     await click(posters[2])
-    expect(locationPath()).toBe('/stats')
+    expect(path()).toBe('/stats')
 
-    const shade = container.querySelector('.stats-all-preview__partial-shade')
+    // Card space (the outer preview surface, away from the link).
+    await click(container.querySelector('.stats-all-preview__row'))
+    expect(path()).toBe('/stats')
+
+    // The decorative shade over the partial poster.
+    const shade = container.querySelector('.stats-all-preview__continuation-shade')
     expect(shade).not.toBeNull()
     await click(shade)
-    expect(locationPath()).toBe('/stats')
+    expect(path()).toBe('/stats')
 
     await act(async () => root.unmount())
     container.remove()
@@ -142,7 +193,7 @@ describe('StatsAllPreview — literal ">>" overlay on the partial poster', () =>
     root = null
   })
 
-  it('14. tapping the ">>" link navigates to /stats/all', async () => {
+  it('19. tapping the ">>" link navigates to /stats/all', async () => {
     let container = document.createElement('div')
     document.body.appendChild(container)
     let root = createRoot(container)
@@ -175,55 +226,53 @@ describe('StatsAllPreview — literal ">>" overlay on the partial poster', () =>
     root = null
   })
 
-  it('15. 1, 2, and 3 shows render zero links and no ">>"', () => {
-    for (const count of [1, 2, 3]) {
-      const html = render(manyShows(count))
-      expect((html.match(/<a /g) ?? []).length).toBe(0)
-      expect(html).not.toContain('&gt;&gt;')
-      expect(html).not.toContain('stats-all-preview__partial-shade')
-    }
-  })
-
-  it('16. no SVG chevron remains anywhere in the source or CSS', () => {
-    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
-    expect(source).not.toContain('<svg')
-    expect(source).not.toContain('stats-all-preview__chevron')
-  })
-
-  it('17. the shading overlay has pointer-events: none', () => {
-    const shadeRule = previewCss.match(/\.stats-all-preview__partial-shade \{[^}]*\}/)[0]
-    expect(shadeRule).toContain('pointer-events: none;')
-  })
-
-  it('18. no viewport JS sizing is introduced', () => {
-    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
-    expect(source).not.toContain('innerWidth')
-    expect(source).not.toContain('useState')
-    expect(source).not.toContain('useEffect')
-    const posterRule = previewCss.match(/\.stats-all-preview__poster \{[^}]*\}/)[0]
-    expect(posterRule).toMatch(/width:\s*clamp\(/)
-    expect(posterRule).toContain('calc(')
-    expect(posterRule).not.toContain('vw')
-  })
-
-  it('19. the preview row clips overflow with no horizontal scrollbar', () => {
-    expect(previewCss).toContain('.stats-all-preview__row {')
-    const rowRule = previewCss.match(/\.stats-all-preview__row \{[^}]*\}/)[0]
+  it('20. the preview row clips overflow and is not scrollable', () => {
+    const rowRule = rule('.stats-all-preview__row')
     expect(rowRule).toContain('overflow: hidden;')
     expect(previewCss).not.toContain('overflow-x: auto')
     expect(previewCss).not.toContain('overflow-x: scroll')
+    expect(previewCss).not.toContain('overflow-y: scroll')
   })
 
-  it('20. poster count remains capped at six, even for long histories', () => {
+  it('21. the card has no right padding (partial poster runs flush to the right edge)', () => {
+    const cardRule = rule('.stats-all-preview')
+    expect(cardRule).toContain('overflow: hidden;')
+    expect(cardRule).toMatch(/padding:\s*0\.75rem 0 0\.875rem 0\.75rem;/)
+  })
+
+  it('22. the continuation is aligned to the poster area only — it cannot create a bottom strip', () => {
+    const contRule = rule('.stats-all-preview__continuation')
+    // top/bottom equal the card's own vertical padding, so the overlay spans
+    // exactly the row (poster) box and never the card's bottom padding.
+    expect(contRule).toMatch(/top:\s*0\.75rem/)
+    expect(contRule).toMatch(/bottom:\s*0\.875rem/)
+    // The shade fills only that box (inset:0 of the continuation), no extra region.
+    expect(rule('.stats-all-preview__continuation-shade')).toMatch(/inset:\s*0/)
+  })
+
+  it('23. the preview mounts at most six posters, even for a long history', () => {
     const html = render(manyShows(30))
     const posterCount = (html.match(/class="stats-all-preview__poster"/g) ?? []).length
     expect(posterCount).toBeLessThanOrEqual(6)
   })
 
-  it('renders the exact "All(90)" heading — no space before the parenthesis', () => {
+  it('24. no viewport JS measurement is used — poster width is pure fluid CSS', () => {
+    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('innerWidth')
+    expect(source).not.toContain('resize')
+    expect(source).not.toContain('useState')
+    expect(source).not.toContain('useEffect')
+    const posterRule = rule('.stats-all-preview__poster')
+    expect(posterRule).toContain('calc(')
+    expect(posterRule).not.toContain('vw')
+  })
+
+  // --- Additional guards ---
+
+  it('posters remain plain, passive divs — not links or buttons', () => {
     const html = render(manyShows(90))
-    expect(html).toContain('All(90)')
-    expect(html).not.toContain('All (90)')
+    expect(html).not.toMatch(/<a [^>]*class="stats-all-preview__poster"/)
+    expect(html).not.toMatch(/<button[^>]*class="stats-all-preview__poster"/)
   })
 
   it('renders nothing for an empty history — no All(0) heading', () => {
@@ -232,30 +281,26 @@ describe('StatsAllPreview — literal ">>" overlay on the partial poster', () =>
     expect(html).not.toContain('All(0)')
   })
 
-  it('the partial 4th poster runs flush to the card\'s right edge (no right padding on the card)', () => {
-    const cardRule = previewCss.match(/\.stats-all-preview \{[^}]*\}/)[0]
-    expect(cardRule).toContain('overflow: hidden;')
-    expect(cardRule).toMatch(/padding:\s*0\.75rem 0 0\.875rem 0\.75rem;/)
-  })
-
-  it('the shade does not use a wide gradient covering the 3rd poster', () => {
-    const shadeRule = previewCss.match(/\.stats-all-preview__partial-shade \{[^}]*\}/)[0]
-    expect(shadeRule).not.toContain('gradient')
-    const width = remToPx(shadeRule.match(/width:\s*([\d.]+rem)/)[1])
-    expect(width).toBeLessThanOrEqual(44)
-  })
-
   it('the more-link has no circular background, border, or box-shadow', () => {
-    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
+    const linkRule = rule('.stats-all-preview__more-link')
     expect(linkRule).not.toContain('border-radius')
     expect(linkRule).not.toContain('border:')
     expect(linkRule).not.toContain('box-shadow')
     expect(linkRule).not.toContain('background')
   })
 
+  it('the ">>" text is explicit white with a shadow for legibility over artwork', () => {
+    const textRule = rule('.stats-all-preview__more-text')
+    expect(textRule).toContain('color: #fff;')
+    expect(textRule).toContain('text-shadow')
+    const fontPx = remToPx(textRule.match(/font-size:\s*([\d.]+rem)/)[1])
+    expect(fontPx).toBeGreaterThanOrEqual(20) // 1.25rem
+    expect(fontPx).toBeLessThanOrEqual(24) // 1.5rem
+  })
+
   it('focus-visible styling exists for the more-link', () => {
     expect(previewCss).toContain('.stats-all-preview__more-link:focus-visible {')
-    expect(previewCss).toMatch(/\.stats-all-preview__more-link:focus-visible \{[^}]*outline:/)
+    expect(rule('.stats-all-preview__more-link:focus-visible')).toContain('outline:')
   })
 })
 
@@ -264,7 +309,7 @@ describe('StatsAllPreview — interaction cleanup', () => {
     document.body.innerHTML = ''
   })
 
-  it('a small history (3 shows) has no link and no shade to tap at all', async () => {
+  it('a small history (3 shows) has no link and no continuation to tap at all', async () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -276,7 +321,7 @@ describe('StatsAllPreview — interaction cleanup', () => {
       )
     })
     expect(container.querySelector('a')).toBeNull()
-    expect(container.querySelector('.stats-all-preview__partial-shade')).toBeNull()
+    expect(container.querySelector('.stats-all-preview__continuation')).toBeNull()
     await act(async () => root.unmount())
   })
 })
