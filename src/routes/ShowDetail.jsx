@@ -229,8 +229,8 @@ function ShowDetailInner({ tmdbId }) {
   }
 
   return (
-    <div className="nested-page px-4 pb-4">
-      <div className="nested-header">
+    <div className="nested-page px-4 pb-4 show-detail-page">
+      <div className="nested-header phase2-nested-header">
         <Link
           to="/watching"
           aria-label="Back to Watching"
@@ -269,9 +269,9 @@ function ShowDetailInner({ tmdbId }) {
       )}
 
       {!loading && !error && show === null && (
-        <p className="mt-8 text-center text-(--color-text-muted)">
+        <p className="empty-state">
           Show not found.{' '}
-          <Link to="/watching" className="text-(--color-accent)">
+          <Link to="/watching" className="text-(--color-gold-accent-strong)">
             Back to Watching
           </Link>
         </p>
@@ -279,26 +279,27 @@ function ShowDetailInner({ tmdbId }) {
 
       {!loading && show && (
         <>
-          <div className="content-surface mt-4 flex gap-3 p-3">
+          <section className="route-hero show-detail-hero content-surface mt-4 flex gap-3 p-3" aria-label={`${show.name} progress summary`}>
             <ProgressiveImage
               src={show.poster_path ? POSTER_BASE + show.poster_path : null}
               alt={show.name}
               fallbackLabel="No poster"
               loading="eager"
               fetchPriority="high"
-              className="h-32 w-24 shrink-0 rounded-md"
+              className="phase2-poster-frame show-detail-poster h-32 w-24 shrink-0"
             />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm text-(--color-text-muted)">
+            <div className="show-detail-hero__copy min-w-0 flex-1">
+              <p className="route-kicker">Viewing progress</p>
+              <p className="show-detail-hero__seasons">
                 {seasons.length} season{seasons.length === 1 ? '' : 's'}
               </p>
 
               {totalEpisodeCount > 0 && (
                 <>
-                  <p className="mt-1 text-sm text-(--color-text-muted)">
+                  <p className="show-detail-hero__progress-copy">
                     {totalWatchedCount}/{totalEpisodeCount} episodes watched
                   </p>
-                  <div className="progress-track mt-3 w-full">
+                  <div className="progress-track mt-3 w-full" role="progressbar" aria-label={`${show.name} watch progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={totalProgressPercent}>
                     <div
                       className="progress-fill"
                       style={{ width: `${totalProgressPercent}%` }}
@@ -307,9 +308,17 @@ function ShowDetailInner({ tmdbId }) {
                 </>
               )}
             </div>
+          </section>
+
+          <div className="route-section-heading">
+            <div>
+              <p className="route-kicker">Episode ledger</p>
+              <h2>Seasons</h2>
+            </div>
+            <p>{seasons.length} total</p>
           </div>
 
-          <div className="mt-4 flex flex-col gap-2">
+          <section className="detail-season-list" aria-label="Seasons">
             {seasons.length === 0 && (
               <p className="text-sm text-(--color-text-muted)">
                 Couldn't load season data for this show.
@@ -329,7 +338,7 @@ function ShowDetailInner({ tmdbId }) {
               return (
                 <div
                   key={season.season_number}
-                  className="content-row flex items-center pl-3 pr-1"
+                  className="detail-season-row loki-record-row content-row flex items-center pl-3 pr-1"
                 >
                   <Link
                     to={`/watching/${numericTmdbId}/season/${season.season_number}`}
@@ -341,7 +350,7 @@ function ShowDetailInner({ tmdbId }) {
                     <span className="type-show-title text-(--color-text)">
                       Season {season.season_number}
                     </span>
-                    <span className="type-metadata flex items-center gap-2 text-(--color-text-muted)">
+                    <span className="detail-season-row__meta type-metadata flex items-center gap-2">
                       {watchedCount}/{episodes.length}
                       <span aria-hidden="true">›</span>
                     </span>
@@ -355,7 +364,7 @@ function ShowDetailInner({ tmdbId }) {
                 </div>
               )
             })}
-          </div>
+          </section>
 
         </>
       )}

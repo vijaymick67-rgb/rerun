@@ -40,7 +40,7 @@ function sortWatchingShows(shows) {
 export function WatchingPartialWarning({ error, onRetry }) {
   if (!error) return null
   return (
-    <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-upcoming)/40 bg-(--color-upcoming-muted) px-3 py-2 text-sm text-(--color-upcoming)">
+    <div className="status-banner status-banner--warning motion-banner mt-4 flex items-center justify-between gap-3">
       <span>Some show details couldn’t refresh. <span className="whitespace-nowrap">({error.code})</span></span>
       <button
         type="button"
@@ -535,9 +535,22 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
   const visibleShows = shows.filter((show) => isVisibleInWatching(show, show.status))
 
   return (
-    <div className="app-page px-4 pb-4">
+    <div className="app-page phase2-watching px-4 pb-4">
+      <header className="route-heading watching-heading">
+        <p className="route-kicker">Your viewing ledger</p>
+        <div className="route-heading__line">
+          <h1 className="type-page-title"><span>Watching</span></h1>
+          {!loading && !error && (
+            <span className="route-heading__count" aria-label={`${visibleShows.length} active shows`}>
+              {visibleShows.length}
+            </span>
+          )}
+        </div>
+        <p className="route-heading__support">Released episodes, upcoming returns and watch progress.</p>
+      </header>
+
       {loading && (
-        <div className="flex flex-col gap-3">
+        <div className="watching-list">
           <WatchingRowSkeleton />
           <WatchingRowSkeleton />
           <WatchingRowSkeleton />
@@ -545,7 +558,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       )}
 
       {error && (
-        <div className="motion-banner mt-4 flex items-center justify-between gap-3 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
+        <div className="status-banner status-banner--destructive motion-banner mt-4 flex items-center justify-between gap-3">
           <span>{error.message} <span className="whitespace-nowrap">({error.code})</span></span>
           <button
             type="button"
@@ -561,13 +574,13 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       )}
 
       {removeError && (
-        <p role="alert" className="motion-banner mt-4 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
+        <p role="alert" className="status-banner status-banner--destructive motion-banner mt-4">
           {removeError}
         </p>
       )}
 
       {quickMarkError && (
-        <p role="alert" className="motion-banner mt-4 rounded-lg border border-(--color-destructive)/40 bg-(--color-destructive-muted) px-3 py-2 text-sm text-(--color-destructive)">
+        <p role="alert" className="status-banner status-banner--destructive motion-banner mt-4">
           {quickMarkError}
         </p>
       )}
@@ -595,7 +608,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
       )}
 
       {!loading && visibleShows.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <section className="watching-list" aria-label="Tracked shows">
           {visibleShows.map((show) => (
             <WatchingRow
               key={show.id}
@@ -609,7 +622,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
               canQuickMark={readyShowIds.has(show.tmdb_id)}
             />
           ))}
-        </div>
+        </section>
       )}
 
       <ConfirmDialog

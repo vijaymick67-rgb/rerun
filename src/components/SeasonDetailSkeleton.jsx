@@ -1,6 +1,6 @@
 function EpisodeRowSkeleton() {
   return (
-    <div className="content-row season-episode-row flex items-center gap-2 px-3 py-1.5">
+    <div className="loki-record-row content-row season-episode-row flex items-center gap-2 px-3 py-1.5">
       <div className="season-episode-copy min-w-0 flex-1 py-1">
         <div className="skeleton-block h-3 w-2/3 rounded" />
         <div className="skeleton-block mt-2 h-3 w-1/3 rounded" />
@@ -14,7 +14,7 @@ function EpisodeRowSkeleton() {
 
 export default function SeasonDetailSkeleton() {
   return (
-    <div className="mt-4 flex animate-pulse flex-col gap-2">
+    <div className="season-episodes mt-4 animate-pulse">
       <EpisodeRowSkeleton />
       <EpisodeRowSkeleton />
       <EpisodeRowSkeleton />

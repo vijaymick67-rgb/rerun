@@ -191,9 +191,17 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       }))
   }
 
+  const releasedEpisodes = episodes?.filter(hasAired) ?? []
+  const watchedReleasedCount = releasedEpisodes.filter((episode) =>
+    watched.has(episodeKey(numericSeasonNumber, episode.episode_number)),
+  ).length
+  const seasonProgressPercent = releasedEpisodes.length > 0
+    ? Math.round((watchedReleasedCount / releasedEpisodes.length) * 100)
+    : 0
+
   return (
-    <div className="nested-page px-4 pb-4">
-      <div className="nested-header">
+    <div className="nested-page px-4 pb-4 season-detail-page">
+      <div className="nested-header phase2-nested-header">
         <Link
           to={`/watching/${numericTmdbId}`}
           aria-label="Back to show"
@@ -236,7 +244,28 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
       )}
 
       {!loading && episodes && (
-        <div className="season-episodes">
+        <>
+          <section className="route-progress-summary season-progress-summary" aria-label={`Season ${numericSeasonNumber} progress`}>
+            <div>
+              <p className="route-kicker">Released episodes</p>
+              <p className="season-progress-summary__copy">
+                <strong>{watchedReleasedCount}</strong> of {releasedEpisodes.length} watched
+              </p>
+            </div>
+            <div className="progress-track" role="progressbar" aria-label={`Season ${numericSeasonNumber} watch progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={seasonProgressPercent}>
+              <div className="progress-fill" style={{ width: `${seasonProgressPercent}%` }} />
+            </div>
+          </section>
+
+          <div className="route-section-heading season-episode-heading">
+            <div>
+              <p className="route-kicker">Season ledger</p>
+              <h2>Episodes</h2>
+            </div>
+            <p>{episodes.length} total</p>
+          </div>
+
+          <section className="season-episodes" aria-label="Episodes">
           {episodes.map((ep) => {
             const epKey = episodeKey(numericSeasonNumber, ep.episode_number)
             const isWatched = watched.has(epKey)
@@ -247,7 +276,7 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
             return (
               <div
                 key={ep.episode_number}
-                className={`content-row season-episode-row flex items-center gap-2 px-3 py-1.5 ${episodeHasAired ? '' : 'season-episode-row--future'}`}
+                className={`loki-record-row content-row season-episode-row flex items-center gap-2 px-3 py-1.5 ${episodeHasAired ? '' : 'season-episode-row--future'}`}
               >
                 <div className="season-episode-copy min-w-0 flex-1 py-1">
                   <p className="season-episode-title type-episode-title">
@@ -269,7 +298,8 @@ function SeasonDetailInner({ tmdbId, seasonNumber }) {
               </div>
             )
           })}
-        </div>
+          </section>
+        </>
       )}
     </div>
   )

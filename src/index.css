@@ -264,6 +264,226 @@ body {
     var(--color-surface-base);
 }
 
+/* Phase 2 route vocabulary. These classes are opt-in so Browse, Insights,
+   Settings and authentication keep their Phase 1-only treatment. */
+.route-heading {
+  margin-bottom: var(--space-section);
+}
+
+.route-kicker {
+  color: var(--color-gold-accent-strong);
+  font-size: var(--type-badge-size);
+  font-weight: 720;
+  letter-spacing: 0.145em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.route-heading__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-compact);
+  margin-top: var(--space-micro);
+}
+
+.route-heading__count {
+  display: inline-grid;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  place-items: center;
+  border: 1px solid var(--color-border-standard);
+  border-radius: 999px;
+  padding-inline: 0.45rem;
+  color: var(--color-gold-accent-strong);
+  background: color-mix(in srgb, var(--color-gold-accent) 8%, transparent);
+  font-size: var(--type-badge-size);
+  font-weight: 680;
+}
+
+.route-heading__support {
+  max-width: 30rem;
+  margin-top: var(--space-compact);
+  color: var(--color-text-secondary);
+  font-size: var(--type-metadata-size);
+  line-height: 1.5;
+}
+
+.route-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-related);
+  margin: var(--space-major) 0 var(--space-related);
+  padding-inline: var(--space-micro);
+}
+
+.route-section-heading h2 {
+  color: var(--color-text-primary);
+  font-size: var(--type-section-title-size);
+  font-weight: var(--weight-section);
+  letter-spacing: -0.025em;
+}
+
+.route-section-heading p {
+  color: var(--color-text-muted);
+  font-size: var(--type-caption-size);
+}
+
+.phase2-poster-frame {
+  overflow: hidden;
+  border: 1px solid var(--color-border-standard);
+  border-radius: var(--radius-poster);
+  background: var(--color-surface-raised);
+  box-shadow: 0 7px 18px rgb(0 0 0 / 0.42);
+}
+
+.loki-record-row {
+  box-shadow: inset 0 1px 0 var(--color-leather-highlight), 0 7px 18px rgb(0 0 0 / 0.28);
+}
+
+.phase2-watching {
+  padding-top: max(1.25rem, var(--safe-area-inset-top));
+}
+
+.watching-heading {
+  padding-inline: var(--space-micro);
+}
+
+.watching-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.watching-status-copy {
+  line-height: 1.45;
+}
+
+.watching-status-copy--next {
+  color: var(--color-gold-accent);
+}
+
+.watching-status-copy--complete {
+  color: var(--color-completion);
+  font-weight: 600;
+}
+
+.phase2-nested-header {
+  align-items: flex-start;
+  padding-bottom: var(--space-micro);
+}
+
+.phase2-nested-header .nested-header__back {
+  border-color: var(--color-border-standard);
+  color: var(--color-gold-accent-strong);
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--color-gold-accent) 7%, transparent), transparent 58%),
+    var(--color-surface-interactive);
+  box-shadow: var(--elevation-interactive);
+}
+
+.route-hero {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--color-border-standard);
+  background:
+    linear-gradient(90deg, var(--color-armour-edge-strong), var(--color-armour-edge)) top left / 2.75rem 1px no-repeat,
+    linear-gradient(var(--color-armour-edge-strong), var(--color-armour-edge)) top left / 1px 2.75rem no-repeat,
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-gold-accent) 8%, transparent), transparent 42%),
+    linear-gradient(155deg, var(--color-leather-highlight), transparent 28%),
+    var(--color-surface-raised);
+}
+
+.show-detail-hero {
+  min-height: 10rem;
+  align-items: stretch;
+  gap: var(--space-standard);
+  padding: var(--space-related);
+}
+
+.show-detail-poster {
+  align-self: stretch;
+  object-fit: cover;
+}
+
+.show-detail-hero__copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-block: var(--space-micro);
+}
+
+.show-detail-hero__seasons {
+  margin-top: var(--space-compact);
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--weight-body);
+}
+
+.show-detail-hero__progress-copy {
+  margin-top: var(--space-micro);
+  color: var(--color-text-muted);
+  font-size: var(--type-metadata-size);
+  line-height: 1.45;
+}
+
+.show-detail-hero__progress-copy + div {
+  margin-top: auto;
+}
+
+.detail-season-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-compact);
+}
+
+.detail-season-row {
+  min-height: 4rem;
+}
+
+.detail-season-row .motion-press {
+  min-height: 3.5rem;
+}
+
+.detail-season-row__meta {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-season-row__meta > span {
+  color: var(--color-gold-accent);
+  font-size: 1.15rem;
+}
+
+.route-progress-summary {
+  display: grid;
+  gap: var(--space-related);
+  margin-top: var(--space-section);
+  border: 1px solid color-mix(in srgb, var(--color-emerald) 28%, var(--color-border-subtle));
+  border-radius: var(--radius-card);
+  padding: var(--space-standard);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-emerald) 14%, transparent), transparent 48%),
+    var(--color-forest-tonal-surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-text-primary) 5%, transparent), 0 8px 20px rgb(0 0 0 / 0.28);
+}
+
+.season-progress-summary__copy {
+  margin-top: var(--space-micro);
+  color: var(--color-text-secondary);
+  font-size: var(--type-metadata-size);
+}
+
+.season-progress-summary__copy strong {
+  color: var(--color-completion);
+  font-size: var(--type-section-title-size);
+  font-weight: var(--weight-section);
+}
+
+.season-episode-heading {
+  margin-bottom: var(--space-compact);
+}
+
 .stats-summary {
   position: relative;
   overflow: hidden;
@@ -521,10 +741,14 @@ body {
   align-items: center;
   gap: var(--space-compact);
   padding: var(--space-compact) var(--space-related);
+  min-height: 4.25rem;
 }
 
 .season-episode-row--future {
-  opacity: 0.72;
+  border-color: color-mix(in srgb, var(--color-warning) 22%, var(--color-border-subtle));
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--color-warning) 5%, transparent), transparent 42%),
+    var(--color-surface-base);
 }
 
 .season-episode-copy {
@@ -542,6 +766,11 @@ body {
   margin-top: var(--space-micro);
   color: var(--color-text-muted);
   font-variant-numeric: proportional-nums;
+}
+
+.season-episode-row--future .season-episode-meta {
+  color: var(--color-warning);
+  font-weight: 560;
 }
 
 .watched-circle {
@@ -1005,7 +1234,10 @@ body {
    --color-destructive pastel, without touching the shared destructive token
    used elsewhere (error banners, ConfirmDialog, etc.). */
 .watching-remove-surface {
-  background: color-mix(in srgb, var(--color-destructive) 42%, #2a0a10 58%);
+  border-left: 1px solid color-mix(in srgb, var(--color-destructive) 34%, transparent);
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--color-destructive) 9%, transparent), transparent 48%),
+    var(--color-destructive-surface);
   color: var(--color-text);
 }
 
@@ -1022,6 +1254,9 @@ body {
 
 .watching-row-front {
   border-radius: inherit;
+  background:
+    linear-gradient(155deg, var(--color-leather-highlight), transparent 28%),
+    var(--color-surface-base);
 }
 
 /* Right-side reserve for the always-present status button — long
