@@ -140,9 +140,9 @@ describe('AuthGate — private app mount boundary', () => {
     await flush()
 
     expect(container.querySelector('.app-tab-bar')).not.toBeNull()
-    expect(container.textContent).toContain('Discover')
-    expect(container.textContent).toContain('Watching')
-    expect(container.textContent).toContain('Settings')
+    expect(container.querySelector('a[aria-label="Discover"]')).not.toBeNull()
+    expect(container.querySelector('a[aria-label="Watching"]')).not.toBeNull()
+    expect(container.querySelector('a[aria-label="Settings"]')).not.toBeNull()
     expect(fromSpy).toHaveBeenCalledWith('tracked_shows')
   })
 

@@ -38,13 +38,19 @@ describe('root navigation polish', () => {
     expect(html).toContain('href="/browse"')
     expect(html).toMatch(/<a[^>]*(?:href="\/browse"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/browse")/)
     expect((html.match(/aria-current="page"/g) ?? [])).toHaveLength(1)
-    expect(html).toContain('>Discover</a>')
+    // Labels are no longer rendered as visible text — the tab bar is
+    // icon-only — but each destination keeps its accessible name.
+    expect(html).toContain('aria-label="Discover"')
     expect(html).toContain('href="/watching"')
-    expect(html).toContain('>Watching</a>')
+    expect(html).toContain('aria-label="Watching"')
     expect(html).toContain('href="/stats"')
-    expect(html).toContain('>Insights</a>')
+    expect(html).toContain('aria-label="Insights"')
     expect(html).toContain('href="/settings"')
-    expect(html).toContain('>Settings</a>')
+    expect(html).toContain('aria-label="Settings"')
+    expect(html).not.toContain('>Discover<')
+    expect(html).not.toContain('>Watching<')
+    expect(html).not.toContain('>Insights<')
+    expect(html).not.toContain('>Settings<')
   })
 
   it('keeps the Insights tab active while on the nested /stats/all route', () => {

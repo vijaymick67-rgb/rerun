@@ -122,7 +122,7 @@ afterEach(async () => {
 })
 
 function insightsTab() {
-  return [...container.querySelectorAll('a')].find((a) => a.textContent === 'Insights')
+  return [...container.querySelectorAll('a')].find((a) => a.getAttribute('aria-label') === 'Insights')
 }
 
 describe('Stats + StatsAllShows integration — shared state, no second loader', () => {
