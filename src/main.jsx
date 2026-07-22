@@ -1,9 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
 import './fonts.css'
 import './index.css'
+import AuthGate from './AuthGate.jsx'
+import { AuthProvider } from './lib/AuthContext'
 import { removeStaticLoadingShell } from './pwa/appShell'
-import { isLokiPrototypePath } from './dev/lokiRoute'
 
 const removeShellOnStartupFailure = () => removeStaticLoadingShell()
 
@@ -12,7 +14,10 @@ window.addEventListener('unhandledrejection', removeShellOnStartupFailure, { onc
 
 const root = createRoot(document.getElementById('root'))
 
-if (isLokiPrototypePath(window.location.pathname, import.meta.env.DEV)) {
+if (
+  import.meta.env.DEV &&
+  (window.location.pathname === '/dev/loki' || window.location.pathname === '/dev/loki/')
+) {
   import(/* @vite-ignore */ '/src/dev/LokiShowcase.jsx').then(({ default: LokiShowcase }) => {
     root.render(
       <StrictMode>
@@ -21,11 +26,13 @@ if (isLokiPrototypePath(window.location.pathname, import.meta.env.DEV)) {
     )
   })
 } else {
-  import('./ProductionRoot.jsx').then(({ default: ProductionRoot }) => {
-    root.render(
-      <StrictMode>
-        <ProductionRoot />
-      </StrictMode>,
-    )
-  })
+  root.render(
+    <StrictMode>
+      <BrowserRouter>
+        <AuthProvider>
+          <AuthGate />
+        </AuthProvider>
+      </BrowserRouter>
+    </StrictMode>,
+  )
 }
