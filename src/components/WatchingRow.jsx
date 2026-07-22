@@ -61,10 +61,32 @@ export default function WatchingRow({
   // episode identity that was quick-marked at tap time; the confirmation
   // clears once both a minimum dwell has elapsed AND the row's current
   // episode has actually moved on from that identity (or resolved to
-  // caught-up), whichever finishes last.
+  // caught-up), whichever finishes last. `displayStatus` is a minimal,
+  // immutable snapshot of show.status taken at tap time — the live show
+  // object keeps advancing immediately underneath (mutation, cache,
+  // overlays are never delayed), but the row's own visible status text
+  // must stay pinned to the pre-tap episode until that same clear, so the
+  // text and the button's grey/green swap happen in the same render. See
+  // displayedStatus below.
   const [confirmState, setConfirmState] = useState(null)
   const confirmTimerRef = useRef(null)
   const advanced = confirmState ? currentEpisodeKey !== confirmState.key : false
+
+  // A row is only ever reused across shows by key-mismatch bugs upstream —
+  // Watching.jsx keys each row by show.id — but guard here too so a stale
+  // snapshot from a previous show can never leak onto a different one if
+  // that ever changes. This adjusts state during render (the standard React
+  // pattern for resetting on an identity-changing prop) rather than via an
+  // effect, so no frame ever paints the old snapshot against new show data.
+  const prevShowIdRef = useRef(show.id)
+  if (prevShowIdRef.current !== show.id) {
+    prevShowIdRef.current = show.id
+    if (confirmTimerRef.current) {
+      clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = null
+    }
+    if (confirmState) setConfirmState(null)
+  }
 
   function clearConfirmTimer() {
     if (confirmTimerRef.current) {
@@ -273,10 +295,29 @@ export default function WatchingRow({
       season_number: episode.season_number,
       episode_number: episode.episode_number,
       key: currentEpisodeKey,
+      // A minimal, immutable copy of show.status — only the primitive
+      // fields the status line actually renders — never the live show
+      // object itself. isInteractive only ever allows a tap while episode
+      // is set, which is exactly when show.status.type is 'nextUp'.
+      displayStatus: show.status
+        ? {
+          type: show.status.type,
+          season_number: show.status.season_number,
+          episode_number: show.status.episode_number,
+          name: show.status.name,
+        }
+        : null,
     }
     onQuickMark(show)
     startConfirmation(marked)
   }
+
+  // The row's visible status line stays pinned to the pre-tap episode for
+  // as long as the accepted confirmation is active, then swaps to the live
+  // show.status in the same render that releases confirmState — see the
+  // dwell/advance effect above. All mutation, progress, and button-state
+  // logic below continues to read the live `show`/`episode` directly.
+  const displayedStatus = confirmState ? confirmState.displayStatus : show.status
 
   const statusLabel = visualState === 'accepted'
     ? `Marked S${confirmState.season_number}E${confirmState.episode_number} of ${show.name} watched`
@@ -328,14 +369,14 @@ export default function WatchingRow({
 
             {show.loadError ? (
               <p className="type-caption mt-1 text-(--color-destructive)">Couldn't load episodes</p>
-            ) : show.status?.type === 'nextUp' ? (
+            ) : displayedStatus?.type === 'nextUp' ? (
               <p className="type-caption mt-1 text-(--color-accent)">
-                Up next: S{show.status.season_number}E{show.status.episode_number}
-                {show.status.name ? ` · ${show.status.name}` : ''}
+                Up next: S{displayedStatus.season_number}E{displayedStatus.episode_number}
+                {displayedStatus.name ? ` · ${displayedStatus.name}` : ''}
               </p>
-            ) : show.status?.type === 'countdown' ? (
+            ) : displayedStatus?.type === 'countdown' ? (
               <span className="watching-countdown-pill type-caption mt-1">
-                {watchingStatusLabel(show.status)}
+                {watchingStatusLabel(displayedStatus)}
               </span>
             ) : (
               <p className="type-caption mt-1 text-(--color-text-muted)">Caught up</p>
