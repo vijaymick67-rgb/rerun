@@ -7,6 +7,13 @@ import ProgressiveImage from './ProgressiveImage'
 // many exist in the DOM at all, regardless of total show count.
 const PREVIEW_LIMIT = 6
 
+// The narrowest supported width (~390px iPhone) only guarantees 3 full
+// posters before the row clips — see .stats-all-preview__poster's clamp() in
+// index.css. Below that count nothing is actually hidden, so the "more"
+// affordance must stay off; at or above it, content is always clipped even
+// though up to PREVIEW_LIMIT posters may be mounted in the DOM.
+const MIN_SHOWS_WITHOUT_CLIPPING = 3
+
 // Compact single-row entry point into /stats/all. One clickable collection
 // link — no nested interactive controls — with the last rendered poster
 // deliberately clipped by the card's own overflow:hidden, plus an edge
@@ -15,7 +22,7 @@ export default function StatsAllPreview({ shows }) {
   if (shows.length === 0) return null
 
   const previewShows = shows.slice(0, PREVIEW_LIMIT)
-  const hasMore = shows.length > previewShows.length
+  const hasMore = shows.length > MIN_SHOWS_WITHOUT_CLIPPING
 
   return (
     <section className="mt-6" aria-labelledby="stats-all-title">

@@ -61,6 +61,22 @@ describe('StatsAllPreview — main Insights compact collection preview', () => {
     expect(htmlFew).not.toContain('stats-all-preview__chevron')
   })
 
+  it('shows the chevron once the row actually clips (4+ shows), even below the DOM-mount cap of 6', () => {
+    // Only ~3 posters are ever fully visible at the narrowest supported
+    // width (see .stats-all-preview__poster's clamp() in index.css), so any
+    // count above 3 is already clipped content and must surface the "more"
+    // affordance — not just once the DOM-mount bound of 6 is exceeded.
+    for (const count of [4, 5, 6]) {
+      const html = render(manyShows(count))
+      expect(html).toContain('stats-all-preview__chevron')
+    }
+  })
+
+  it('still caps the number of mounted poster elements at 6, even when the chevron shows for fewer', () => {
+    const html = render(manyShows(4))
+    expect((html.match(/stats-all-preview__poster/g) ?? []).length).toBe(4)
+  })
+
   it('small histories (2-3 shows) render exactly that many posters, never cloned, never a false "more" affordance', () => {
     const html = render([show(1, 'Alpha'), show(2, 'Beta')])
     expect((html.match(/stats-all-preview__poster/g) ?? []).length).toBe(2)
