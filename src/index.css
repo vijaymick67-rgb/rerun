@@ -1057,14 +1057,13 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);
-  font-size: var(--type-navigation-size);
-  font-weight: var(--weight-navigation);
-  letter-spacing: 0.01em;
   color: var(--color-text-muted);
+  opacity: 0.82;
 }
 
 .app-tab-bar__link[aria-current='page'] {
   color: var(--color-selection);
+  opacity: 1;
 }
 
 .app-tab-bar__link[aria-current='page']::after {
@@ -1084,6 +1083,37 @@ body {
     color: var(--color-text-secondary);
     background: var(--color-surface-interactive);
   }
+}
+
+/* Icon-only tab glyphs: one shared stroke family (compass, screen+play,
+   solid bars, sliders) so all four read as the same visual system at
+   iPhone scale. Insights uses solid fill bars instead of strokes since a
+   real bar chart is naturally solid — the shared viewBox and footprint
+   keep its optical weight matched to the other three. */
+.tab-icon {
+  width: 1.375rem;
+  height: 1.375rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke-width var(--motion-fast) var(--ease-standard);
+}
+
+.tab-icon--solid {
+  stroke: none;
+}
+
+.tab-icon--solid rect {
+  fill: currentColor;
+}
+
+/* Non-color active cue: the stroke itself gains weight (plus the retained
+   gold diamond marker above), so the active tab is never signalled by hue
+   alone. */
+.app-tab-bar__link[aria-current='page'] .tab-icon {
+  stroke-width: 2.05;
 }
 
 .safe-area-overlay {

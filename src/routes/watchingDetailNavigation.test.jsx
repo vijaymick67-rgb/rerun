@@ -27,11 +27,16 @@ function renderApp(path) {
 }
 
 function getTabLinkMarkup(html, label) {
-  const endMarker = `>${label}</a>`
-  const end = html.indexOf(endMarker)
-  const start = html.lastIndexOf('<a ', end)
-  if (start === -1 || end === -1) throw new Error(`Missing ${label} tab link`)
-  return html.slice(start, end + endMarker.length)
+  // The tab bar is icon-only — locate each tab by its accessible name
+  // (aria-label) rather than visible text content.
+  const startMarker = `aria-label="${label}"`
+  const markerIndex = html.indexOf(startMarker)
+  const start = html.lastIndexOf('<a ', markerIndex)
+  const end = html.indexOf('</a>', markerIndex)
+  if (start === -1 || end === -1 || markerIndex === -1) {
+    throw new Error(`Missing ${label} tab link`)
+  }
+  return html.slice(start, end + '</a>'.length)
 }
 
 // The reported regression: returning from Show Detail visibly blinked/faded the
