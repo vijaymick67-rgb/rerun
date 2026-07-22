@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600" role="img" aria-labelledby="title desc">
+  <title id="title">Slow Horses prototype poster</title><desc id="desc">An original abstract rain and window composition.</desc>
+  <defs><linearGradient id="bg" x2="0" y2="1"><stop stop-color="#304333"/><stop offset="1" stop-color="#080b09"/></linearGradient></defs>
+  <rect width="400" height="600" fill="url(#bg)"/><g stroke="#b69a57" opacity=".35"><path d="M80 0v430M200 0v430M320 0v430M0 145h400M0 290h400" stroke-width="3"/></g><g stroke="#f2eee2" stroke-width="2" opacity=".22"><path d="m40 28-25 95m108-72-34 138m174-159-45 175m135-132-32 128M60 245 27 380m128-105-38 159m174-180-50 190m124-158-36 140"/></g><path d="M154 204c17-27 75-27 92 0l-12 170h-68Z" fill="#0b100c"/><circle cx="200" cy="172" r="35" fill="#0b100c"/><path d="M0 480h400v120H0z" fill="#050806"/><text x="30" y="528" fill="#d1b86f" font-family="system-ui,sans-serif" font-size="19" font-weight="700" letter-spacing="7">SLOW</text><text x="28" y="572" fill="#f2eee2" font-family="system-ui,sans-serif" font-size="42" font-weight="700" letter-spacing="3">HORSES</text>
+</svg>

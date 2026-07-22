@@ -12,7 +12,9 @@ const removeShellOnStartupFailure = () => removeStaticLoadingShell()
 window.addEventListener('error', removeShellOnStartupFailure, { once: true })
 window.addEventListener('unhandledrejection', removeShellOnStartupFailure, { once: true })
 
-createRoot(document.getElementById('root')).render(
+const root = createRoot(document.getElementById('root'))
+
+root.render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>

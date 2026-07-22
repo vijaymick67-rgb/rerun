@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600" role="img" aria-labelledby="title desc">
+  <title id="title">Severance prototype poster</title><desc id="desc">An original abstract green corridor composition.</desc>
+  <defs><linearGradient id="bg" x2="0" y2="1"><stop stop-color="#1d3f2d"/><stop offset="1" stop-color="#070b08"/></linearGradient><linearGradient id="line"><stop stop-color="#d1b86f"/><stop offset="1" stop-color="#79633a"/></linearGradient></defs>
+  <rect width="400" height="600" fill="url(#bg)"/><path d="M52 0h296l-84 420H136Z" fill="#0d1811" opacity=".8"/><path d="M200 0v430M52 0l84 420M348 0l-84 420" stroke="url(#line)" stroke-width="3" opacity=".75"/><rect x="160" y="284" width="80" height="140" rx="4" fill="#edf0df" opacity=".82"/><path d="M0 520h400v80H0z" fill="#050806"/><text x="32" y="560" fill="#f2eee2" font-family="system-ui,sans-serif" font-size="32" font-weight="700" letter-spacing="7">SEVERANCE</text>
+</svg>
