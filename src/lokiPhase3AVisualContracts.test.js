@@ -46,9 +46,14 @@ describe('Loki Armour Phase 3A visual contracts', () => {
     expect(flow).toContain('display: flow-root')
 
     // Long-copy control lives on the flow container (bounded height + clip),
-    // NOT a rectangular clamped box on the paragraph.
-    expect(flow).toContain('max-height: 13.5rem')
+    // NOT a rectangular clamped box on the paragraph. The max-height is an
+    // exact whole-line multiple (10 * 0.875rem*1.55 + 0.125rem padding) so a
+    // long synopsis is cut between lines, never through a partial one.
+    expect(flow).toContain('max-height: 13.6875rem')
     expect(flow).toContain('overflow: hidden')
+    // The base (unclipped) rule must not itself carry a mask — so short
+    // synopsis text is structurally guaranteed to be unaffected.
+    expect(flow).not.toMatch(/mask-image/)
 
     // The paragraph must be a normal block so prose wraps under the poster.
     expect(synopsis).toContain('font-size: 0.875rem')
@@ -56,6 +61,25 @@ describe('Loki Armour Phase 3A visual contracts', () => {
     expect(synopsis).not.toContain('-webkit-line-clamp')
     expect(synopsis).not.toMatch(/\bline-clamp\b/)
     expect(detail).toContain('<h2>Seasons ({seasons.length})</h2>')
+  })
+
+  it('fades a genuinely clipped synopsis via a measured mask, never a solid strip', () => {
+    const detail = source('./routes/ShowDetail.jsx')
+    const clipped = rule('.show-detail-hero__flow--clipped')
+
+    // The fade is a mask (reveals the hero's own surface), not an opaque
+    // background overlay — so it can't read as a decorative gold strip.
+    expect(clipped).toMatch(/mask-image:\s*linear-gradient\(to bottom, black/)
+    expect(clipped).toContain('-webkit-mask-image')
+    expect(clipped).not.toMatch(/background\s*:/)
+    expect(clipped).not.toContain('gold')
+
+    // Applied only when JS measurement finds real overflow (scrollHeight >
+    // clientHeight) — never unconditionally, so short copy never gets it.
+    expect(detail).toContain('node.scrollHeight > node.clientHeight')
+    expect(detail).toContain('synopsisClipped')
+    expect(detail).toContain("show-detail-hero__flow--clipped")
+    expect(detail).not.toMatch(/split\(|slice\(0,\s*\d/)
   })
 
   it('drops the decorative eyebrows and the viewing-time corner stroke', () => {

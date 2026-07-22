@@ -408,8 +408,22 @@ body {
 
 .show-detail-hero__flow {
   display: flow-root;
-  max-height: 13.5rem;
+  /* Exactly 10 lines of the synopsis paragraph (0.875rem font-size *
+     1.55 line-height = 1.35625rem/line) plus its 0.125rem vertical padding.
+     Deliberately a whole-line multiple so long copy is cut cleanly between
+     lines rather than slicing through a partial one. */
+  max-height: 13.6875rem;
   overflow: hidden;
+}
+
+/* Applied only when JS measurement (see ShowDetail.jsx) finds the synopsis
+   actually overflows the box above — never on short copy, since the flow
+   container only reaches this fixed max-height when content is clipped.
+   A mask (not a solid overlay) fades the last ~1.5 lines to transparent,
+   revealing the hero's own surface underneath rather than a new color. */
+.show-detail-hero__flow--clipped {
+  mask-image: linear-gradient(to bottom, black calc(100% - 2rem), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 2rem), transparent 100%);
 }
 
 .show-detail-hero__synopsis {
