@@ -34,95 +34,196 @@ function remToPx(remCss) {
   return parseFloat(remCss) * 16
 }
 
-describe('StatsAllPreview — main Insights compact collection preview', () => {
-  it('renders the exact "All(90)" heading — no space before the parenthesis', () => {
+describe('StatsAllPreview — literal ">>" overlay on the partial poster', () => {
+  it('1. the visible text contains a literal ">>"', () => {
     const html = render(manyShows(90))
-    expect(html).toContain('All(90)')
-    expect(html).not.toContain('All (90)')
-    expect(html).not.toContain('>90 shows<')
+    const linkBlock = html.slice(html.indexOf('stats-all-preview__more-link'))
+    expect(linkBlock).toContain('&gt;&gt;')
   })
 
-  it('renders exactly one link for a history with more shows than fit in the preview', () => {
+  it('2. no SVG chevron icon exists anywhere in the preview', () => {
+    const html = render(manyShows(90))
+    expect(html).not.toContain('<svg')
+  })
+
+  it('3. no circular chevron class exists', () => {
+    const html = render(manyShows(90))
+    expect(html).not.toContain('stats-all-preview__chevron')
+    expect(previewCss).not.toContain('.stats-all-preview__chevron')
+  })
+
+  it('4. exactly one link exists for a history with more shows than fit in the preview', () => {
     const html = render(manyShows(90))
     expect((html.match(/<a /g) ?? []).length).toBe(1)
     expect(html).not.toContain('<button')
   })
 
-  it('the single link points to /stats/all', () => {
+  it('5. the single link points to /stats/all', () => {
     const html = render(manyShows(90))
     expect(html).toContain('href="/stats/all"')
   })
 
-  it('the outer preview card is a plain container, not a link', () => {
-    const html = render(manyShows(90))
-    expect(html).toMatch(/<div class="stats-all-preview content-surface">/)
-  })
-
-  it('poster elements are plain divs — not links or buttons', () => {
-    const html = render(manyShows(90))
-    const posterOpenTags = html.match(/<div class="stats-all-preview__poster">/g) ?? []
-    expect(posterOpenTags.length).toBeGreaterThan(0)
-    // No poster markup is itself an <a> or <button>.
-    expect(html).not.toMatch(/<a [^>]*class="stats-all-preview__poster"/)
-    expect(html).not.toMatch(/<button[^>]*class="stats-all-preview__poster"/)
-  })
-
-  it('accessible name on the more-link includes the live count', () => {
+  it('6. the link\'s accessible name includes the live count', () => {
     const html = render(manyShows(90))
     expect(html).toMatch(/aria-label="View all 90 shows"/)
   })
 
-  it('the chevron svg is decorative (aria-hidden)', () => {
-    const html = render(manyShows(90))
-    const chevronBlock = html.slice(html.indexOf('stats-all-preview__chevron'))
-    expect(chevronBlock).toMatch(/<svg[^>]*aria-hidden="true"/)
+  it('7. the link\'s hit-target CSS is at least 44x44px', () => {
+    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
+    const width = remToPx(linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])
+    const height = remToPx(linkRule.match(/(?:^|\s)height:\s*([\d.]+rem)/)[1])
+    expect(width).toBeGreaterThanOrEqual(44)
+    expect(height).toBeGreaterThanOrEqual(44)
   })
 
-  it('1, 2, and 3 shows render zero links — no navigation from the preview', () => {
+  it('8. the link width is not the previous 72px full-edge zone', () => {
+    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
+    const width = remToPx(linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])
+    expect(width).toBeLessThan(72)
+  })
+
+  it('9. the link does not span the full preview card height', () => {
+    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
+    expect(linkRule).not.toMatch(/inset:\s*0/)
+    expect(linkRule).not.toContain('min-height: 2.75rem')
+    expect(linkRule).toMatch(/height:\s*2\.75rem/)
+  })
+
+  it('10. posters remain plain, passive divs — not links or buttons', () => {
+    const html = render(manyShows(90))
+    expect(html).not.toMatch(/<a [^>]*class="stats-all-preview__poster"/)
+    expect(html).not.toMatch(/<button[^>]*class="stats-all-preview__poster"/)
+  })
+
+  it('11-13. tapping posters or the shaded partial poster (outside the link) does not navigate', async () => {
+    let container = document.createElement('div')
+    document.body.appendChild(container)
+    let root = createRoot(container)
+
+    function LocationProbe() {
+      const location = useLocation()
+      return <div data-testid="location-probe">{location.pathname}</div>
+    }
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/stats']}>
+          <StatsAllPreview shows={manyShows(90)} />
+          <LocationProbe />
+        </MemoryRouter>,
+      )
+    })
+
+    function locationPath() {
+      return container.querySelector('[data-testid="location-probe"]').textContent
+    }
+
+    function click(el) {
+      return act(async () => {
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+    }
+
+    const posters = container.querySelectorAll('.stats-all-preview__poster')
+    await click(posters[0])
+    expect(locationPath()).toBe('/stats')
+
+    await click(posters[2])
+    expect(locationPath()).toBe('/stats')
+
+    const shade = container.querySelector('.stats-all-preview__partial-shade')
+    expect(shade).not.toBeNull()
+    await click(shade)
+    expect(locationPath()).toBe('/stats')
+
+    await act(async () => root.unmount())
+    container.remove()
+    container = null
+    root = null
+  })
+
+  it('14. tapping the ">>" link navigates to /stats/all', async () => {
+    let container = document.createElement('div')
+    document.body.appendChild(container)
+    let root = createRoot(container)
+
+    function LocationProbe() {
+      const location = useLocation()
+      return <div data-testid="location-probe">{location.pathname}</div>
+    }
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/stats']}>
+          <StatsAllPreview shows={manyShows(90)} />
+          <LocationProbe />
+        </MemoryRouter>,
+      )
+    })
+
+    const moreLink = container.querySelector('.stats-all-preview__more-link')
+    expect(moreLink).not.toBeNull()
+    expect(moreLink.getAttribute('href')).toBe('/stats/all')
+    await act(async () => {
+      moreLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(container.querySelector('[data-testid="location-probe"]').textContent).toBe('/stats/all')
+
+    await act(async () => root.unmount())
+    container.remove()
+    container = null
+    root = null
+  })
+
+  it('15. 1, 2, and 3 shows render zero links and no ">>"', () => {
     for (const count of [1, 2, 3]) {
       const html = render(manyShows(count))
       expect((html.match(/<a /g) ?? []).length).toBe(0)
+      expect(html).not.toContain('&gt;&gt;')
+      expect(html).not.toContain('stats-all-preview__partial-shade')
     }
   })
 
-  it('4 shows render exactly one link, and it is the more-link', () => {
-    const html = render(manyShows(4))
-    expect((html.match(/<a /g) ?? []).length).toBe(1)
-    expect(html).toContain('stats-all-preview__more-link')
+  it('16. no SVG chevron remains anywhere in the source or CSS', () => {
+    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('<svg')
+    expect(source).not.toContain('stats-all-preview__chevron')
   })
 
-  it('4-6 shows retain the chevron affordance', () => {
-    for (const count of [4, 5, 6]) {
-      const html = render(manyShows(count))
-      expect(html).toContain('stats-all-preview__chevron')
-    }
+  it('17. the shading overlay has pointer-events: none', () => {
+    const shadeRule = previewCss.match(/\.stats-all-preview__partial-shade \{[^}]*\}/)[0]
+    expect(shadeRule).toContain('pointer-events: none;')
   })
 
-  it('renders only a bounded subset of posters, never the full history', () => {
+  it('18. no viewport JS sizing is introduced', () => {
+    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('innerWidth')
+    expect(source).not.toContain('useState')
+    expect(source).not.toContain('useEffect')
+    const posterRule = previewCss.match(/\.stats-all-preview__poster \{[^}]*\}/)[0]
+    expect(posterRule).toMatch(/width:\s*clamp\(/)
+    expect(posterRule).toContain('calc(')
+    expect(posterRule).not.toContain('vw')
+  })
+
+  it('19. the preview row clips overflow with no horizontal scrollbar', () => {
+    expect(previewCss).toContain('.stats-all-preview__row {')
+    const rowRule = previewCss.match(/\.stats-all-preview__row \{[^}]*\}/)[0]
+    expect(rowRule).toContain('overflow: hidden;')
+    expect(previewCss).not.toContain('overflow-x: auto')
+    expect(previewCss).not.toContain('overflow-x: scroll')
+  })
+
+  it('20. poster count remains capped at six, even for long histories', () => {
     const html = render(manyShows(30))
-    const posterCount = (html.match(/stats-all-preview__poster/g) ?? []).length
-    expect(posterCount).toBeLessThan(30)
+    const posterCount = (html.match(/class="stats-all-preview__poster"/g) ?? []).length
     expect(posterCount).toBeLessThanOrEqual(6)
   })
 
-  it('still caps the number of mounted poster elements at 6, even when the chevron shows for fewer', () => {
-    const html = render(manyShows(4))
-    expect((html.match(/stats-all-preview__poster/g) ?? []).length).toBe(4)
-  })
-
-  it('small histories (2-3 shows) render exactly that many posters, no chevron, no link', () => {
-    const html = render([show(1, 'Alpha'), show(2, 'Beta')])
-    expect((html.match(/stats-all-preview__poster/g) ?? []).length).toBe(2)
-    expect(html).not.toContain('stats-all-preview__chevron')
-    expect((html.match(/<a /g) ?? []).length).toBe(0)
-  })
-
-  it('a single show renders cleanly with no fake partial poster, no chevron, and no link', () => {
-    const html = render([show(1, 'Only Show')])
-    expect((html.match(/stats-all-preview__poster/g) ?? []).length).toBe(1)
-    expect(html).not.toContain('stats-all-preview__chevron')
-    expect((html.match(/<a /g) ?? []).length).toBe(0)
-    expect(html).not.toContain('aria-label="View all 1 show"')
+  it('renders the exact "All(90)" heading — no space before the parenthesis', () => {
+    const html = render(manyShows(90))
+    expect(html).toContain('All(90)')
+    expect(html).not.toContain('All (90)')
   })
 
   it('renders nothing for an empty history — no All(0) heading', () => {
@@ -131,63 +232,25 @@ describe('StatsAllPreview — main Insights compact collection preview', () => {
     expect(html).not.toContain('All(0)')
   })
 
-  it('poster thumbnails are decorative (no repeated per-show alt text)', () => {
-    const html = render(manyShows(4))
-    expect(html).not.toContain('alt="Show 1"')
-    expect(html).toContain('aria-hidden="true"')
+  it('the partial 4th poster runs flush to the card\'s right edge (no right padding on the card)', () => {
+    const cardRule = previewCss.match(/\.stats-all-preview \{[^}]*\}/)[0]
+    expect(cardRule).toContain('overflow: hidden;')
+    expect(cardRule).toMatch(/padding:\s*0\.75rem 0 0\.875rem 0\.75rem;/)
   })
 
-  it('the preview row clips overflow with no horizontal scrollbar', () => {
-    expect(previewCss).toContain('.stats-all-preview__row {')
-    expect(previewCss).toContain('overflow: hidden;')
-    expect(previewCss).not.toContain('overflow-x: auto')
-    expect(previewCss).not.toContain('overflow-x: scroll')
+  it('the shade does not use a wide gradient covering the 3rd poster', () => {
+    const shadeRule = previewCss.match(/\.stats-all-preview__partial-shade \{[^}]*\}/)[0]
+    expect(shadeRule).not.toContain('gradient')
+    const width = remToPx(shadeRule.match(/width:\s*([\d.]+rem)/)[1])
+    expect(width).toBeLessThanOrEqual(44)
   })
 
-  it('poster width is derived from the row\'s own available width (calc/clamp), not a viewport unit', () => {
-    const posterRule = previewCss.match(/\.stats-all-preview__poster \{[^}]*\}/)[0]
-    expect(posterRule).toMatch(/width:\s*clamp\(/)
-    expect(posterRule).toContain('calc(')
-    expect(posterRule).not.toContain('vw')
-  })
-
-  it('the source itself never measures window.innerWidth for the preview sizing', () => {
-    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
-    expect(source).not.toContain('innerWidth')
-    expect(source).not.toContain('useState')
-    expect(source).not.toContain('useEffect')
-  })
-
-  it('does not introduce a bespoke transition/animation outside the existing motion-press + reduced-motion conventions', () => {
-    expect(previewCss).not.toContain('transition:')
-    expect(previewCss).not.toContain('animation:')
-  })
-
-  it('preview posters no longer carry the individual border that caused the seam between the 3rd and clipped 4th poster', () => {
-    const posterRule = previewCss.match(/\.stats-all-preview__poster \{[^}]*\}/)[0]
-    expect(posterRule).not.toContain('border:')
-    // The shared ProgressiveImage base's own inset hairline is neutralized
-    // for this preview specifically (scoped selector, not a global change).
-    expect(previewCss).toContain('.stats-all-preview__poster .progressive-image {')
-    expect(previewCss).toContain('box-shadow: none;')
-  })
-
-  it('the more-link touch target meets the 44px minimum and the ~64-76px preferred iPhone width', () => {
+  it('the more-link has no circular background, border, or box-shadow', () => {
     const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
-    const widthMatch = linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)
-    const minHeightMatch = linkRule.match(/min-height:\s*([\d.]+rem)/)
-    expect(widthMatch).not.toBeNull()
-    expect(minHeightMatch).not.toBeNull()
-    expect(remToPx(widthMatch[1])).toBeGreaterThanOrEqual(64)
-    expect(remToPx(minHeightMatch[1])).toBeGreaterThanOrEqual(44)
-  })
-
-  it('the more-link hit zone is substantially wider than the visible 44px chevron circle', () => {
-    const linkRule = previewCss.match(/\.stats-all-preview__more-link \{[^}]*\}/)[0]
-    const chevronRule = previewCss.match(/\.stats-all-preview__chevron \{[^}]*\}/)[0]
-    const linkWidthPx = remToPx(linkRule.match(/(?:^|\s)width:\s*([\d.]+rem)/)[1])
-    const chevronWidthPx = remToPx(chevronRule.match(/width:\s*([\d.]+rem)/)[1])
-    expect(linkWidthPx).toBeGreaterThan(chevronWidthPx)
+    expect(linkRule).not.toContain('border-radius')
+    expect(linkRule).not.toContain('border:')
+    expect(linkRule).not.toContain('box-shadow')
+    expect(linkRule).not.toContain('background')
   })
 
   it('focus-visible styling exists for the more-link', () => {
@@ -196,72 +259,24 @@ describe('StatsAllPreview — main Insights compact collection preview', () => {
   })
 })
 
-function LocationProbe() {
-  const location = useLocation()
-  return <div data-testid="location-probe">{location.pathname}</div>
-}
-
-describe('StatsAllPreview — interaction: only the chevron zone navigates', () => {
-  let container = null
-  let root = null
-
-  afterEach(async () => {
-    if (root) await act(async () => root.unmount())
-    container?.remove()
-    container = null
-    root = null
+describe('StatsAllPreview — interaction cleanup', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
   })
 
-  async function mount(count) {
-    container = document.createElement('div')
+  it('a small history (3 shows) has no link and no shade to tap at all', async () => {
+    const container = document.createElement('div')
     document.body.appendChild(container)
-    root = createRoot(container)
+    const root = createRoot(container)
     await act(async () => {
       root.render(
         <MemoryRouter initialEntries={['/stats']}>
-          <StatsAllPreview shows={manyShows(count)} />
-          <LocationProbe />
+          <StatsAllPreview shows={manyShows(3)} />
         </MemoryRouter>,
       )
     })
-  }
-
-  function click(el) {
-    return act(async () => {
-      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-  }
-
-  function locationPath() {
-    return container.querySelector('[data-testid="location-probe"]').textContent
-  }
-
-  it('tapping a poster leaves the location unchanged', async () => {
-    await mount(90)
-    const poster = container.querySelector('.stats-all-preview__poster')
-    expect(poster).not.toBeNull()
-    await click(poster)
-    expect(locationPath()).toBe('/stats')
-  })
-
-  it('tapping ordinary card space (the card itself, outside any poster or link) leaves the location unchanged', async () => {
-    await mount(90)
-    const card = container.querySelector('.stats-all-preview')
-    await click(card)
-    expect(locationPath()).toBe('/stats')
-  })
-
-  it('tapping the chevron/more-link navigates to /stats/all', async () => {
-    await mount(90)
-    const moreLink = container.querySelector('.stats-all-preview__more-link')
-    expect(moreLink).not.toBeNull()
-    expect(moreLink.getAttribute('href')).toBe('/stats/all')
-    await click(moreLink)
-    expect(locationPath()).toBe('/stats/all')
-  })
-
-  it('a small history (3 shows) has no link at all to tap', async () => {
-    await mount(3)
     expect(container.querySelector('a')).toBeNull()
+    expect(container.querySelector('.stats-all-preview__partial-shade')).toBeNull()
+    await act(async () => root.unmount())
   })
 })
