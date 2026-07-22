@@ -63,10 +63,9 @@ describe('cinematic secondary surfaces', () => {
   it('keeps the global atmosphere static, layered, and input-transparent', () => {
     const atmosphere = css.slice(css.indexOf('--canvas-atmosphere:'), css.indexOf('.app-page'))
     expect(css).toContain('--canvas-atmosphere:')
-    expect(css).toContain('radial-gradient(ellipse 80% 62% at 18% 0%')
-    expect(css).toContain('radial-gradient(ellipse 70% 56% at 92% 8%')
-    expect(css).toContain('radial-gradient(ellipse 100% 44% at 50% 100%')
-    expect(css).toContain('linear-gradient(to bottom, transparent 0%, transparent 68%')
+    expect(css).toContain('radial-gradient(ellipse 82% 52% at 76% -8%')
+    expect(css).toContain('radial-gradient(ellipse 58% 46% at 2% 42%')
+    expect(css).toContain('linear-gradient(155deg, var(--color-canvas-deep)')
     expect(atmosphere).not.toContain('animation:')
     expect(atmosphere).not.toContain('filter: blur(')
     expect(css).not.toContain('background-attachment: fixed')
@@ -80,13 +79,16 @@ describe('cinematic secondary surfaces', () => {
     expect(css).toContain('prefers-reduced-transparency: reduce')
   })
 
-  it('keeps first paint and runtime canvas treatments synchronized', () => {
+  it('keeps deferred launch identity intact and shields boot from a blue/green flash', () => {
     expect(indexHtml).toContain('meta name="theme-color" content="#080b14"')
     expect(indexHtml).toContain('--canvas-atmosphere:')
     expect(indexHtml).toContain(':root {\n        background: #080b14;\n      }')
     expect(indexHtml).toContain('body {\n        background: var(--canvas-atmosphere);')
     expect(indexHtml).toContain('background-size: 100% 100%;')
     expect(indexHtml).toContain('class="app-loading-shell"')
+    expect(css).toContain('--launch-canvas-atmosphere-legacy:')
+    expect(css).toContain('.auth-boot-shell,\n.app-loading-shell {')
+    expect(css).toContain('background: var(--launch-canvas-atmosphere-legacy);')
     expect(css).toContain('background: var(--canvas-atmosphere);')
     expect(css).toContain('html {\n  min-height: 100%;\n  background-color: var(--color-canvas);\n}')
     expect(css).toContain('.app-shell {')

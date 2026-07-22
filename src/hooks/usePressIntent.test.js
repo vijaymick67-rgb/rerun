@@ -121,16 +121,16 @@ describe('release-time tap classification CSS', () => {
   })
 })
 
-describe('cinematic-midnight semantic token CSS', () => {
+describe('production semantic token CSS', () => {
   it('keeps muted text readable while subordinate to secondary text', () => {
-    expect(indexCss).toContain('--color-surface: #111827;')
-    expect(indexCss).toContain('--color-canvas: #080b14;')
-    expect(indexCss).toContain('--color-text-secondary: #a9b2c4;')
-    expect(indexCss).toContain('--color-text-muted: #8f9bb0;')
+    expect(indexCss).toContain('--color-surface-base: #101511;')
+    expect(indexCss).toContain('--color-canvas: #080d09;')
+    expect(indexCss).toContain('--color-text-secondary: #c5c0b2;')
+    expect(indexCss).toContain('--color-text-muted: #969487;')
 
-    expect(contrastRatio('#8f9bb0', '#111827')).toBeGreaterThanOrEqual(4.5)
-    expect(contrastRatio('#8f9bb0', '#080b14')).toBeGreaterThanOrEqual(4.5)
-    expect(relativeLuminance('#8f9bb0')).toBeLessThan(relativeLuminance('#a9b2c4'))
+    expect(contrastRatio('#969487', '#101511')).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio('#969487', '#080d09')).toBeGreaterThanOrEqual(4.5)
+    expect(relativeLuminance('#969487')).toBeLessThan(relativeLuminance('#c5c0b2'))
   })
 
   it('uses intent-driven surface presses and gates native active styling to fine pointers', () => {
