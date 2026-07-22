@@ -47,12 +47,9 @@
   --color-destructive-surface: #321616;
   --color-destructive-muted: rgb(220 126 121 / 0.12);
 
-  /* Status-button check glyph only — deliberately not --color-success (that
-     teal is used elsewhere for banners/toasts). The button surface itself
-     never carries these; only the check glyph and its tiny supporting
-     tint (border/inner-highlight/check-shadow) do. */
-  --color-status-check-idle: var(--color-text-muted);
-  --color-status-check-done: var(--color-completion);
+  /* Status-button check glyph only. Gold identifies the quick-mark affordance;
+     the neutral body never borrows progress/completion green. */
+  --color-status-check: var(--color-gold-accent-strong);
   --color-overlay: rgb(3 6 4 / 0.82);
   --color-skeleton: #172019;
   --color-skeleton-highlight: #263128;
@@ -402,20 +399,6 @@ body {
   align-items: stretch;
   gap: var(--space-standard);
   padding: var(--space-related);
-}
-
-.show-detail-hero::before {
-  position: absolute;
-  top: 0.625rem;
-  right: 0.625rem;
-  width: 2.5rem;
-  height: 1.75rem;
-  border-top: 1px solid var(--color-armour-edge-strong);
-  border-right: 1px solid var(--color-armour-edge);
-  border-radius: 0 0.375rem 0 0;
-  pointer-events: none;
-  content: '';
-  opacity: 0.82;
 }
 
 .show-detail-poster {
@@ -1301,36 +1284,31 @@ body {
   }
 }
 
-/* Persistent rounded-square quick-mark / caught-up status control. One fixed
-   footprint AND one fixed dark-graphite surface across every visual state
-   (never circular, never resized, never recolored) — the square itself must
-   never read as a grey tile or a green tile. Only the check glyph (and a
-   tiny supporting tint in the border/inner-highlight/check-shadow) changes
-   between states; the body always stays this same premium neutral surface.
-   Sized so the visible box and the minimum touch target are the same 44px
-   box; no separate invisible hit-area needed. */
+/* Quiet neutral quick-mark control with a fixed 44px interactive footprint.
+   State is expressed through opacity, edge emphasis and motion; the body
+   never changes fill and the principal glyph remains gold. */
 .watching-status-button {
   display: flex;
   width: 2.75rem;
   height: 2.75rem;
   align-items: center;
   justify-content: center;
-  border-radius: 0.875rem;
-  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  border-radius: 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 74%, transparent);
   outline: none;
-  background: linear-gradient(175deg, #171b25, #11151e);
+  background: linear-gradient(165deg, #171b18, #0e1310);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    inset 0 -1px 0 rgb(0 0 0 / 0.25),
-    0 2px 6px rgb(3 6 14 / 0.35);
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+    inset 0 1px 0 rgb(255 255 255 / 0.045),
+    0 1px 3px rgb(2 5 3 / 0.28);
+  transition: border-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
 }
 
 .watching-status-button__check {
   width: 21px;
   height: 21px;
-  color: var(--color-status-check-idle);
-  transition: color 150ms ease, filter 150ms ease;
+  color: var(--color-status-check);
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.42));
+  transition: opacity 150ms ease, filter 150ms ease;
 }
 
 .watching-status-button:focus-visible {
@@ -1338,39 +1316,36 @@ body {
   outline-offset: 2px;
 }
 
-/* Available — actionable: a released unwatched episode can be quick-marked.
-   Surface stays the same dark graphite; only the check glyph, in a calm
-   smoky periwinkle-grey, signals it's tappable (paired with the shared
-   raised surface + pointer/press feedback + accessible label). */
+/* Available: fully readable gold glyph on the shared neutral surface. */
 .watching-status-button[data-status='available'] .watching-status-button__check {
-  color: var(--color-status-check-idle);
+  opacity: 0.88;
 }
 
-/* Accepted (brief post-tap confirmation) and caughtUp (persistent) share
-   the check color — a fresh pistachio-lime, never emerald — plus one tiny
-   supporting tint each in the border and inner highlight immediately
-   around the glyph. The square body itself stays graphite in both. */
+/* Caught-up and accepted retain the neutral body and gold glyph. A small
+   edge shift distinguishes state without borrowing completion green. */
 .watching-status-button[data-status='caughtUp'],
 .watching-status-button[data-status='accepted'] {
-  border-color: color-mix(in srgb, var(--color-status-check-done) 30%, var(--color-border) 70%);
+  border-color: color-mix(in srgb, var(--color-status-check) 24%, var(--color-border-subtle) 76%);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    inset 0 -1px 0 rgb(0 0 0 / 0.25),
-    0 0 0 1px color-mix(in srgb, var(--color-status-check-done) 12%, transparent),
-    0 2px 6px rgb(3 6 14 / 0.35);
+    inset 0 1px 0 rgb(255 255 255 / 0.045),
+    0 1px 3px rgb(2 5 3 / 0.28);
 }
 
 .watching-status-button[data-status='caughtUp'] .watching-status-button__check,
 .watching-status-button[data-status='accepted'] .watching-status-button__check {
-  color: var(--color-status-check-done);
-  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check-done) 35%, transparent));
+  opacity: 1;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check) 24%, transparent));
 }
 
 /* The accepted confirmation is the same design as caughtUp, momentarily a
    touch richer around the glyph only — never a visually distinct button —
    so it reads as "this state, just landed" rather than a different control. */
 .watching-status-button[data-status='accepted'] {
-  border-color: color-mix(in srgb, var(--color-status-check-done) 46%, var(--color-border) 54%);
+  border-color: color-mix(in srgb, var(--color-status-check) 42%, var(--color-border-subtle) 58%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.045),
+    0 0 0 1px color-mix(in srgb, var(--color-status-check) 10%, transparent),
+    0 1px 3px rgb(2 5 3 / 0.28);
 }
 
 .watching-status-button[data-status='accepted'] .watching-status-button__check {
@@ -1379,32 +1354,34 @@ body {
 
 @keyframes status-check-pop {
   from {
-    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check-done) 35%, transparent)) brightness(1.4);
+    filter: drop-shadow(0 0 3px color-mix(in srgb, var(--color-status-check) 32%, transparent)) brightness(1.3);
   }
 
   to {
-    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check-done) 35%, transparent)) brightness(1);
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-status-check) 24%, transparent)) brightness(1);
   }
 }
 
-/* Not ready: this load's mutation context for the show hasn't settled yet.
-   Same graphite body; the check just dims to a low-opacity neutral — never
-   a colored tint, never the pistachio-lime caught-up read. */
-.watching-status-button[data-status='notReady'] .watching-status-button__check {
-  color: var(--color-text-muted);
-  opacity: 0.5;
+/* Not ready: retain the gold semantic but lower contrast and body opacity. */
+.watching-status-button[data-status='notReady'] {
+  opacity: 0.58;
 }
 
-.watching-countdown-pill {
+.watching-status-button[data-status='notReady'] .watching-status-button__check {
+  opacity: 0.52;
+}
+
+.watching-upcoming-status {
   display: inline-flex;
   width: fit-content;
   align-items: center;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-warning) 34%, transparent);
-  background: color-mix(in srgb, var(--color-warning-muted) 90%, var(--color-surface-raised));
-  padding: 0.1875rem 0.5rem;
-  color: var(--color-warning);
-  font-weight: 560;
+  min-height: 1.375rem;
+  border-radius: 0.4375rem;
+  border: 1px solid color-mix(in srgb, var(--color-emerald-muted) 68%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-forest-tonal-surface) 82%, var(--color-surface-raised));
+  padding: 0.125rem 0.4375rem;
+  color: var(--color-text-secondary);
+  font-weight: 540;
 }
 
 @media (prefers-reduced-motion: reduce) {

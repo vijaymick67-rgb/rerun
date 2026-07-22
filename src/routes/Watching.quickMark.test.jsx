@@ -644,7 +644,7 @@ describe('Watching quick mark — weekly/House of the Dragon-style single-episod
     // countdown, not the Watching-hiding bare "caughtUp" status) and the
     // button reads green/non-actionable through it.
     expect(container.querySelector('.watching-row')).not.toBeNull()
-    expect(container.querySelector('.watching-countdown-pill')).not.toBeNull()
+    expect(container.querySelector('.watching-upcoming-status')).not.toBeNull()
     expect(statusButton().getAttribute('data-status')).toBe('caughtUp')
     expect(statusButton().getAttribute('aria-label')).toBe('Caught up with The Sopranos')
     expect(statusButton().disabled).toBe(true)
