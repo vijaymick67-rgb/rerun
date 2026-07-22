@@ -33,6 +33,19 @@ export function writeDetailCache(key, value) {
   }
 }
 
+// Merge a partial update into an existing detail entry. This is useful for
+// mutation paths that own only one slice of the cache (for example watched
+// state) and must not erase stable metadata added by the route loader.
+export function mergeDetailCache(key, patch) {
+  const cached = readDetailCache(key)
+  const next = {
+    ...(cached && typeof cached === 'object' ? cached : {}),
+    ...patch,
+  }
+  writeDetailCache(key, next)
+  return next
+}
+
 export function clearDetailCache(key) {
   try {
     localStorage.removeItem(key)

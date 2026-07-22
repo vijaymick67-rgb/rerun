@@ -413,22 +413,16 @@ body {
   padding-block: var(--space-micro);
 }
 
-.show-detail-hero__seasons {
-  margin-top: var(--space-compact);
-  color: var(--color-text-secondary);
-  font-size: var(--type-body-size);
+.show-detail-hero__synopsis {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-gold-accent);
+  font-size: 0.9375rem;
   font-weight: var(--weight-body);
-}
-
-.show-detail-hero__progress-copy {
-  margin-top: var(--space-micro);
-  color: var(--color-text-muted);
-  font-size: var(--type-metadata-size);
-  line-height: 1.45;
-}
-
-.show-detail-hero__progress-copy + div {
-  margin-top: auto;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
 }
 
 .detail-season-list {
