@@ -368,8 +368,8 @@ export default function Browse() {
                     disabled={isAdding || isRemoving}
                     className={`motion-press mt-2 min-h-11 w-full rounded-md py-1.5 text-sm font-medium ${
                       isTracked
-                        ? 'border border-(--color-border) bg-(--color-surface-raised) text-(--color-text-muted)'
-                        : 'bg-(--color-accent) text-(--color-bg) disabled:opacity-60'
+                        ? 'border border-(--color-border) bg-(--color-surface-interactive) text-(--color-text-secondary)'
+                        : 'bg-(--color-gold-accent-strong) text-(--color-canvas-deep) disabled:opacity-60'
                     }`}
                   >
                     {isRemoving ? 'Removing…' : isAdding ? 'Adding…' : isTracked ? 'Added' : 'Add'}
@@ -384,10 +384,10 @@ export default function Browse() {
                     type="button"
                     onClick={() => handleLogWatched(show)}
                     disabled={isLogged || isLogging}
-                    className={`motion-press mt-1.5 min-h-11 w-full rounded-md py-1.5 text-xs font-medium ${
+                    className={`motion-press mt-1.5 min-h-11 w-full rounded-md py-1.5 text-xs font-medium border border-(--color-border) ${
                       isLogged
-                        ? 'border border-(--color-border) bg-(--color-surface-raised) text-(--color-text-muted)'
-                        : 'border border-(--color-border) text-(--color-text-muted) disabled:opacity-60'
+                        ? 'bg-(--color-surface-interactive) text-(--color-text-secondary)'
+                        : 'text-(--color-text-secondary) disabled:opacity-60'
                     }`}
                   >
                     {isLogged ? 'Logged ✓' : isLogging ? 'Logging…' : 'Log as watched'}
