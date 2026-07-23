@@ -1127,6 +1127,38 @@ body {
   background: var(--color-overlay);
 }
 
+/* Shared "Dialog/action sheet" material recipe (design spec section C):
+   raised leather with a faint armour tint, a stronger border than an
+   ordinary card, and a deeper shadow befitting a modal. Used by the shared
+   ConfirmDialog (Settings sign-out, Watching/Insights remove-show
+   confirmations) — intentionally the same recipe as .stats-action-sheet,
+   kept as its own class since ConfirmDialog is not Stats-specific. */
+.confirm-dialog-panel {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-overlay);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-gold-accent) 6%, transparent), transparent 46%),
+    linear-gradient(155deg, var(--color-leather-highlight), transparent 28%),
+    var(--color-surface-raised);
+  box-shadow: var(--elevation-overlay);
+}
+
+.confirm-dialog-cancel {
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-interactive);
+  color: var(--color-text-secondary);
+}
+
+.confirm-dialog-confirm {
+  color: var(--color-canvas-deep);
+  background: var(--color-gold-accent-strong);
+}
+
+.confirm-dialog-confirm--danger {
+  color: var(--color-text-primary);
+  background: var(--color-destructive);
+}
+
 .stats-action-sheet {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-overlay);
@@ -1214,6 +1246,39 @@ body {
 
 .settings-action-row--secondary {
   color: var(--color-text-secondary);
+}
+
+/* Destructive settings rows (e.g. Sign out) stay inside the same connected
+   group as their neighbours — per the design system, dividing a destructive
+   action into its own floating card would overstate it — but gain a
+   slightly stronger top rule and muted red text so they read as a distinct,
+   deliberate action rather than just another row in the list. */
+.settings-action-row--destructive {
+  border-top: 1px solid color-mix(in srgb, var(--color-destructive) 22%, var(--color-border-subtle));
+  color: var(--color-destructive);
+}
+
+.settings-row-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-action-row--destructive .settings-row-icon {
+  color: color-mix(in srgb, var(--color-destructive) 82%, var(--color-text-muted));
+}
+
+.settings-row-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
 }
 
 .settings-status {

@@ -52,6 +52,53 @@ function Chevron() {
   )
 }
 
+// One small, coherent inline icon family (matches the tab bar's stroke
+// weight/geometry) used sparingly — only on the rows where a glyph
+// materially helps recognition (export/import/notifications/test/sign out).
+// No icon-package dependency; every glyph below is a plain inline <svg>.
+function SettingsIcon({ name }) {
+  const paths = {
+    export: (
+      <>
+        <path d="M12 3v11" />
+        <path d="M7.5 10.5 12 15l4.5-4.5" />
+        <path d="M4.5 16.5v2.25A1.25 1.25 0 0 0 5.75 20h12.5a1.25 1.25 0 0 0 1.25-1.25V16.5" />
+      </>
+    ),
+    import: (
+      <>
+        <path d="M12 15V4" />
+        <path d="M7.5 7.5 12 3l4.5 4.5" />
+        <path d="M4.5 16.5v2.25A1.25 1.25 0 0 0 5.75 20h12.5a1.25 1.25 0 0 0 1.25-1.25V16.5" />
+      </>
+    ),
+    bell: (
+      <>
+        <path d="M6 9.5a6 6 0 0 1 12 0v3.75l1.6 2.9a.9.9 0 0 1-.79 1.35H5.19a.9.9 0 0 1-.79-1.35L6 13.25Z" />
+        <path d="M10 19.5a2 2 0 0 0 4 0" />
+      </>
+    ),
+    send: (
+      <>
+        <path d="M20 4 3.5 10.7c-.7.28-.66 1.28.06 1.5L10 14.3l2.1 6.44c.23.72 1.22.76 1.5.06L20 4Z" />
+        <path d="M10 14.3 20 4" />
+      </>
+    ),
+    signOut: (
+      <>
+        <path d="M9 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3" />
+        <path d="M15.5 15.5 20 11l-4.5-4.5" />
+        <path d="M20 11H9" />
+      </>
+    ),
+  }
+  return (
+    <svg viewBox="0 0 24 24" className="settings-row-icon" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  )
+}
+
 function SettingsSection({ title, children }) {
   return (
     <section className="mt-6 first:mt-0">
@@ -65,17 +112,23 @@ function SettingsSection({ title, children }) {
   )
 }
 
-function SettingsActionRow({ label, onPress, disabled, busyLabel }) {
+function SettingsActionRow({ label, onPress, disabled, busyLabel, icon, tone }) {
+  const destructive = tone === 'destructive'
   return (
     <button
       type="button"
       onClick={onPress}
       disabled={disabled}
-      className="settings-action-row surface-interactive motion-press flex min-h-11 w-full items-center justify-between gap-3 border-0 px-4 py-2.5 text-left text-sm font-medium text-(--color-text) disabled:opacity-60"
+      className={`settings-action-row surface-interactive motion-press flex min-h-11 w-full items-center justify-between gap-3 border-0 px-4 py-2.5 text-left text-sm font-medium disabled:opacity-60 ${
+        destructive ? 'settings-action-row--destructive' : 'text-(--color-text)'
+      }`}
     >
-      <span className="type-body">{label}</span>
+      <span className="settings-row-label">
+        {icon && <SettingsIcon name={icon} />}
+        <span className="type-body">{label}</span>
+      </span>
       {busyLabel ? (
-        <span className="type-caption text-(--color-text-muted)">{busyLabel}</span>
+        <span className="type-caption shrink-0 text-(--color-text-muted)">{busyLabel}</span>
       ) : (
         <Chevron />
       )}
@@ -186,6 +239,9 @@ function Banner({ tone, children, live }) {
 export default function Settings() {
   return (
     <div className="app-page px-4 pb-6">
+      <header className="route-heading settings-heading">
+        <h1 className="type-page-title text-(--color-text)">Settings</h1>
+      </header>
       <BackupRestoreSection />
       <NotificationsSection />
       <AccountSection />
@@ -267,12 +323,14 @@ function BackupRestoreSection() {
       <SettingsSection title="Backup & Restore">
         <SettingsActionRow
           label="Export backup"
+          icon="export"
           onPress={handleExport}
           disabled={busy}
           busyLabel={exporting ? 'Exporting…' : null}
         />
         <SettingsActionRow
           label="Import backup"
+          icon="import"
           onPress={handleImportRowPress}
           disabled={busy}
           busyLabel={running ? 'Importing…' : null}
@@ -661,6 +719,7 @@ function NotificationsSection() {
         {(status === 'idle' || status === 'enabling') && (
           <SettingsActionRow
             label="Enable notifications"
+            icon="bell"
             onPress={handleEnable}
             disabled={status === 'enabling'}
             busyLabel={status === 'enabling' ? 'Enabling…' : null}
@@ -684,6 +743,7 @@ function NotificationsSection() {
             />
             <SettingsActionRow
               label="Send test notification"
+              icon="send"
               onPress={handleSendTest}
               disabled={testState === 'sending'}
               busyLabel={testState === 'sending' ? 'Sending test…' : null}
@@ -885,6 +945,8 @@ function AccountSection() {
         />
         <SettingsActionRow
           label="Sign out"
+          icon="signOut"
+          tone="destructive"
           onPress={handleSignOutPress}
           disabled={signingOut}
           busyLabel={signingOut ? 'Signing out…' : null}
