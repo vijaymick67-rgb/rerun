@@ -12,6 +12,13 @@ import BrowseResultsSkeleton from '../components/BrowseResultsSkeleton'
 import ProgressiveImage from '../components/ProgressiveImage'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
 import { withTimeout } from '../lib/dataLoading'
+import {
+  discoverSession,
+  isTrackedFetchFresh,
+  markTrackedFetched,
+  readTrackedContent,
+  writeTrackedContent,
+} from '../lib/discover/discoverSession'
 
 const DEBOUNCE_MS = 400
 const DELAYED_ADD_THRESHOLD_DAYS = 60
@@ -29,15 +36,20 @@ function upsertTrackedShowForDiscover(trackedShows, show) {
 }
 
 export default function Browse() {
+  // Seed the tracked library synchronously from the page-session snapshot so a
+  // quick return to Discover paints the last valid feed immediately instead of
+  // the tracked-shows-not-ready skeleton. On the first-ever visit the snapshot is
+  // null and the original cold-load skeleton path is preserved.
+  const initialTracked = readTrackedContent()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [searchAttempt, setSearchAttempt] = useState(0)
   const [searched, setSearched] = useState(false)
-  const [trackedIds, setTrackedIds] = useState(new Set())
-  const [trackedShows, setTrackedShows] = useState([])
-  const [trackedShowsReady, setTrackedShowsReady] = useState(false)
+  const [trackedIds, setTrackedIds] = useState(() => initialTracked?.ids ?? new Set())
+  const [trackedShows, setTrackedShows] = useState(() => initialTracked?.shows ?? [])
+  const [trackedShowsReady, setTrackedShowsReady] = useState(() => initialTracked != null)
   const [addingIds, setAddingIds] = useState(new Set())
   const [removingIds, setRemovingIds] = useState(new Set())
   const [trackErrors, setTrackErrors] = useState({})
@@ -48,10 +60,28 @@ export default function Browse() {
   const [undoingId, setUndoingId] = useState(null)
   const [undoError, setUndoError] = useState(null)
   const [notAiredIds, setNotAiredIds] = useState(new Set())
-  const knownTrackedIdsRef = useRef(new Set())
+  const knownTrackedIdsRef = useRef(initialTracked ? new Set(initialTracked.knownIds) : new Set())
   const debounceRef = useRef(null)
 
+  // Mirror the live tracked library into the page-session snapshot so the next
+  // remount can seed from it. This only copies CONTENT — it never advances the
+  // freshness clock (markTrackedFetched does that), so mounting/leaving/returning
+  // cannot keep the clock perpetually fresh and starve the background re-read.
   useEffect(() => {
+    if (!trackedShowsReady) return
+    writeTrackedContent({
+      shows: trackedShows,
+      ids: trackedIds,
+      knownIds: new Set(knownTrackedIdsRef.current),
+    })
+  }, [trackedShows, trackedIds, trackedShowsReady])
+
+  useEffect(() => {
+    // Skip the tracked_shows read on a quick return: the snapshot already seeded
+    // state (no skeleton) and the library was authoritatively read within the
+    // freshness window. When stale/absent the read runs as a background refresh
+    // while the seeded cache stays visible (stale-while-revalidate).
+    if (isTrackedFetchFresh(Date.now())) return undefined
     let ignore = false
     withTimeout((signal) => {
       let query = supabase
@@ -67,6 +97,7 @@ export default function Browse() {
           knownTrackedIdsRef.current = new Set(data.map((row) => row.tmdb_id))
           setTrackedShows(active)
           setTrackedIds(new Set(active.map((row) => row.tmdb_id)))
+          markTrackedFetched(Date.now())
         }
         setTrackedShowsReady(true)
       })
@@ -412,6 +443,7 @@ export default function Browse() {
         trackedShows={trackedShows}
         trackedShowsReady={trackedShowsReady}
         hidden={Boolean(query.trim())}
+        session={discoverSession}
       />
     </div>
   )

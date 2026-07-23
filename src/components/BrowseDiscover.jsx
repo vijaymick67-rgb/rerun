@@ -96,6 +96,21 @@ function beginRefresh(trackedShows, storage) {
   })
 }
 
+// Show the persisted cache with no active-refresh affordance. Used on a quick
+// return when the Discover session gate reports this tracked-library identity was
+// refreshed within the freshness window: the cards render immediately from the
+// localStorage caches (identical to beginRefresh's hydration) but nothing is
+// spinning, because no network work is being done. Honest empty/loaded state is
+// preserved — an empty cache after a real refresh still reads as "empty", not
+// "loading".
+function showCachedState(trackedShows, storage) {
+  const base = beginRefresh(trackedShows, storage)
+  return {
+    announcements: { ...base.announcements, loading: false, refreshing: false },
+    trailers: { ...base.trailers, loading: false, refreshing: false },
+  }
+}
+
 function finishRefresh(result, trackedShows, storage, now) {
   const announcementCache = readAnnouncementsCache(storage, now)
   const trailerCache = readTrailersCache(storage, now)
@@ -317,6 +332,7 @@ export default function BrowseDiscover({
   hidden = false,
   storage = globalThis.localStorage,
   loadDiscoverImpl = loadDiscover,
+  session = null,
 }) {
   const [state, setState] = useState(() => createInitialDiscoverState({
     trackedShows,
@@ -332,24 +348,52 @@ export default function BrowseDiscover({
   useEffect(() => {
     if (!trackedShowsReady) return undefined
     let cancelled = false
+    const requestKey = trackedShowsKey
+    const now = Date.now()
+
+    // Quick-return fast path: this exact tracked-library identity was refreshed
+    // within the session freshness window and nothing is in flight for it. Show
+    // the persisted cache instantly and do NO network work — the whole point of
+    // the optimisation. (An in-flight request for the same key means a refresh is
+    // genuinely running, so fall through and attach to it instead.)
+    if (session && session.isDiscoverFresh(requestKey, now) && !session.getInFlight(requestKey)) {
+      setState(showCachedState(trackedShows, storage))
+      return () => {
+        cancelled = true
+      }
+    }
+
     setState(beginRefresh(trackedShows, storage))
 
-    const requestKey = trackedShowsKey
-    let request = requestRef.current?.key === requestKey
-      ? requestRef.current.promise
-      : null
+    // Reuse an already-running refresh for the same identity — across remounts
+    // (the session in-flight registry) or across StrictMode's double-invoke (the
+    // per-instance requestRef) — so a tab flip mid-refresh, or a tracked_shows
+    // re-read that resolves to the same identity as a new array reference, never
+    // starts a duplicate request.
+    let request = session?.getInFlight(requestKey)
+      ?? (requestRef.current?.key === requestKey ? requestRef.current.promise : null)
     if (!request) {
       request = loadDiscoverImpl({ trackedShows, storage })
       requestRef.current = { key: requestKey, promise: request }
+      session?.setInFlight(requestKey, request)
     }
 
     Promise.resolve(request)
       .then((result) => {
+        // The refresh attempt completed for this identity: record it so quick
+        // returns within the window skip the network, and release the in-flight
+        // slot. `cancelled` still guards the visible state so an older identity's
+        // response can never overwrite a newer one.
+        session?.markRefreshed(requestKey, Date.now())
+        session?.clearInFlight(requestKey, request)
         if (!cancelled) {
           setState(finishRefresh(result, trackedShows, storage, Date.now()))
         }
       })
       .catch(() => {
+        // A hard failure (loadDiscover itself threw) is left un-marked so the next
+        // return retries rather than being suppressed by the freshness window.
+        session?.clearInFlight(requestKey, request)
         if (!cancelled) {
           setState((current) => ({
             announcements: {
@@ -371,7 +415,7 @@ export default function BrowseDiscover({
     return () => {
       cancelled = true
     }
-  }, [loadDiscoverImpl, storage, trackedShows, trackedShowsKey, trackedShowsReady])
+  }, [loadDiscoverImpl, storage, trackedShows, trackedShowsKey, trackedShowsReady, session])
 
   function handleDismissAnnouncement(announcementId) {
     writeAnnouncementsCache(
