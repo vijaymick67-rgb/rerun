@@ -40,11 +40,14 @@ describe('Loki Armour Phase 2 visual contracts', () => {
     expect(progress).not.toMatch(/selection|gold|accent/)
   })
 
-  it('keeps the protected Watching quick-mark control geometry and neutral surface', () => {
+  it('keeps the protected Watching quick-mark control size and neutral surface (shape is now circular)', () => {
     const statusButton = rule('.watching-status-button')
     expect(statusButton).toContain('width: 2.75rem')
     expect(statusButton).toContain('height: 2.75rem')
-    expect(statusButton).toContain('border-radius: 0.625rem')
+    // Real-device polish: the visible enclosure changed from a rounded
+    // square to a true circle — everything else about the control (size,
+    // surface, states) stays exactly as protected below.
+    expect(statusButton).toContain('border-radius: 9999px')
     expect(statusButton).toContain('linear-gradient(165deg, #171b18, #0e1310)')
 
     for (const state of ['available', 'caughtUp', 'accepted', 'notReady']) {

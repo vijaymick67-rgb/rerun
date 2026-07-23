@@ -255,6 +255,10 @@ export default function Browse() {
 
   return (
     <div className="app-page px-4 pb-4">
+      <header className="route-heading">
+        <h1 className="type-page-title text-(--color-text)">Discover</h1>
+      </header>
+
       <input
         type="text"
         value={query}

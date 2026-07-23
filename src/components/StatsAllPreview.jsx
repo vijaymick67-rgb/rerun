@@ -33,11 +33,7 @@ export default function StatsAllPreview({ shows }) {
   return (
     <section className="stats-archive-preview" aria-labelledby="stats-all-title">
       <div className="stats-archive-preview__heading">
-        <div>
-          <p className="type-badge text-(--color-gold-accent)">Show history</p>
-          <h2 id="stats-all-title" className="type-section-title">All({shows.length})</h2>
-        </div>
-        <span className="stats-archive-preview__hint type-caption" aria-hidden="true">Archive</span>
+        <h2 id="stats-all-title" className="type-section-title">All({shows.length})</h2>
       </div>
       <div className="stats-all-preview content-surface">
         <div className="stats-all-preview__row" aria-hidden="true">
