@@ -5,6 +5,7 @@ import { getShowReleaseMap } from '../lib/tvmaze'
 import { episodeKey } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import { isHiddenShow, isVisibleInWatching } from '../lib/finishedShows'
+import { invalidateTrackedSession } from '../lib/discover/discoverSession'
 import {
   deriveWatchingFields,
   enrichTrackedShowsForWatching,
@@ -413,6 +414,11 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
         return query
       }, { stage: 'watching-remove-show', source: 'supabase' })
       if (deleteError) throw deleteError
+
+      // Removing a tracked show here must invalidate the Discover session so a
+      // quick switch to Discover re-reads the library instead of trusting a
+      // now-stale snapshot that still contains this show.
+      invalidateTrackedSession()
 
       setShows((prev) => {
         const next = prev.filter((s) => s.id !== show.id)
