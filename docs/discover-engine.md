@@ -26,7 +26,7 @@ harm than a wrong one shown as fact.
 | `trailerFilter.js` | TMDB video accept/reject rules (site/type/name). |
 | `trailerRank.js` | Trailer model, dedup, deterministic ranking, per-media selection. |
 | `trailerStore.js` | Versioned trailers cache + bootstrap baseline + seen-state (`rerun_discover_trailers:v1`). |
-| `marvelDcCatalogue.js` | Explicit verified media-id allowlist of Marvel/DC TV & movies (membership by TMDB media id, never keyword). |
+| `marvelDcCatalogue.js` | Explicit media-id allowlist of Marvel/DC TV & movies (membership by TMDB media id, never keyword) with status/release metadata + poll cadence/retirement + per-entry enable gate. |
 | `tmdbVideos.js` | TMDB `videos` fetching via the existing keyed proxy, cache + bounded concurrency + failure isolation. |
 | `discoverClient.js` | Orchestration + error-isolated feed state (the Phase 2 seam). |
 
@@ -53,13 +53,31 @@ dedicated endpoint, not the generic `/api/news` feed:
 - The client (`loadAnnouncements`) derives per-show search terms from the
   identity registry — each show's canonical title plus up to two **verified**
   alternative titles (never invented aliases) — and POSTs them.
-- The endpoint builds **bounded, batched** queries: several shows' term-groups
-  are OR-joined per query and ANDed with a shared clause scoped to **only the
-  four allowed event categories** (renewed/renewal, canceled/cancelled/"final
-  season", premiere/"release date", cast/"joins the cast"). It never issues one
+- The endpoint builds **bounded, batched** queries: several shows' terms are
+  OR-joined per query and ANDed with a shared clause scoped to **only the four
+  allowed event categories** (renewed/renewal, canceled/cancelled/"final season",
+  premiere/"release date", cast/"joins the cast"). It never issues one
   uncontrolled request per show — both terms-per-query and total query count are
-  hard-capped (`MAX_TERMS_PER_QUERY`, `MAX_QUERIES`), and queries run under a
-  small concurrency limit.
+  hard-capped (`MAX_TERMS_PER_QUERY = 8`, `MAX_QUERIES = 20`), and queries run
+  under a small concurrency limit (`QUERY_CONCURRENCY = 4`).
+- **Guaranteed canonical coverage.** The planner (`buildAnnouncementQueries`)
+  schedules terms in two phases so no tracked show is ever silently dropped in
+  favour of another show's alias: (1) **every** canonical title fills the shared
+  term budget (`TERM_BUDGET = MAX_QUERIES × MAX_TERMS_PER_QUERY = 160`) first, in
+  received order; (2) verified aliases take only the **leftover** budget. Complete
+  canonical coverage is therefore guaranteed for up to 160 tracked shows per
+  refresh (well beyond a personal library). Beyond that the plan reports an
+  **explicit partial-coverage state** rather than pretending success.
+- **Coverage metadata on every response.** `meta` reports `showsReceived`,
+  `canonicalTitlesSearched`, `aliasesSearched`, `aliasesOmitted`, `showsOmitted`
+  and `partialCoverage`, so the client can distinguish full coverage from a
+  budget-limited run.
+- **Quota tradeoff.** Each query is one GNews request, so total upstream requests
+  per refresh are capped at `MAX_QUERIES` (20) regardless of library size. Raising
+  canonical capacity means raising `MAX_QUERIES` (more requests per refresh). At
+  the endpoint's 30-minute cache TTL, 20 requests/refresh stays comfortably inside
+  a free-tier daily budget. Aliases are the first thing sacrificed to the cap —
+  never a canonical title.
 - Each query is **failure-isolated**: one failing query never fails the others;
   a 502 is surfaced only if *every* query fails (so the client keeps its cache).
 - Raw candidates are normalized (`normalizeArticle`) and **de-duplicated across
@@ -258,10 +276,11 @@ avoid.
 
 So membership is an **explicit allowlist of specific TMDB media ids**
 (`MARVEL_DC_CATALOGUE`), each recording `{ mediaType, id, title, franchise,
-liveVerified }`. This is **safe by construction**: a wrong or stale entry can
-only add or miss *one* title's trailers — it can never pull an unrelated
-catalogue. Membership (`isFranchiseMediaId`) never inspects title or synopsis
-text. The broad company ids (`429`, `174`, `2`, `128`, `6704`) are documented in
+status, releaseDate, pollTier, liveVerified, enabled }`. This is **safe by
+construction**: a wrong or stale entry can only add or miss *one* title's
+trailers — it can never pull an unrelated catalogue. Membership
+(`isFranchiseMediaId`) never inspects title or synopsis text. The broad company
+ids (`429`, `174`, `2`, `128`, `6704`) are documented in
 `REJECTED_BROAD_COMPANY_IDS` precisely so no maintainer reintroduces a company
 query.
 
@@ -270,24 +289,59 @@ through the **exact same** strict `trailerFilter` + `trailerRank` pipeline as
 tracked shows (see the franchise integration test: an official franchise trailer
 is accepted and tagged, a franchise clip is rejected).
 
-### Enabled status & honest live-verification limitation
+### Poll cadence & retirement (covering current/upcoming, not just old films)
+
+New trailers come from **upcoming and recently-released** projects; a film from
+years ago will not publish a new one. Each entry carries a `pollTier`:
+
+- `active` — upcoming or currently-releasing → polled every refresh (`fast`
+  cadence). Includes current/announced projects (e.g. *The Fantastic Four: First
+  Steps*, *Superman*, *Daredevil: Born Again*, *Peacemaker* S2).
+- `legacy` — released within the maintenance window → still polled (`slow`), for a
+  late featurette/anniversary trailer.
+- `retired` — long-released and done → **excluded from polling** to save requests,
+  but still a **member** for classification, so a stray franchise video is tagged
+  correctly rather than mislabelled.
+
+`catalogueTargets()` returns only enabled, non-retired entries (each annotated
+with its `cadence`); `isFranchiseMediaId()` matches the full allowlist so
+membership is independent of cadence. Tests cover an upcoming Marvel movie, Marvel
+TV, DC movie and DC TV entry; that retired titles are excluded from polling yet
+still classified; and that unrelated Disney/Warner titles (Moana, Barbie, Bluey)
+are excluded.
+
+### Per-entry enable gate & honest live-verification limitation
+
+Each entry has an `enabled` flag and a `liveVerified` flag. `filterCatalogue`
+(and therefore `catalogueTargets`/`isFranchiseMediaId`) respect `enabled`, so a
+single bad id can be disabled **without affecting any other entry** — proven by a
+test that disables one synthetic entry and shows its sibling survives.
 
 The exception is **enabled** (`isMarvelDcEnabled()` returns `true`) because an
 explicit allowlist does not carry the breadth risk that would force a company
-query to stay gated. However, the media ids were curated from TMDB's public
-catalogue and were **not re-verified against a live TMDB response in the build
-sandbox** — no TMDB key is available there (outbound TMDB calls need the
-server-side key held only in Vercel). Every entry therefore ships
-`liveVerified: false`.
+query to stay gated.
 
-`scripts/verify-marvel-dc.mjs` performs the live check with the real key
-(`TMDB_API_KEY=… node scripts/verify-marvel-dc.mjs`): it fetches each id, compares
-the resolved title to the expected title, and exits non-zero on any mismatch. A
-maintainer runs it in a key-holding environment and flips `liveVerified` to
-`true`. Because a wrong id can at worst affect a single title (not the whole
-feed), enabling the feature while that per-id confirmation is pending is safe —
-this is the "explicit verified catalogue/configuration boundary rather than
-guessing" path the requirement calls for.
+**Exact live checks performed in this build: none.** The build/CI sandbox has no
+TMDB key and cannot reach `api.themoviedb.org` (outbound TMDB calls need the
+server-side key held only in Vercel). Every entry therefore ships
+`liveVerified: false` (`verificationStatus().liveVerified === 0`).
+
+**Maintenance workflow** (documented so the catalogue stays current):
+
+1. Run `TMDB_API_KEY=… node scripts/verify-marvel-dc.mjs` in a key-holding
+   environment. It fetches each id, compares the resolved title to the expected
+   title, prints an OK/FAIL row per entry, and exits non-zero on any mismatch.
+2. For each id that resolves, flip `liveVerified: true`.
+3. For any id that **fails**, set `enabled: false` for that one entry (it drops
+   from polling and membership; nothing else is affected).
+4. As new Marvel Studios / Marvel Television / DC Studios projects are announced,
+   add them with `status: 'upcoming'` and `pollTier: 'active'`; move released
+   titles to `legacy`, then `retired` once they stop publishing trailers.
+
+Because a wrong id can at worst affect a single title (not the whole feed),
+running the feature while per-id live confirmation is pending is safe — this is
+the "explicit verified catalogue/configuration boundary rather than guessing"
+path the requirement calls for.
 
 ## Cache schema & versioning (migration)
 
@@ -333,13 +387,18 @@ modules.
 ## Known limitations
 
 - The Marvel/DC media ids are enabled but not yet **live-verified** in this build
-  (no TMDB key in the sandbox). They ship `liveVerified: false`; run
-  `scripts/verify-marvel-dc.mjs` with a key to confirm and flip the flags. The
-  allowlist is safe by construction (a wrong id affects at most one title).
+  (no TMDB key in the sandbox — exact live checks performed: none). They ship
+  `liveVerified: false`; run `scripts/verify-marvel-dc.mjs` with a key to confirm,
+  flip the flags, and `enabled: false` any that fail (per-entry, affects only
+  itself). The allowlist is safe by construction (a wrong id affects at most one
+  title). `pollTier` must be maintained as projects release — see the maintenance
+  workflow above. Upcoming/current ids (2025+) especially warrant a live check.
 - Announcement acquisition depends on a configured GNews key server-side. Without
   it the endpoint returns an empty candidate set (never a generic feed), so the
   Announcements feed is empty until the key is present. Adding official
-  press/trade RSS *search* providers is possible future work.
+  press/trade RSS *search* providers is possible future work. Canonical coverage
+  is guaranteed up to 160 tracked shows per refresh; beyond that the response
+  reports `partialCoverage` and raising it means raising `MAX_QUERIES`.
 - Person-name extraction for cast additions uses capitalization heuristics on the
   raw headline; ambiguous guest/recurring distinctions default to rejection.
 - No live TMDB/GNews calls were made in this build (no keys available); tests use

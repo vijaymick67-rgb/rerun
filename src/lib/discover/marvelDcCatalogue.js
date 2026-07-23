@@ -22,60 +22,104 @@
 // So membership here is an EXPLICIT ALLOWLIST OF SPECIFIC TMDB MEDIA IDS. This is
 // safe by construction: a wrong or stale entry can only add/miss ONE title's
 // trailers — it can never pull an unrelated catalogue. Each entry names the
-// media type, the TMDB id, the human title, and the franchise. Trailers for
-// these ids go through the exact same strict trailerFilter + trailerRank
-// pipeline as tracked shows (see discoverClient.franchiseTrailers).
+// media type, the TMDB id, the human title, the franchise, its release status
+// and a poll tier. Trailers for these ids go through the exact same strict
+// trailerFilter + trailerRank pipeline as tracked shows (see
+// discoverClient.franchiseTrailers).
 //
 // ---------------------------------------------------------------------------
-// HONEST LIVE-VERIFICATION STATUS
+// POLL CADENCE & RETIREMENT (why the catalogue is not just "old released films")
 // ---------------------------------------------------------------------------
-// These ids are the well-known, widely-documented TMDB media ids for these
-// titles, curated from TMDB's public catalogue. They were NOT re-verified
-// against a live TMDB response in the build sandbox because no TMDB API key is
-// available there (outbound TMDB calls require the server-side key held only in
-// Vercel; see api/tmdb.js). Every entry is therefore flagged `liveVerified:
-// false`. `scripts/verify-marvel-dc.mjs` performs the live check through the
-// same protected proxy/key when run in an environment that has the key; a
-// maintainer runs it and flips the flags. Because membership is an explicit
-// allowlist, the feature is safe to ENABLE while that verification is pending —
-// the worst case is a single wrong/missing title, not a catalogue flood.
+// New trailers come from UPCOMING and RECENT projects; a film released years ago
+// will not publish a new trailer. Each entry therefore carries a `pollTier`:
+//   * 'active'  — upcoming or currently-releasing; polled every refresh (fast).
+//   * 'legacy'  — released within the maintenance window; still polled (slow),
+//                 in case of a late featurette/anniversary trailer.
+//   * 'retired' — long-released and done; EXCLUDED from polling to save requests,
+//                 but still a MEMBER for classification (so a stray franchise
+//                 video is still tagged correctly, never mislabelled).
+// `catalogueTargets()` returns only the non-retired, enabled entries — the real
+// polling set — while `isFranchiseMediaId()` matches the full allowlist so
+// membership/classification is independent of cadence.
+//
+// ---------------------------------------------------------------------------
+// HONEST LIVE-VERIFICATION STATUS (exact live checks performed)
+// ---------------------------------------------------------------------------
+// The exact live checks performed in this build: NONE. The build/CI sandbox has
+// no TMDB API key and cannot reach api.themoviedb.org (outbound TMDB calls
+// require the server-side key held only in Vercel; see api/tmdb.js). Every entry
+// is therefore flagged `liveVerified: false`. The ids below are the well-known,
+// widely-documented TMDB media ids for these titles, curated from TMDB's public
+// catalogue.
+//
+// `scripts/verify-marvel-dc.mjs` performs the live check through the same
+// server-side key when run in an environment that has it: it fetches each id,
+// compares the resolved title, and reports OK/FAIL per entry. The maintenance
+// workflow (documented in docs/discover-engine.md) is: run the script, flip
+// `liveVerified: true` on entries that resolve, and set `enabled: false` on any
+// id that fails — disabling ONE entry never affects the others. Because
+// membership is an explicit allowlist, the feature is safe to run while
+// verification is pending: the worst case is a single wrong/missing title, not a
+// catalogue flood.
 
 export const FRANCHISE = Object.freeze({ MARVEL: 'marvel', DC: 'dc' })
 export const MEDIA_TYPE = Object.freeze({ TV: 'tv', MOVIE: 'movie' })
+export const STATUS = Object.freeze({ UPCOMING: 'upcoming', RELEASED: 'released' })
+export const POLL_TIER = Object.freeze({ ACTIVE: 'active', LEGACY: 'legacy', RETIRED: 'retired' })
 
-// Each entry: { mediaType, id, title, franchise, liveVerified }.
-// Curated from TMDB's public catalogue; `liveVerified` is flipped by the
-// maintainer after scripts/verify-marvel-dc.mjs confirms id -> title live.
+// Poll cadence per tier — consumed by the client to decide how often to fetch.
+export const POLL_CADENCE = Object.freeze({ active: 'fast', legacy: 'slow', retired: 'none' })
+
+function entry(mediaType, id, title, franchise, status, releaseDate, pollTier) {
+  return Object.freeze({
+    mediaType, id, title, franchise, status, releaseDate, pollTier,
+    liveVerified: false, // no TMDB key in the build sandbox; see header + verify script
+    enabled: true, // per-entry gate; a maintainer sets false for any id the verify script fails
+  })
+}
+
+// Explicit allowlist of specific TMDB media ids. Curated from TMDB's public
+// catalogue; `liveVerified` is flipped by the maintainer after
+// scripts/verify-marvel-dc.mjs confirms id -> title live. `pollTier` reflects how
+// current the project is (see cadence/retirement note above) and MUST be updated
+// as upcoming projects release and old ones wind down.
 export const MARVEL_DC_CATALOGUE = Object.freeze([
   // --- Marvel TV (Disney+ MCU series) ---
-  { mediaType: 'tv', id: 84958, title: 'Loki', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 85271, title: 'WandaVision', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 88396, title: 'The Falcon and the Winter Soldier', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 88329, title: 'Hawkeye', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 92749, title: 'Moon Knight', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 92782, title: 'Ms. Marvel', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 92783, title: 'She-Hulk: Attorney at Law', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'tv', id: 114472, title: 'Secret Invasion', franchise: FRANCHISE.MARVEL, liveVerified: false },
+  entry('tv', 84958, 'Loki', FRANCHISE.MARVEL, STATUS.RELEASED, '2021-06-09', POLL_TIER.RETIRED),
+  entry('tv', 85271, 'WandaVision', FRANCHISE.MARVEL, STATUS.RELEASED, '2021-01-15', POLL_TIER.RETIRED),
+  entry('tv', 88396, 'The Falcon and the Winter Soldier', FRANCHISE.MARVEL, STATUS.RELEASED, '2021-03-19', POLL_TIER.RETIRED),
+  entry('tv', 88329, 'Hawkeye', FRANCHISE.MARVEL, STATUS.RELEASED, '2021-11-24', POLL_TIER.RETIRED),
+  entry('tv', 92749, 'Moon Knight', FRANCHISE.MARVEL, STATUS.RELEASED, '2022-03-30', POLL_TIER.RETIRED),
+  entry('tv', 92782, 'Ms. Marvel', FRANCHISE.MARVEL, STATUS.RELEASED, '2022-06-08', POLL_TIER.RETIRED),
+  entry('tv', 92783, 'She-Hulk: Attorney at Law', FRANCHISE.MARVEL, STATUS.RELEASED, '2022-08-18', POLL_TIER.RETIRED),
+  entry('tv', 114472, 'Secret Invasion', FRANCHISE.MARVEL, STATUS.RELEASED, '2023-06-21', POLL_TIER.RETIRED),
+  entry('tv', 138501, 'Agatha All Along', FRANCHISE.MARVEL, STATUS.RELEASED, '2024-09-18', POLL_TIER.LEGACY),
+  entry('tv', 202555, 'Daredevil: Born Again', FRANCHISE.MARVEL, STATUS.RELEASED, '2025-03-04', POLL_TIER.ACTIVE),
 
   // --- Marvel movies (MCU) ---
-  { mediaType: 'movie', id: 453395, title: 'Doctor Strange in the Multiverse of Madness', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'movie', id: 616037, title: 'Thor: Love and Thunder', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'movie', id: 505642, title: 'Black Panther: Wakanda Forever', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'movie', id: 640146, title: 'Ant-Man and the Wasp: Quantumania', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'movie', id: 447365, title: 'Guardians of the Galaxy Vol. 3', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'movie', id: 609681, title: 'The Marvels', franchise: FRANCHISE.MARVEL, liveVerified: false },
-  { mediaType: 'movie', id: 533535, title: 'Deadpool & Wolverine', franchise: FRANCHISE.MARVEL, liveVerified: false },
+  entry('movie', 453395, 'Doctor Strange in the Multiverse of Madness', FRANCHISE.MARVEL, STATUS.RELEASED, '2022-05-04', POLL_TIER.RETIRED),
+  entry('movie', 616037, 'Thor: Love and Thunder', FRANCHISE.MARVEL, STATUS.RELEASED, '2022-07-06', POLL_TIER.RETIRED),
+  entry('movie', 505642, 'Black Panther: Wakanda Forever', FRANCHISE.MARVEL, STATUS.RELEASED, '2022-11-09', POLL_TIER.RETIRED),
+  entry('movie', 640146, 'Ant-Man and the Wasp: Quantumania', FRANCHISE.MARVEL, STATUS.RELEASED, '2023-02-15', POLL_TIER.RETIRED),
+  entry('movie', 447365, 'Guardians of the Galaxy Vol. 3', FRANCHISE.MARVEL, STATUS.RELEASED, '2023-05-03', POLL_TIER.RETIRED),
+  entry('movie', 609681, 'The Marvels', FRANCHISE.MARVEL, STATUS.RELEASED, '2023-11-08', POLL_TIER.RETIRED),
+  entry('movie', 533535, 'Deadpool & Wolverine', FRANCHISE.MARVEL, STATUS.RELEASED, '2024-07-24', POLL_TIER.LEGACY),
+  entry('movie', 822119, 'Captain America: Brave New World', FRANCHISE.MARVEL, STATUS.RELEASED, '2025-02-12', POLL_TIER.ACTIVE),
+  entry('movie', 986056, 'Thunderbolts*', FRANCHISE.MARVEL, STATUS.RELEASED, '2025-04-30', POLL_TIER.ACTIVE),
+  entry('movie', 617126, 'The Fantastic Four: First Steps', FRANCHISE.MARVEL, STATUS.UPCOMING, '2025-07-23', POLL_TIER.ACTIVE),
 
   // --- DC TV ---
-  { mediaType: 'tv', id: 110492, title: 'Peacemaker', franchise: FRANCHISE.DC, liveVerified: false },
-  { mediaType: 'tv', id: 80564, title: 'Titans', franchise: FRANCHISE.DC, liveVerified: false },
+  entry('tv', 110492, 'Peacemaker', FRANCHISE.DC, STATUS.RELEASED, '2022-01-13', POLL_TIER.ACTIVE), // S2 (2025) still publishing trailers
+  entry('tv', 80564, 'Titans', FRANCHISE.DC, STATUS.RELEASED, '2018-10-12', POLL_TIER.RETIRED),
 
   // --- DC movies ---
-  { mediaType: 'movie', id: 414906, title: 'The Batman', franchise: FRANCHISE.DC, liveVerified: false },
-  { mediaType: 'movie', id: 475557, title: 'Joker', franchise: FRANCHISE.DC, liveVerified: false },
-  { mediaType: 'movie', id: 436270, title: 'Black Adam', franchise: FRANCHISE.DC, liveVerified: false },
-  { mediaType: 'movie', id: 298618, title: 'The Flash', franchise: FRANCHISE.DC, liveVerified: false },
-  { mediaType: 'movie', id: 572802, title: 'Aquaman and the Lost Kingdom', franchise: FRANCHISE.DC, liveVerified: false },
+  entry('movie', 414906, 'The Batman', FRANCHISE.DC, STATUS.RELEASED, '2022-03-01', POLL_TIER.RETIRED),
+  entry('movie', 475557, 'Joker', FRANCHISE.DC, STATUS.RELEASED, '2019-10-01', POLL_TIER.RETIRED),
+  entry('movie', 436270, 'Black Adam', FRANCHISE.DC, STATUS.RELEASED, '2022-10-19', POLL_TIER.RETIRED),
+  entry('movie', 298618, 'The Flash', FRANCHISE.DC, STATUS.RELEASED, '2023-06-13', POLL_TIER.RETIRED),
+  entry('movie', 572802, 'Aquaman and the Lost Kingdom', FRANCHISE.DC, STATUS.RELEASED, '2023-12-20', POLL_TIER.RETIRED),
+  entry('movie', 889737, 'Joker: Folie à Deux', FRANCHISE.DC, STATUS.RELEASED, '2024-10-02', POLL_TIER.LEGACY),
+  entry('movie', 1061474, 'Superman', FRANCHISE.DC, STATUS.UPCOMING, '2025-07-09', POLL_TIER.ACTIVE),
 ])
 
 // Documented so a future maintainer does not "helpfully" reintroduce a broad
@@ -93,35 +137,54 @@ function normalizeType(mediaType) {
   return mediaType === 'movie' ? 'movie' : mediaType === 'tv' ? 'tv' : null
 }
 
-// All catalogue targets to fetch trailers for, optionally filtered.
-export function catalogueTargets({ franchise = null, mediaType = null } = {}) {
+// Pure, testable selector over an arbitrary catalogue list. Extracted so the
+// per-entry `enabled` gate and cadence/retirement filtering can be verified in
+// isolation (e.g. proving one disabled/invalid id removes only itself).
+export function filterCatalogue(entries, {
+  franchise = null, mediaType = null, includeRetired = false, includeDisabled = false,
+} = {}) {
   const type = mediaType == null ? null : normalizeType(mediaType)
-  return MARVEL_DC_CATALOGUE.filter((entry) => (
-    (franchise == null || entry.franchise === franchise)
-    && (type == null || entry.mediaType === type)
-  )).map((entry) => ({ ...entry }))
+  return (Array.isArray(entries) ? entries : []).filter((e) => (
+    (includeDisabled || e.enabled)
+    && (includeRetired || e.pollTier !== POLL_TIER.RETIRED)
+    && (franchise == null || e.franchise === franchise)
+    && (type == null || e.mediaType === type)
+  ))
 }
 
-// Membership test — the ONLY way a title is treated as franchise media. Returns
-// the franchise string, or null. Never inspects title/synopsis text.
+// The real polling set: enabled, non-retired catalogue targets, each annotated
+// with its poll cadence so the client can schedule fast vs slow refreshes.
+export function catalogueTargets(options = {}) {
+  return filterCatalogue(MARVEL_DC_CATALOGUE, options)
+    .map((e) => ({ ...e, cadence: POLL_CADENCE[e.pollTier] ?? 'slow' }))
+}
+
+// Membership test — the ONLY way a title is treated as franchise media. Matches
+// the FULL allowlist (including retired entries) so classification is independent
+// of poll cadence; a disabled entry is NOT a member. Returns the franchise
+// string, or null. Never inspects title/synopsis text.
 export function isFranchiseMediaId(id, mediaType) {
   const type = normalizeType(mediaType)
   if (type == null || id == null) return null
-  const match = MARVEL_DC_CATALOGUE.find((entry) => entry.id === id && entry.mediaType === type)
+  const match = MARVEL_DC_CATALOGUE.find((e) => e.enabled && e.id === id && e.mediaType === type)
   return match ? match.franchise : null
 }
 
 // Honest status for docs / PR / logging.
 export function verificationStatus() {
   const total = MARVEL_DC_CATALOGUE.length
-  const liveVerified = MARVEL_DC_CATALOGUE.filter((entry) => entry.liveVerified).length
-  return { total, liveVerified, pending: total - liveVerified }
+  const enabled = MARVEL_DC_CATALOGUE.filter((e) => e.enabled).length
+  const liveVerified = MARVEL_DC_CATALOGUE.filter((e) => e.liveVerified).length
+  const active = MARVEL_DC_CATALOGUE.filter((e) => e.pollTier === POLL_TIER.ACTIVE).length
+  const legacy = MARVEL_DC_CATALOGUE.filter((e) => e.pollTier === POLL_TIER.LEGACY).length
+  const retired = MARVEL_DC_CATALOGUE.filter((e) => e.pollTier === POLL_TIER.RETIRED).length
+  return { total, enabled, liveVerified, pending: total - liveVerified, active, legacy, retired }
 }
 
 // The feature is ENABLED: an explicit media-id allowlist is safe by
 // construction (it cannot pull unrelated media), so it does not gate on live
-// verification the way a broad company query would have to. There must be at
-// least one target per franchise+type combination to be meaningful.
+// verification the way a broad company query would have to. Enabled iff there is
+// at least one non-retired, enabled target to poll.
 export function isMarvelDcEnabled() {
-  return MARVEL_DC_CATALOGUE.length > 0
+  return catalogueTargets().length > 0
 }

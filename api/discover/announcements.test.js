@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import handler, {
-  createAnnouncementsHandler, buildAnnouncementQueries, MAX_QUERIES,
+  createAnnouncementsHandler, buildAnnouncementQueries, MAX_QUERIES, TERM_BUDGET,
 } from './announcements.js'
 
 function makeRes() {
@@ -31,7 +31,7 @@ function rawArticle(overrides = {}) {
 
 describe('buildAnnouncementQueries', () => {
   it('scopes every query to the four allowed event categories', () => {
-    const queries = buildAnnouncementQueries([{ id: 1, title: 'From' }])
+    const { queries } = buildAnnouncementQueries([{ id: 1, title: 'From' }])
     expect(queries).toHaveLength(1)
     expect(queries[0]).toContain('"From"')
     expect(queries[0]).toMatch(/renewed|canceled|premiere|cast/)
@@ -39,19 +39,64 @@ describe('buildAnnouncementQueries', () => {
 
   it('batches shows and never exceeds the query cap', () => {
     const shows = Array.from({ length: 400 }, (_, i) => ({ id: i, title: `Show Number ${i}` }))
-    const queries = buildAnnouncementQueries(shows)
+    const { queries } = buildAnnouncementQueries(shows)
     expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES)
     // Each query OR-batches multiple show terms (not one request per show).
     expect(queries[0].match(/ OR /g)?.length ?? 0).toBeGreaterThan(0)
   })
 
   it('includes a capped number of verified aliases', () => {
-    const queries = buildAnnouncementQueries([
+    const { queries } = buildAnnouncementQueries([
       { id: 1, title: 'Shogun', aliases: ['James Clavell\'s Shogun', 'Shougun', 'ThirdAlias', 'FourthAlias'] },
     ])
     // canonical + at most 2 aliases -> 3 quoted terms in the title clause.
     const titleClause = queries[0].split(' AND ')[0]
     expect(titleClause.match(/"/g)?.length).toBe(6) // 3 phrases => 6 quote chars
+  })
+
+  it('schedules every canonical title before any alias so none is displaced', () => {
+    // Two shows, each with two aliases. Canonicals must appear before aliases in
+    // the flattened term order, proving aliases never crowd out a canonical.
+    const { queries, plan } = buildAnnouncementQueries([
+      { id: 1, title: 'Alpha', aliases: ['Alpha Alt One', 'Alpha Alt Two'] },
+      { id: 2, title: 'Bravo', aliases: ['Bravo Alt One', 'Bravo Alt Two'] },
+    ])
+    const flat = queries.join(' ')
+    // Both canonicals come before either show's aliases in the scheduled order.
+    expect(flat.indexOf('"Alpha"')).toBeLessThan(flat.indexOf('"Alpha Alt One"'))
+    expect(flat.indexOf('"Bravo"')).toBeLessThan(flat.indexOf('"Alpha Alt One"'))
+    expect(plan.canonicalTitlesSearched).toBe(2)
+    expect(plan.aliasesSearched).toBe(4)
+    expect(plan.partialCoverage).toBe(false)
+  })
+
+  it('covers every canonical title for a large 90–120 show library (two aliases each)', () => {
+    const shows = Array.from({ length: 120 }, (_, i) => ({
+      id: i, title: `Canonical Series ${i}`,
+      aliases: [`Series ${i} Alt A`, `Series ${i} Alt B`],
+    }))
+    const { queries, plan } = buildAnnouncementQueries(shows)
+    const all = queries.join(' ')
+    // EVERY canonical title is present somewhere in the scheduled queries.
+    for (let i = 0; i < 120; i += 1) {
+      expect(all).toContain(`"Canonical Series ${i}"`)
+    }
+    expect(plan.showsReceived).toBe(120)
+    expect(plan.canonicalTitlesSearched).toBe(120)
+    expect(plan.showsOmitted).toBe(0)
+    expect(plan.partialCoverage).toBe(false)
+    // Aliases use only leftover budget; the surplus is reported, not hidden.
+    expect(plan.aliasesSearched).toBe(TERM_BUDGET - 120)
+    expect(plan.aliasesOmitted).toBe(240 - (TERM_BUDGET - 120))
+    expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES)
+  })
+
+  it('reports an explicit partial-coverage state when canonicals exceed the budget', () => {
+    const shows = Array.from({ length: TERM_BUDGET + 25 }, (_, i) => ({ id: i, title: `Overflow Show ${i}` }))
+    const { plan } = buildAnnouncementQueries(shows)
+    expect(plan.canonicalTitlesSearched).toBe(TERM_BUDGET)
+    expect(plan.showsOmitted).toBe(25)
+    expect(plan.partialCoverage).toBe(true)
   })
 })
 
@@ -104,6 +149,32 @@ describe('announcements endpoint', () => {
     const res = makeRes()
     await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl })({ method: 'POST', body: { shows } }, res)
     expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(MAX_QUERIES)
+  })
+
+  it('reports full canonical coverage in response metadata for a 110-show library', async () => {
+    const shows = Array.from({ length: 110 }, (_, i) => ({
+      id: i, title: `Library Show ${i}`, aliases: [`Show ${i} AKA A`, `Show ${i} AKA B`],
+    }))
+    const fetchImpl = async () => gnews([])
+    const res = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl })({ method: 'POST', body: { shows } }, res)
+    expect(res.statusCode).toBe(200)
+    expect(res.body.meta.showsReceived).toBe(110)
+    expect(res.body.meta.canonicalTitlesSearched).toBe(110)
+    expect(res.body.meta.showsOmitted).toBe(0)
+    expect(res.body.meta.partialCoverage).toBe(false)
+    expect(res.body.meta.aliasesSearched).toBe(TERM_BUDGET - 110)
+    expect(res.body.meta.aliasesOmitted).toBe(220 - (TERM_BUDGET - 110))
+  })
+
+  it('signals partial coverage in metadata when the library exceeds the budget', async () => {
+    const shows = Array.from({ length: TERM_BUDGET + 40 }, (_, i) => ({ id: i, title: `Huge Library ${i}` }))
+    const fetchImpl = async () => gnews([])
+    const res = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl })({ method: 'POST', body: { shows } }, res)
+    expect(res.body.meta.partialCoverage).toBe(true)
+    expect(res.body.meta.showsOmitted).toBe(40)
+    expect(res.body.meta.canonicalTitlesSearched).toBe(TERM_BUDGET)
   })
 
   it('deduplicates the same story returned by more than one query', async () => {

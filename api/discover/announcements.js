@@ -11,6 +11,14 @@
 //   * Membership terms come from the client's identity registry: each show's
 //     canonical title plus a capped number of VERIFIED alternative titles. We
 //     never invent aliases here.
+//   * GUARANTEED canonical coverage: every tracked show's canonical title is
+//     scheduled into the query budget BEFORE any alias (see
+//     buildAnnouncementQueries), so a large library's later shows are never
+//     silently dropped in favour of an earlier show's alias. If the library
+//     genuinely exceeds the budget the response reports partialCoverage +
+//     showsOmitted instead of pretending full success. Every response's meta
+//     reports shows received, canonical titles searched, aliases searched,
+//     aliases omitted and shows omitted.
 //   * Queries are scoped to ONLY the four allowed event categories (renewal,
 //     season date, cancellation, cast addition) via a shared event clause, so we
 //     pull renewal/cancellation/date/casting candidates rather than arbitrary
@@ -30,12 +38,25 @@ import { dedupeArticles } from '../../src/lib/news/dedupeArticles.js'
 
 const GNEWS_SEARCH_ENDPOINT = 'https://gnews.io/api/v4/search'
 
-export const MAX_SHOWS = 120 // hard ceiling on shows considered per request
 export const MAX_ALIASES_PER_SHOW = 2 // verified alternative titles per show
 export const MAX_TERMS_PER_QUERY = 8 // OR-batched title terms per query
 export const MAX_QUERIES = 20 // hard request cap (bounds total upstream calls)
 export const QUERY_CONCURRENCY = 4
 export const GNEWS_MAX_PER_QUERY = 10
+// Total term capacity across ALL queries. Canonical titles are scheduled into
+// this budget FIRST (before any alias), so complete canonical coverage is
+// guaranteed for up to TERM_BUDGET tracked shows; aliases consume only the
+// remainder. Beyond the budget the planner reports partial coverage rather than
+// silently dropping shows.
+//
+// Quota tradeoff: each query is one GNews request, so total upstream requests
+// are capped at MAX_QUERIES (20) regardless of library size, run at
+// QUERY_CONCURRENCY (4) at a time. Raising canonical capacity means raising
+// MAX_QUERIES (more requests per refresh). 160 canonical titles per refresh
+// comfortably covers a personal tracked library while staying well within a
+// free-tier daily request budget at the endpoint's 30-minute cache TTL.
+export const TERM_BUDGET = MAX_QUERIES * MAX_TERMS_PER_QUERY // 160
+export const MAX_SHOWS = TERM_BUDGET // canonical coverage guaranteed up to here
 const QUERY_TIMEOUT_MS = 8000
 const CACHE_CONTROL = 'public, s-maxage=1800, stale-while-revalidate=10800'
 
@@ -69,54 +90,86 @@ function quotePhrase(term) {
   return `"${String(term).replace(/["\\]+/g, ' ').trim()}"`
 }
 
-// Turn one show identity into a small OR-group of quoted terms (canonical +
-// capped verified aliases), de-duplicated and non-empty.
-function showTerms(show) {
-  const title = typeof show?.title === 'string' ? show.title.trim() : ''
-  if (!title) return []
-  const aliases = Array.isArray(show?.aliases) ? show.aliases : []
-  const terms = [title, ...aliases]
-    .map((t) => (typeof t === 'string' ? t.trim() : ''))
-    .filter(Boolean)
+// Plan the bounded, batched query set with GUARANTEED canonical coverage.
+//
+// Two-phase term scheduling ensures no tracked show is silently omitted in
+// favour of another show's alias:
+//   Phase 1 — collect EVERY canonical tracked-show title (case-insensitively
+//     de-duplicated), in received order, BEFORE touching any alias.
+//   Phase 2 — collect capped verified aliases, in received order, only AFTER all
+//     canonicals exist.
+//   Phase 3 — schedule into the shared term budget: canonicals fill it first, so
+//     they can never be displaced by aliases; aliases take only what remains.
+// Scheduled terms are packed MAX_TERMS_PER_QUERY per query and each query ANDs
+// the shared event clause. If canonical titles genuinely exceed the budget the
+// plan reports partialCoverage + showsOmitted rather than pretending success.
+//
+// Returns { queries, plan } where plan reports exactly what was covered:
+//   showsReceived, canonicalTitlesSearched, aliasesSearched, aliasesOmitted,
+//   showsOmitted, partialCoverage.
+export function buildAnnouncementQueries(shows) {
+  const rawList = Array.isArray(shows) ? shows : []
   const seen = new Set()
-  const unique = []
-  for (const term of terms) {
-    const key = term.toLowerCase()
+
+  // Phase 1 — every canonical title first (deduped), independent of aliases.
+  const canonical = []
+  let showsReceived = 0
+  for (const show of rawList) {
+    const title = typeof show?.title === 'string' ? show.title.trim() : ''
+    if (!title) continue
+    showsReceived += 1
+    const key = title.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    unique.push(term)
-    if (unique.length >= 1 + MAX_ALIASES_PER_SHOW) break
+    canonical.push(title)
   }
-  return unique
-}
 
-// Build the bounded set of batched query strings. Each query OR-joins several
-// shows' term-groups, then ANDs the shared event clause. Bounded by both terms
-// per query and total query count.
-export function buildAnnouncementQueries(shows) {
-  const groups = []
-  for (const show of Array.isArray(shows) ? shows.slice(0, MAX_SHOWS) : []) {
-    const terms = showTerms(show)
-    if (terms.length) groups.push(terms)
+  // Phase 2 — capped verified aliases, after ALL canonicals are collected so a
+  // canonical title is never displaced by an earlier show's alias.
+  const aliasTerms = []
+  for (const show of rawList) {
+    const title = typeof show?.title === 'string' ? show.title.trim() : ''
+    if (!title) continue
+    const aliases = Array.isArray(show?.aliases) ? show.aliases : []
+    let used = 0
+    for (const rawAlias of aliases) {
+      if (used >= MAX_ALIASES_PER_SHOW) break
+      const alias = typeof rawAlias === 'string' ? rawAlias.trim() : ''
+      if (!alias) continue
+      const key = alias.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      aliasTerms.push(alias)
+      used += 1
+    }
   }
+
+  // Phase 3 — schedule into the shared budget: canonicals first, aliases fill the
+  // remainder. Canonicals beyond the budget are omitted (partial coverage), never
+  // silently swapped for an alias.
+  const canonicalScheduled = canonical.slice(0, TERM_BUDGET)
+  const showsOmitted = canonical.length - canonicalScheduled.length
+  const remaining = Math.max(0, TERM_BUDGET - canonicalScheduled.length)
+  const aliasesScheduled = aliasTerms.slice(0, remaining)
+  const aliasesOmitted = aliasTerms.length - aliasesScheduled.length
+  const terms = [...canonicalScheduled, ...aliasesScheduled]
 
   const queries = []
-  let batchTerms = []
-  const flush = () => {
-    if (!batchTerms.length) return
-    const titleClause = `(${batchTerms.map(quotePhrase).join(' OR ')})`
+  for (let i = 0; i < terms.length; i += MAX_TERMS_PER_QUERY) {
+    const slice = terms.slice(i, i + MAX_TERMS_PER_QUERY)
+    const titleClause = `(${slice.map(quotePhrase).join(' OR ')})`
     queries.push(`${titleClause} AND ${EVENT_CLAUSE}`)
-    batchTerms = []
   }
-  for (const group of groups) {
-    // Keep a show's own terms together in one query when possible.
-    if (batchTerms.length && batchTerms.length + group.length > MAX_TERMS_PER_QUERY) flush()
-    batchTerms.push(...group)
-    if (batchTerms.length >= MAX_TERMS_PER_QUERY) flush()
-    if (queries.length >= MAX_QUERIES) break
+
+  const plan = {
+    showsReceived,
+    canonicalTitlesSearched: canonicalScheduled.length,
+    aliasesSearched: aliasesScheduled.length,
+    aliasesOmitted,
+    showsOmitted,
+    partialCoverage: showsOmitted > 0,
   }
-  flush()
-  return queries.slice(0, MAX_QUERIES)
+  return { queries, plan }
 }
 
 async function runGnewsQuery(query, { apiKey, fetchImpl, timeoutMs = QUERY_TIMEOUT_MS }) {
@@ -175,19 +228,22 @@ export function createAnnouncementsHandler({ env = process.env, fetchImpl = glob
 
     const apiKey = env.GNEWS_API_KEY
     const fetchedAt = new Date().toISOString()
-    const queries = buildAnnouncementQueries(shows)
+    const { queries, plan } = buildAnnouncementQueries(shows)
+    // Coverage is reported honestly on every response so the client can tell
+    // complete canonical coverage from a partial (budget-limited) run.
+    const coverageMeta = { fetchedAt, queryCount: queries.length, ...plan }
 
     // No provider key: return an EMPTY candidate set — never a generic feed.
     if (!apiKey) {
       json(res, 200, {
         articles: [],
-        meta: { configured: false, fetchedAt, queryCount: queries.length, count: 0 },
+        meta: { configured: false, ...coverageMeta, count: 0 },
       }, { 'Cache-Control': 'no-store' })
       return
     }
 
     if (!queries.length) {
-      json(res, 200, { articles: [], meta: { configured: true, fetchedAt, queryCount: 0, count: 0 } }, { 'Cache-Control': 'no-store' })
+      json(res, 200, { articles: [], meta: { configured: true, ...coverageMeta, count: 0 } }, { 'Cache-Control': 'no-store' })
       return
     }
 
@@ -218,8 +274,7 @@ export function createAnnouncementsHandler({ env = process.env, fetchImpl = glob
       articles: deduped,
       meta: {
         configured: true,
-        fetchedAt,
-        queryCount: queries.length,
+        ...coverageMeta,
         failureCount,
         count: deduped.length,
       },
