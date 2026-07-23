@@ -46,6 +46,7 @@ export function buildTrailer(video, context = {}) {
     official: video.official === true,
     language: video.iso_639_1 ?? null,
     publishedAt: video.published_at ?? null,
+    releaseDate: context.releaseDate ?? context.firstAirDate ?? null,
     franchise: context.franchise ?? null,
     variant: trailerVariant(video),
     size: Number.isFinite(video.size) ? video.size : 0,

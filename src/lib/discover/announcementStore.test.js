@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyAnnouncementsState, sanitizeAnnouncementsState, readAnnouncementsCache,
-  writeAnnouncementsCache, mergeAnnouncements, ANNOUNCEMENTS_CACHE_KEY,
+  writeAnnouncementsCache, mergeAnnouncements, dismissAnnouncement, ANNOUNCEMENTS_CACHE_KEY,
 } from './announcementStore.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
@@ -67,5 +67,13 @@ describe('mergeAnnouncements', () => {
     expect(merged.items).toHaveLength(2)
     expect(merged.items.find((i) => i.id === 'ann:1|renewal|3').showName).toBe('From (updated)')
     expect(merged.lastSuccess).toBe(NOW)
+  })
+
+  it('persists a dismissal and never restores the event on a later merge', () => {
+    const first = mergeAnnouncements(emptyAnnouncementsState(), [item()], NOW)
+    const dismissed = dismissAnnouncement(first, item().id, NOW)
+    expect(dismissed.items).toEqual([])
+    expect(dismissed.dismissedIds).toContain(item().id)
+    expect(mergeAnnouncements(dismissed, [item()], NOW).items).toEqual([])
   })
 })

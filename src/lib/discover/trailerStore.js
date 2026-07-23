@@ -36,6 +36,7 @@ export const TRAILERS_CACHE_VERSION = 2
 export const TRAILERS_MAX_ITEMS = 60
 export const DEFAULT_BOOTSTRAP_WINDOW_MS = 150 * 24 * 60 * 60 * 1000
 export const TRAILERS_MAX_SEEN_KEYS = 500
+export const TRAILERS_MAX_DISMISSED_KEYS = 500
 // The baseline must not silently forget old keys, or forgotten historical videos
 // would resurface. Keep it generous — the qualifying set for a personal tracked
 // library is small (tens of shows x a few trailers each).
@@ -47,6 +48,7 @@ export function emptyTrailersState() {
     items: [],
     knownKeys: [],
     seenKeys: [],
+    dismissedKeys: [],
     bootstrapped: false,
     lastSuccess: null,
   }
@@ -72,11 +74,16 @@ export function sanitizeTrailersState(value) {
   if (!value || value.version !== TRAILERS_CACHE_VERSION || !Array.isArray(value.items)) {
     return emptyTrailersState()
   }
+  const dismissedKeys = [...new Set(
+    (Array.isArray(value.dismissedKeys) ? value.dismissedKeys : [])
+      .filter((key) => typeof key === 'string' && key),
+  )].slice(-TRAILERS_MAX_DISMISSED_KEYS)
+  const dismissed = new Set(dismissedKeys)
   const seen = new Set()
   const items = []
   for (const raw of value.items) {
     const item = validItem(raw)
-    if (!item || seen.has(item.videoKey)) continue
+    if (!item || seen.has(item.videoKey) || dismissed.has(item.videoKey)) continue
     seen.add(item.videoKey)
     items.push(item)
   }
@@ -87,6 +94,7 @@ export function sanitizeTrailersState(value) {
     // Displayed keys are, by definition, part of the baseline.
     knownKeys: stringKeys([...(Array.isArray(value.knownKeys) ? value.knownKeys : []), ...cappedItems.map((i) => i.videoKey)], TRAILERS_MAX_KNOWN_KEYS),
     seenKeys: stringKeys(value.seenKeys, TRAILERS_MAX_SEEN_KEYS),
+    dismissedKeys,
     bootstrapped: value.bootstrapped === true,
     lastSuccess: Number.isFinite(value.lastSuccess) ? value.lastSuccess : null,
   }
@@ -177,6 +185,7 @@ export function mergeTrailers(state, incoming, options = {}) {
     items,
     knownKeys,
     seenKeys,
+    dismissedKeys: current.dismissedKeys,
     bootstrapped: true,
     lastSuccess: now,
   }
@@ -191,4 +200,14 @@ export function newlyDiscoveredKeys(state, incoming, options = {}) {
   return admitTrailers(current, incoming, options)
     .filter((item) => !known.has(item.videoKey))
     .map((item) => item.videoKey)
+}
+
+export function dismissTrailer(state, videoKey) {
+  const current = sanitizeTrailersState(state)
+  if (typeof videoKey !== 'string' || !videoKey) return current
+  return sanitizeTrailersState({
+    ...current,
+    items: current.items.filter((item) => item.videoKey !== videoKey),
+    dismissedKeys: [...current.dismissedKeys, videoKey],
+  })
 }

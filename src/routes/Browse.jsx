@@ -7,7 +7,7 @@ import { attachEpisodeReleaseData } from '../lib/watchingShows'
 import { classifyReleasePlatform } from '../lib/releasePlatforms'
 import { buildAiredEpisodeRows, upsertWatchedRows } from '../lib/bulkMarkWatched'
 import { removeTrackedShow, upsertTrackedShow } from '../lib/finishedShows'
-import BrowseNews from '../components/BrowseNews'
+import BrowseDiscover from '../components/BrowseDiscover'
 import BrowseResultsSkeleton from '../components/BrowseResultsSkeleton'
 import ProgressiveImage from '../components/ProgressiveImage'
 import { upsertTrackedShowForNews } from '../lib/news/trackedShows'
@@ -15,6 +15,18 @@ import { withTimeout } from '../lib/dataLoading'
 
 const DEBOUNCE_MS = 400
 const DELAYED_ADD_THRESHOLD_DAYS = 60
+
+function upsertTrackedShowForDiscover(trackedShows, show) {
+  return upsertTrackedShowForNews(trackedShows, show).map((item) => (
+    item.tmdb_id === show.id
+      ? {
+          ...item,
+          poster_path: show.poster_path ?? item.poster_path ?? null,
+          first_air_date: show.first_air_date ?? item.first_air_date ?? null,
+        }
+      : item
+  ))
+}
 
 export default function Browse() {
   const [query, setQuery] = useState('')
@@ -44,7 +56,7 @@ export default function Browse() {
     withTimeout((signal) => {
       let query = supabase
         .from('tracked_shows')
-        .select('tmdb_id, name, hidden_at')
+        .select('tmdb_id, name, poster_path, hidden_at')
       if (signal && typeof query.abortSignal === 'function') query = query.abortSignal(signal)
       return query
     }, { stage: 'browse-tracked-shows', source: 'supabase' })
@@ -126,7 +138,7 @@ export default function Browse() {
     if (!insertError) {
       knownTrackedIdsRef.current.add(show.id)
       setTrackedIds((prev) => new Set(prev).add(show.id))
-      setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
+      setTrackedShows((prev) => upsertTrackedShowForDiscover(prev, show))
     } else {
       setTrackErrors((prev) => ({ ...prev, [show.id]: 'Could not update tracking. Try again.' }))
       return false
@@ -233,7 +245,7 @@ export default function Browse() {
       await upsertTrackedShow(supabase, show)
       knownTrackedIdsRef.current.add(show.id)
       setTrackedIds((prev) => new Set(prev).add(show.id))
-      setTrackedShows((prev) => upsertTrackedShowForNews(prev, show))
+      setTrackedShows((prev) => upsertTrackedShowForDiscover(prev, show))
       await upsertWatchedRows(rows)
 
       setNotAiredIds((prev) => {
@@ -396,9 +408,11 @@ export default function Browse() {
         </section>
       )}
 
-      {!query.trim() && (
-        <BrowseNews trackedShows={trackedShows} trackedShowsReady={trackedShowsReady} />
-      )}
+      <BrowseDiscover
+        trackedShows={trackedShows}
+        trackedShowsReady={trackedShowsReady}
+        hidden={Boolean(query.trim())}
+      />
     </div>
   )
 }

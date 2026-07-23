@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyTrailersState, sanitizeTrailersState, admitTrailers, mergeTrailers,
-  newlyDiscoveredKeys, readTrailersCache, TRAILERS_CACHE_KEY, DEFAULT_BOOTSTRAP_WINDOW_MS,
+  newlyDiscoveredKeys, readTrailersCache, dismissTrailer, TRAILERS_CACHE_KEY,
+  DEFAULT_BOOTSTRAP_WINDOW_MS,
 } from './trailerStore.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
@@ -113,6 +114,15 @@ describe('mergeTrailers (stale-while-revalidate + seen-state)', () => {
     const first = mergeTrailers(emptyTrailersState(), [trailer({ videoKey: 'a' })], { now: NOW })
     const admittedAgain = admitTrailers(first, [trailer({ videoKey: 'a' })], { now: NOW })
     expect(admittedAgain).toHaveLength(0) // 'a' already cached/seen
+  })
+
+  it('persists a dismissal without weakening the known-key baseline', () => {
+    const first = mergeTrailers(emptyTrailersState(), [trailer({ videoKey: 'a' })], { now: NOW })
+    const dismissed = dismissTrailer(first, 'a')
+    expect(dismissed.items).toEqual([])
+    expect(dismissed.dismissedKeys).toContain('a')
+    expect(dismissed.knownKeys).toContain('a')
+    expect(mergeTrailers(dismissed, [trailer({ videoKey: 'a' })], { now: NOW }).items).toEqual([])
   })
 })
 
