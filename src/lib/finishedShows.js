@@ -5,6 +5,7 @@ import {
   WATCHING_COUNTDOWN_WINDOW_DAYS,
 } from './watchHelpers.js'
 import { istDateISO } from './networkReleaseTiming.js'
+import { invalidateTrackedSession } from './discover/discoverSession.js'
 
 function daysBetween(fromISO, toISO) {
   const [fy, fm, fd] = fromISO.split('-').map(Number)
@@ -81,6 +82,8 @@ export async function restoreTrackedShow(supabase, tmdbId) {
     .update({ finished_at: null, hidden_at: null })
     .eq('tmdb_id', tmdbId)
   if (error) throw error
+  // Un-hiding returns the show to Discover's tracked identity.
+  invalidateTrackedSession()
 }
 
 export async function hideTrackedShow(supabase, tmdbId, hiddenAt = new Date().toISOString()) {
@@ -89,6 +92,8 @@ export async function hideTrackedShow(supabase, tmdbId, hiddenAt = new Date().to
     .update({ hidden_at: hiddenAt })
     .eq('tmdb_id', tmdbId)
   if (error) throw error
+  // Hiding removes the show from Discover's tracked identity.
+  invalidateTrackedSession()
   return hiddenAt
 }
 
@@ -107,6 +112,8 @@ export async function upsertTrackedShow(supabase, show, addedAt = new Date().toI
     { onConflict: 'tmdb_id' },
   )
   if (error) throw error
+  // Adding / reactivating a show changes Discover's tracked identity.
+  invalidateTrackedSession()
 }
 
 // Browse/Watching removal semantics: delete only the tracked-show row.
@@ -117,6 +124,8 @@ export async function removeTrackedShow(supabase, tmdbId) {
     .delete()
     .eq('tmdb_id', tmdbId)
   if (error) throw error
+  // Removing a show changes Discover's tracked identity.
+  invalidateTrackedSession()
 }
 
 // Undo only a newly-created Browse row, and only while it has no watched
@@ -139,6 +148,8 @@ export async function removeTrackedShowIfUnwatched(supabase, tmdbId) {
     .delete()
     .eq('tmdb_id', tmdbId)
   if (error) throw error
+  // Undoing a just-added show changes Discover's tracked identity.
+  invalidateTrackedSession()
 }
 
 // Repairs only the persisted archive state. It never reads or writes

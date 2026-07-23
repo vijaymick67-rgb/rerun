@@ -14,6 +14,7 @@ import BrowseDiscover from './BrowseDiscover.jsx'
 import {
   DISCOVER_SESSION_FRESHNESS_MS,
   discoverSession,
+  invalidateTrackedSession,
   resetDiscoverSession,
 } from '../lib/discover/discoverSession.js'
 import { writeAnnouncementsCache } from '../lib/discover/announcementStore.js'
@@ -210,6 +211,31 @@ describe('Discover session cache — quick tab return', () => {
       await pending.promise
     })
     expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-refreshes the same identity after a cross-route mutation invalidates the session', async () => {
+    const storage = memoryStorage()
+    seedCaches(storage)
+    const load = vi.fn(() => Promise.resolve({ announcements: feed([announcement]), trailers: feed([trailer]) }))
+
+    await mount(
+      <BrowseDiscover trackedShows={[bear]} trackedShowsReady storage={storage} loadDiscoverImpl={load} session={discoverSession} />,
+    )
+    expect(load).toHaveBeenCalledTimes(1)
+    await unmount()
+
+    // A show was changed on another route (e.g. removed in Watching): the shared
+    // mutation invalidates the session even though the identity string here is
+    // unchanged in this synthetic test.
+    invalidateTrackedSession()
+
+    await mount(
+      <BrowseDiscover trackedShows={[bear]} trackedShowsReady storage={storage} loadDiscoverImpl={load} session={discoverSession} />,
+    )
+
+    // Without invalidation this would be a fresh quick-return (0 loads); the
+    // mutation forces a refresh.
+    expect(load).toHaveBeenCalledTimes(2)
   })
 
   it('a tracked-library change refreshes for the new identity even within the window', async () => {

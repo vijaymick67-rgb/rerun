@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   DISCOVER_SESSION_FRESHNESS_MS,
   discoverSession,
+  invalidateTrackedSession,
   isTrackedFetchFresh,
   markTrackedFetched,
   readTrackedContent,
@@ -79,5 +80,27 @@ describe('discover session refresh gate', () => {
     discoverSession.setInFlight(OTHER, second)
     expect(discoverSession.getInFlight(KEY)).toBeNull()
     expect(discoverSession.getInFlight(OTHER)).toBe(second)
+  })
+})
+
+describe('cross-route invalidation', () => {
+  const KEY = '1:The Bear'
+
+  it('clears both gates after a mutation elsewhere while keeping snapshot content', () => {
+    const now = 9_000_000
+    markTrackedFetched(now)
+    discoverSession.markRefreshed(KEY, now)
+    writeTrackedContent({ shows: [{ tmdb_id: 1 }], ids: new Set([1]), knownIds: new Set([1]) })
+    expect(isTrackedFetchFresh(now)).toBe(true)
+    expect(discoverSession.isDiscoverFresh(KEY, now)).toBe(true)
+
+    invalidateTrackedSession()
+
+    // Browse will re-read tracked_shows; BrowseDiscover will refresh even for the
+    // same identity — neither can trust the pre-mutation snapshot.
+    expect(isTrackedFetchFresh(now)).toBe(false)
+    expect(discoverSession.isDiscoverFresh(KEY, now)).toBe(false)
+    // Content is retained so the return still paints instantly (no skeleton).
+    expect(readTrackedContent()).not.toBeNull()
   })
 })

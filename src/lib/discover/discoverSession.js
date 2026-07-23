@@ -97,6 +97,23 @@ export const discoverSession = {
   },
 }
 
+// Cross-route invalidation. Called after any tracked-library mutation (add /
+// remove / hide / restore / import), possibly from a route OTHER than Browse
+// (e.g. removing a show in Watching). Forces the next Browse visit to re-read
+// tracked_shows and lets Discover refresh for the updated identity, so the 60s
+// freshness window can never keep showing a stale library after a change made
+// elsewhere.
+//
+// Content is intentionally KEPT: the return still paints instantly from the last
+// snapshot while the authoritative re-read runs in the background (the re-read
+// updates the tracked-library identity, which in turn drives Discover's own
+// refresh). The Discover freshness slot is also cleared so a same-identity edge
+// case still re-refreshes; any in-flight request is left to settle and self-clear.
+export function invalidateTrackedSession() {
+  trackedFetchedAt = null
+  discoverRefresh = null
+}
+
 // Test-only: restore a clean page-session state.
 export function resetDiscoverSession() {
   trackedContent = null

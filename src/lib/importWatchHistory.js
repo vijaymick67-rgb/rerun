@@ -15,6 +15,7 @@ import {
 } from './tmdb.js'
 import { hasAired } from './watchHelpers.js'
 import { buildAiredEpisodeRows } from './bulkMarkWatched.js'
+import { invalidateTrackedSession } from './discover/discoverSession.js'
 
 const UNIQUE_VIOLATION = '23505'
 
@@ -276,6 +277,8 @@ async function writeTrackedShows(supabase, rows, chunkSize) {
       inserted += data?.length ?? 0
     }
   }
+  // Newly imported tracked shows change Discover's tracked identity.
+  if (inserted > 0) invalidateTrackedSession()
   return { inserted, errors }
 }
 
