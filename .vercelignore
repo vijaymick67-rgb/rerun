@@ -1,0 +1,11 @@
+# Files that must NOT be uploaded to / built by Vercel.
+#
+# Vercel treats every non-underscore `.js` file under /api as its own Serverless
+# Function. The `*.test.js` files here are vitest suites — they import the
+# `vitest` devDependency and are NOT HTTP endpoints. Deploying them is both wrong
+# (an invalid function) and wasteful: counting them pushes the deployment past
+# the Hobby plan's hard limit of 12 Serverless Functions, which fails the whole
+# preview/production deploy. These suites run in CI (GitHub Actions), never on
+# Vercel, so excluding them from the deployment has zero downside.
+*.test.js
+*.spec.js
