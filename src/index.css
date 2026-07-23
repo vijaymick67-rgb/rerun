@@ -914,7 +914,18 @@ body {
   background: var(--color-surface);
   padding-inline: var(--space-related);
   color: var(--color-text);
-  font-size: var(--type-body-size);
+  /* Hold the Discover search field at exactly 16px, NOT the 15px body token.
+     iOS Safari (and the installed standalone PWA) auto-zooms the visual
+     viewport when a focused text field's font-size is below 16px. That zoom
+     enlarges and pans the whole surface — the field spills past the right
+     edge, the two-column results grid looks wider than the screen, the
+     trailing card is clipped, and because SPA tab navigation never resets the
+     zoom, the next tab (e.g. Watching) stays shifted too. Rendering the field
+     at 16px removes the zoom trigger entirely; the layout is otherwise
+     unchanged (the field is width:100% and its 2.75rem min-height is fixed).
+     This is the true cause of the "PWA shifts horizontally after Discover
+     search" report — there is no static width overflow at any phone width. */
+  font-size: 16px;
   outline: none;
 }
 
