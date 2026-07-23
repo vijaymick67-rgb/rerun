@@ -1,72 +1,88 @@
 import { describe, it, expect } from 'vitest'
 import {
-  FRANCHISE, MARVEL_COMPANY_IDS, DC_COMPANY_IDS, EXCLUDED_BROAD_COMPANY_IDS,
-  companyIdList, isConfiguredCompanyId, buildDiscoverParams, classifyFranchiseMedia,
-  assertVerifiedBeforeProduction, isMarvelDcEnabled,
+  FRANCHISE, MARVEL_DC_CATALOGUE, REJECTED_BROAD_COMPANY_IDS,
+  catalogueTargets, isFranchiseMediaId, verificationStatus, isMarvelDcEnabled,
 } from './marvelDcCatalogue.js'
 
-describe('company id configuration', () => {
-  it('documents every id with a label and a verification flag', () => {
-    for (const entry of [...MARVEL_COMPANY_IDS, ...DC_COMPANY_IDS]) {
+describe('catalogue shape', () => {
+  it('documents every entry with a media type, numeric id, title, franchise and a live-verification flag', () => {
+    for (const entry of MARVEL_DC_CATALOGUE) {
+      expect(['tv', 'movie']).toContain(entry.mediaType)
       expect(typeof entry.id).toBe('number')
-      expect(entry.label.length).toBeGreaterThan(0)
-      expect(typeof entry.verified).toBe('boolean')
+      expect(entry.title.length).toBeGreaterThan(0)
+      expect([FRANCHISE.MARVEL, FRANCHISE.DC]).toContain(entry.franchise)
+      expect(typeof entry.liveVerified).toBe('boolean')
     }
   })
 
-  it('never treats a broad parent company as configured', () => {
-    for (const excluded of EXCLUDED_BROAD_COMPANY_IDS) {
-      expect(isConfiguredCompanyId(excluded.id)).toBe(false)
+  it('has at least one entry for each franchise + media-type combination', () => {
+    expect(catalogueTargets({ franchise: FRANCHISE.MARVEL, mediaType: 'tv' }).length).toBeGreaterThan(0)
+    expect(catalogueTargets({ franchise: FRANCHISE.MARVEL, mediaType: 'movie' }).length).toBeGreaterThan(0)
+    expect(catalogueTargets({ franchise: FRANCHISE.DC, mediaType: 'tv' }).length).toBeGreaterThan(0)
+    expect(catalogueTargets({ franchise: FRANCHISE.DC, mediaType: 'movie' }).length).toBeGreaterThan(0)
+  })
+
+  it('is enabled (an explicit allowlist is safe by construction)', () => {
+    expect(isMarvelDcEnabled()).toBe(true)
+  })
+
+  it('reports an honest live-verification status', () => {
+    const status = verificationStatus()
+    expect(status.total).toBe(MARVEL_DC_CATALOGUE.length)
+    expect(status.liveVerified + status.pending).toBe(status.total)
+  })
+})
+
+describe('membership — real franchise media are members', () => {
+  it('recognizes real Marvel TV (Loki) and Marvel movie (Deadpool & Wolverine)', () => {
+    expect(isFranchiseMediaId(84958, 'tv')).toBe(FRANCHISE.MARVEL) // Loki
+    expect(isFranchiseMediaId(533535, 'movie')).toBe(FRANCHISE.MARVEL) // Deadpool & Wolverine
+  })
+
+  it('recognizes real DC TV (Peacemaker) and DC movie (The Batman)', () => {
+    expect(isFranchiseMediaId(110492, 'tv')).toBe(FRANCHISE.DC) // Peacemaker
+    expect(isFranchiseMediaId(414906, 'movie')).toBe(FRANCHISE.DC) // The Batman
+  })
+
+  it('does not confuse media types (a tv id is not a movie member)', () => {
+    expect(isFranchiseMediaId(84958, 'movie')).toBe(null) // Loki is a tv id, not a movie
+  })
+})
+
+describe('false positives — unrelated Disney/Warner titles are excluded', () => {
+  it('excludes an unrelated Disney movie (Moana) even though Disney owns Marvel', () => {
+    expect(isFranchiseMediaId(277834, 'movie')).toBe(null) // Moana
+  })
+
+  it('excludes an unrelated Warner movie (Barbie) even though Warner owns DC', () => {
+    expect(isFranchiseMediaId(346698, 'movie')).toBe(null) // Barbie
+  })
+
+  it('excludes an unrelated tv show (Bluey)', () => {
+    expect(isFranchiseMediaId(82728, 'tv')).toBe(null) // Bluey
+  })
+
+  it('rejects a null/unknown id', () => {
+    expect(isFranchiseMediaId(null, 'movie')).toBe(null)
+    expect(isFranchiseMediaId(999999999, 'tv')).toBe(null)
+  })
+})
+
+describe('broad company ids are documented as rejected, never queried', () => {
+  it('lists the dangerous broad company ids with a reason', () => {
+    const ids = REJECTED_BROAD_COMPANY_IDS.map((e) => e.id)
+    expect(ids).toContain(429) // DC Comics
+    expect(ids).toContain(174) // Warner Bros. Pictures
+    expect(ids).toContain(2) // Walt Disney Pictures
+    for (const entry of REJECTED_BROAD_COMPANY_IDS) {
+      expect(entry.why.length).toBeGreaterThan(0)
     }
-    // Warner Bros. Pictures (174) and Walt Disney Pictures (2) must be excluded.
-    expect(isConfiguredCompanyId(174)).toBe(false)
-    expect(isConfiguredCompanyId(2)).toBe(false)
   })
 
-  it('recognizes configured Marvel/DC ids', () => {
-    expect(isConfiguredCompanyId(420)).toBe(true) // Marvel Studios
-    expect(isConfiguredCompanyId(429)).toBe(true) // DC Comics
-    expect(isConfiguredCompanyId(999999)).toBe(false)
-  })
-})
-
-describe('buildDiscoverParams', () => {
-  it('builds an OR-joined with_companies filter for movies and tv', () => {
-    const marvelMovie = buildDiscoverParams({ franchise: FRANCHISE.MARVEL, mediaType: 'movie' })
-    expect(marvelMovie.path).toBe('/discover/movie')
-    expect(marvelMovie.params.with_companies).toBe(companyIdList(FRANCHISE.MARVEL).join('|'))
-    const dcTv = buildDiscoverParams({ franchise: FRANCHISE.DC, mediaType: 'tv' })
-    expect(dcTv.path).toBe('/discover/tv')
-    expect(dcTv.params.with_companies).toContain('|')
-  })
-})
-
-describe('classifyFranchiseMedia — attribution only, never keywords', () => {
-  it('accepts an item whose production companies intersect the configured ids', () => {
-    const item = { id: 1, name: 'Some Marvel Series', production_company_ids: [420] }
-    expect(classifyFranchiseMedia(item, FRANCHISE.MARVEL)?.franchise).toBe('marvel')
-  })
-
-  it('rejects an item attributed only to a non-configured company', () => {
-    const item = { id: 2, name: 'Spider-Man Fan Film', production_company_ids: [999999] }
-    expect(classifyFranchiseMedia(item, FRANCHISE.MARVEL)).toBe(null)
-  })
-
-  it('does not classify by title keyword when there is no attribution', () => {
-    const item = { id: 3, name: 'Superman Returns (unattributed)' }
-    expect(classifyFranchiseMedia(item, FRANCHISE.DC)).toBe(null)
-  })
-
-  it('trusts a company-filtered discover result flagged __fromDiscover', () => {
-    const item = { id: 4, name: 'Loki', __fromDiscover: true }
-    expect(classifyFranchiseMedia(item, FRANCHISE.MARVEL)?.franchise).toBe('marvel')
-  })
-})
-
-describe('verification gate', () => {
-  it('reports the catalogue as disabled while ids are unverified', () => {
-    // Every configured id currently ships verified:false (honest default).
-    expect(isMarvelDcEnabled()).toBe(false)
-    expect(() => assertVerifiedBeforeProduction()).toThrow('marvel_dc_ids_unverified')
+  it('none of the rejected broad company ids appear as catalogue media ids', () => {
+    const broad = new Set(REJECTED_BROAD_COMPANY_IDS.map((e) => e.id))
+    for (const entry of MARVEL_DC_CATALOGUE) {
+      expect(broad.has(entry.id)).toBe(false)
+    }
   })
 })

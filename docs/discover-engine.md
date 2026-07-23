@@ -25,10 +25,15 @@ harm than a wrong one shown as fact.
 | `announcementStore.js` | Versioned announcements cache (namespace `rerun_discover_announcements:v1`). |
 | `trailerFilter.js` | TMDB video accept/reject rules (site/type/name). |
 | `trailerRank.js` | Trailer model, dedup, deterministic ranking, per-media selection. |
-| `trailerStore.js` | Versioned trailers cache + bootstrap window + seen-state (`rerun_discover_trailers:v1`). |
-| `marvelDcCatalogue.js` | Verified-config layer of Marvel/DC company ids + attribution-only membership. |
-| `tmdbVideos.js` | TMDB video/discover fetching via the existing keyed proxy, cache + bounded concurrency + failure isolation. |
+| `trailerStore.js` | Versioned trailers cache + bootstrap baseline + seen-state (`rerun_discover_trailers:v1`). |
+| `marvelDcCatalogue.js` | Explicit verified media-id allowlist of Marvel/DC TV & movies (membership by TMDB media id, never keyword). |
+| `tmdbVideos.js` | TMDB `videos` fetching via the existing keyed proxy, cache + bounded concurrency + failure isolation. |
 | `discoverClient.js` | Orchestration + error-isolated feed state (the Phase 2 seam). |
+
+Server-side, `api/discover/announcements.js` is the announcements **acquisition**
+endpoint (bounded, batched, event-scoped per-show search), and
+`scripts/verify-marvel-dc.mjs` is a maintainer tool that live-verifies the
+Marvel/DC media ids when a TMDB key is present.
 
 ## Tracked-show coverage
 
@@ -38,6 +43,33 @@ watchlist, upcoming, paused, finished, and hidden. The engine never filters by
 identity registry treats them uniformly. (The Phase 2 wiring will read all
 tracked rows; this PR's engine is status-agnostic by construction — see the
 integration tests.)
+
+## Announcement acquisition (`api/discover/announcements.js`)
+
+The classifier is only as good as the candidates it sees, and a single generic
+"TV news" sample cannot cover every tracked show. Acquisition is therefore a
+dedicated endpoint, not the generic `/api/news` feed:
+
+- The client (`loadAnnouncements`) derives per-show search terms from the
+  identity registry — each show's canonical title plus up to two **verified**
+  alternative titles (never invented aliases) — and POSTs them.
+- The endpoint builds **bounded, batched** queries: several shows' term-groups
+  are OR-joined per query and ANDed with a shared clause scoped to **only the
+  four allowed event categories** (renewed/renewal, canceled/cancelled/"final
+  season", premiere/"release date", cast/"joins the cast"). It never issues one
+  uncontrolled request per show — both terms-per-query and total query count are
+  hard-capped (`MAX_TERMS_PER_QUERY`, `MAX_QUERIES`), and queries run under a
+  small concurrency limit.
+- Each query is **failure-isolated**: one failing query never fails the others;
+  a 502 is surfaced only if *every* query fails (so the client keeps its cache).
+- Raw candidates are normalized (`normalizeArticle`) and **de-duplicated across
+  queries** (`dedupeArticles`) before the response, preserving source name, URL
+  and timestamp for client-side deterministic classification.
+- The GNews key stays server-side. With no key configured the endpoint returns
+  an **empty** candidate set (`configured: false`) — never a generic feed.
+
+This is a clean retirement path: Phase 2 removes the legacy generic-news code
+without touching this endpoint.
 
 ## Announcement acceptance pipeline
 
@@ -182,45 +214,80 @@ Trailer when distinct and newer.
 The card's navigation target is `https://www.youtube.com/watch?v=<key>` (never an
 embed URL), so a tap can hand off to the YouTube app on iOS. No autoplay.
 
-### Trailer freshness & seen-state
+### Trailer freshness & the bootstrap baseline
 
-First bootstrap admits only videos published within a configurable window
-(default 150 days); undated videos are excluded on bootstrap. After bootstrap the
-cache retains seen keys, admits newly discovered qualifying videos, preserves
-currently-cached items during background refresh (stale-while-revalidate), and
-prunes safely. `fetched`, `displayed`, and `seen` are tracked distinctly; a video
-is not marked seen merely because it was fetched. No UI read controls are added
-in this PR.
+On the **first** load for a set of shows TMDB returns the entire back-catalogue
+of qualifying trailers — often years old. Two things must both hold: we must not
+dump all of it into the feed, and we must not let it sneak in on the *next*
+refresh either. The store guarantees this with an explicit baseline:
+
+- **Display**: on first bootstrap only videos published within a configurable
+  window (default 150 days) enter the feed; undated videos are not displayed.
+- **Baseline (`knownKeys`)**: *every* qualifying key observed on bootstrap —
+  displayed or not, dated or undated — is recorded as baseline-known. This is the
+  anchor that makes "new" meaningful.
+- **After bootstrap**: a video is admitted only if its key is **not already in
+  the baseline** (genuinely newly discovered). A previously-excluded historical
+  key is in `knownKeys`, so when the same old catalogue comes back on the next
+  refresh it stays excluded — "new" is never inferred merely from an old video
+  not having been displayed.
+- A genuinely newly published trailer — even for a long-finished show — has a
+  key we have never seen and is admitted, arriving alongside the old catalogue.
+
+Three key-sets are persisted separately so display semantics never bleed into
+"new" detection: `knownKeys` (baseline, drives admission), `seenKeys`
+(read-state placeholder for a future UI badge), and `items` (currently
+displayed). Stale-while-revalidate preserves cached items during a background
+refresh; the cache prunes and caps safely. No UI read controls are added in this
+PR. The cache schema is bumped to **v2** to add the baseline (Scope O migration:
+an older-shaped cache is discarded and re-bootstraps cleanly).
 
 ## Marvel/DC catalogue method (the only catalogue exception)
 
 Beyond tracked shows, Trailers additionally include official Marvel/DC TV & movie
-trailers — and nothing broader. Membership is decided **only by TMDB's own
-production-company attribution** via `/discover/{tv,movie}?with_companies=<ids>`,
-never by title keyword or synopsis.
+trailers — and nothing broader.
 
-### Configured company ids (isolated, documented)
+### Why an explicit media-id allowlist, not a company discover query
 
-Marvel: `420` (Marvel Studios), `7505` (Marvel Entertainment), `19551` (Marvel
-Studios secondary attribution). DC: `429` (DC Comics), `9993` (DC Entertainment),
-`128064` (DC Studios).
+A `/discover?with_companies=<id>` query is only as safe as the company id is
+narrow, and the obvious ids are dangerously broad: `429` "DC Comics" is a loose
+source-material credit attached to a huge, unrelated set; `174`/`2` (Warner Bros.
+Pictures / Walt Disney Pictures) are entire studio slates. One wrong or
+loosely-attributed id floods the feed with unrelated media — the exact failure to
+avoid.
 
-Explicitly **excluded** as too broad (never queried): `2` Walt Disney Pictures,
-`3` Pixar, `174` Warner Bros. Pictures, `128` Warner Bros. Television, `6704`
-The Walt Disney Company.
+So membership is an **explicit allowlist of specific TMDB media ids**
+(`MARVEL_DC_CATALOGUE`), each recording `{ mediaType, id, title, franchise,
+liveVerified }`. This is **safe by construction**: a wrong or stale entry can
+only add or miss *one* title's trailers — it can never pull an unrelated
+catalogue. Membership (`isFranchiseMediaId`) never inspects title or synopsis
+text. The broad company ids (`429`, `174`, `2`, `128`, `6704`) are documented in
+`REJECTED_BROAD_COMPANY_IDS` precisely so no maintainer reintroduces a company
+query.
 
-### Verification status & limitation (honest)
+Each catalogue target resolves to `/{tv|movie}/{id}/videos` and its videos go
+through the **exact same** strict `trailerFilter` + `trailerRank` pipeline as
+tracked shows (see the franchise integration test: an official franchise trailer
+is accepted and tagged, a franchise clip is rejected).
 
-These are the well-known, widely-documented TMDB company ids for these entities,
-but they were **not verified against a live TMDB response in this build
-environment** (no TMDB key available here). Every configured id ships
-`verified: false`, and `assertVerifiedBeforeProduction()` keeps the Marvel/DC
-exception **disabled** (`isMarvelDcEnabled()` returns `false`) until each id is
-confirmed live. `discoverClient` therefore fetches trailers for tracked shows
-only in this build. To enable the exception: verify each id against
-`/discover/{tv,movie}?with_companies=<id>` on the live proxy, confirm the result
-set is not a broad unrelated catalogue, then flip `verified` to `true`. This is
-the "report the limitation rather than guess" path.
+### Enabled status & honest live-verification limitation
+
+The exception is **enabled** (`isMarvelDcEnabled()` returns `true`) because an
+explicit allowlist does not carry the breadth risk that would force a company
+query to stay gated. However, the media ids were curated from TMDB's public
+catalogue and were **not re-verified against a live TMDB response in the build
+sandbox** — no TMDB key is available there (outbound TMDB calls need the
+server-side key held only in Vercel). Every entry therefore ships
+`liveVerified: false`.
+
+`scripts/verify-marvel-dc.mjs` performs the live check with the real key
+(`TMDB_API_KEY=… node scripts/verify-marvel-dc.mjs`): it fetches each id, compares
+the resolved title to the expected title, and exits non-zero on any mismatch. A
+maintainer runs it in a key-holding environment and flips `liveVerified` to
+`true`. Because a wrong id can at worst affect a single title (not the whole
+feed), enabling the feature while that per-id confirmation is pending is safe —
+this is the "explicit verified catalogue/configuration boundary rather than
+guessing" path the requirement calls for.
 
 ## Cache schema & versioning (migration)
 
@@ -228,7 +295,8 @@ Three separate, versioned localStorage namespaces, all distinct from the legacy
 `rerun_news_cache:v1`:
 
 - `rerun_discover_announcements:v1`
-- `rerun_discover_trailers:v1`
+- `rerun_discover_trailers:v1` (internal schema `version: 2` — carries the
+  bootstrap baseline; a stored `version: 1` payload is discarded and re-bootstraps)
 - `rerun_discover_video_cache:v1:` / `rerun_discover_video_time:v1:` (TMDB fetch cache)
 
 Each has robust JSON parsing, an explicit version, a TTL / max-age, bounded
@@ -238,30 +306,41 @@ generic articles are not reinterpreted as announcements.
 
 ## Refresh strategy & API efficiency
 
-- Per-show `videos` cached 6h; Marvel/DC discover cached 24h (longer TTL).
-- Bounded concurrency (default 4) across tracked-show video fetches.
+- Per-media `videos` cached 6h (tracked shows and franchise targets alike).
+- Bounded concurrency (default 4) across tracked-show and franchise video fetches.
+- Announcement acquisition caps both terms-per-query and total query count, runs
+  queries under a concurrency limit, and de-duplicates candidates server-side.
 - Stale-while-revalidate: cached items stay visible during refresh.
-- Failure isolation: one show's fetch failing yields an empty list, never
-  failing the batch; one feed failing never erases the other's cache.
-- The TMDB key is never exposed client-side (all requests go through the proxy).
+- Failure isolation: one show/target fetch failing yields an empty list, never
+  failing the batch; one announcement query failing never fails the rest; one
+  feed failing never erases the other's cache.
+- No key is ever exposed client-side — TMDB via the `/api/tmdb` proxy, GNews only
+  inside `api/discover/announcements.js`.
 
 ## Legacy news retirement status
 
 Phase 1 stops extending the generic-news architecture and introduces the new
-`announcements`/`trailers` modules with clean boundaries. The legacy
-`src/lib/news/*`, `api/news.js`, `BrowseNews.jsx`, and `rerun_news_cache:v1`
-remain in place as a temporary compatibility layer so production stays stable.
-Phase 2 will switch the Discover page to the new feeds and retire the generic
-"Latest from your shows" and "TV headlines" sections and the legacy news modules.
+`announcements`/`trailers` modules with clean boundaries, including a dedicated
+`api/discover/announcements.js` acquisition endpoint that does not touch the
+legacy news code. The legacy `src/lib/news/*`, `api/news.js`, `BrowseNews.jsx`,
+and `rerun_news_cache:v1` remain in place as a temporary compatibility layer so
+production stays stable. Announcement acquisition reuses two pure, stable helpers
+from the news lib (`normalizeArticle`, `dedupeArticles`) but not its feed
+aggregation. Phase 2 will switch the Discover page to the new feeds and retire the
+generic "Latest from your shows" and "TV headlines" sections and the legacy news
+modules.
 
 ## Known limitations
 
-- Marvel/DC company ids are unverified in this environment; the exception is
-  disabled by default (see above).
-- Announcements are only as good as the configured article sources
-  (`api/news.js` curated feeds: Deadline, TVLine, plus optional GNews). Phase 1
-  reuses that candidate pool and applies strict classification on top.
+- The Marvel/DC media ids are enabled but not yet **live-verified** in this build
+  (no TMDB key in the sandbox). They ship `liveVerified: false`; run
+  `scripts/verify-marvel-dc.mjs` with a key to confirm and flip the flags. The
+  allowlist is safe by construction (a wrong id affects at most one title).
+- Announcement acquisition depends on a configured GNews key server-side. Without
+  it the endpoint returns an empty candidate set (never a generic feed), so the
+  Announcements feed is empty until the key is present. Adding official
+  press/trade RSS *search* providers is possible future work.
 - Person-name extraction for cast additions uses capitalization heuristics on the
   raw headline; ambiguous guest/recurring distinctions default to rejection.
-- Live TMDB/API validation was not performed in this build (no key); tests use
+- No live TMDB/GNews calls were made in this build (no keys available); tests use
   fixtures shaped from official response forms.

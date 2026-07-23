@@ -29,8 +29,13 @@ describe('sanitizeTrailersState', () => {
   })
 
   it('dedupes items by video key', () => {
-    const state = sanitizeTrailersState({ version: 1, items: [trailer(), trailer()], seenKeys: [], bootstrapped: true })
+    const state = sanitizeTrailersState({ version: 2, items: [trailer(), trailer()], knownKeys: [], seenKeys: [], bootstrapped: true })
     expect(state.items).toHaveLength(1)
+  })
+
+  it('discards an older cache-schema version (Scope O migration)', () => {
+    expect(sanitizeTrailersState({ version: 1, items: [trailer()], seenKeys: ['k1'], bootstrapped: true }))
+      .toEqual(emptyTrailersState())
   })
 })
 
@@ -48,16 +53,50 @@ describe('bootstrap window', () => {
     expect(admitted).toHaveLength(0)
   })
 
-  it('admits older-but-new videos after bootstrap (finished show gets a new trailer)', () => {
+  it('admits a genuinely new (never-seen) trailer after bootstrap, even for a finished show', () => {
     const merged = mergeTrailers(emptyTrailersState(), [trailer({ videoKey: 'seed' })], { now: NOW })
-    // bootstrapped now true; an item published just outside the window is still
-    // admitted because bootstrap is complete.
-    const outsideWindow = trailer({
+    // bootstrapped now true; an item published just outside the window but with a
+    // key we have never seen is still admitted because it is genuinely new.
+    const brandNew = trailer({
       id: 'trailer:late', videoKey: 'late',
       publishedAt: new Date(NOW - DEFAULT_BOOTSTRAP_WINDOW_MS - 1000).toISOString(),
     })
-    const admitted = admitTrailers(merged, [outsideWindow], { now: NOW })
+    const admitted = admitTrailers(merged, [brandNew], { now: NOW })
     expect(admitted.map((t) => t.videoKey)).toContain('late')
+  })
+
+  // The core regression: on first bootstrap TMDB returns [recent, ...many old].
+  // Only the recent one is displayed, but ALL of them must be baselined so the
+  // old ones stay excluded when they come back on the next refresh.
+  it('records every qualifying key as baseline on bootstrap so old videos never resurface', () => {
+    const recent = trailer({ id: 'trailer:new', videoKey: 'new', publishedAt: '2026-07-01T00:00:00.000Z' })
+    const old1 = trailer({ id: 'trailer:o1', videoKey: 'o1', publishedAt: '2023-01-01T00:00:00.000Z' })
+    const old2 = trailer({ id: 'trailer:o2', videoKey: 'o2', publishedAt: '2022-05-01T00:00:00.000Z' })
+    const undated = trailer({ id: 'trailer:u', videoKey: 'u', publishedAt: null })
+
+    const bootstrap = mergeTrailers(emptyTrailersState(), [recent, old1, old2, undated], { now: NOW })
+    // Only the recent video is displayed on bootstrap...
+    expect(bootstrap.items.map((t) => t.videoKey)).toEqual(['new'])
+    // ...but every qualifying key (displayed, old, and undated) is baselined.
+    expect(new Set(bootstrap.knownKeys)).toEqual(new Set(['new', 'o1', 'o2', 'u']))
+
+    // Second refresh returns the same catalogue again: nothing old is admitted.
+    const readmit = admitTrailers(bootstrap, [recent, old1, old2, undated], { now: NOW })
+    expect(readmit).toHaveLength(0)
+    const second = mergeTrailers(bootstrap, [recent, old1, old2, undated], { now: NOW })
+    expect(second.items.map((t) => t.videoKey)).toEqual(['new'])
+  })
+
+  it('still admits a genuinely new trailer arriving alongside the old catalogue on a later refresh', () => {
+    const recent = trailer({ id: 'trailer:new', videoKey: 'new', publishedAt: '2026-07-01T00:00:00.000Z' })
+    const old = trailer({ id: 'trailer:o1', videoKey: 'o1', publishedAt: '2023-01-01T00:00:00.000Z' })
+    const bootstrap = mergeTrailers(emptyTrailersState(), [recent, old], { now: NOW })
+
+    // A finished show publishes a brand-new trailer; it arrives next to the old
+    // catalogue. Only the never-seen key is admitted.
+    const fresh = trailer({ id: 'trailer:fresh', videoKey: 'fresh', publishedAt: '2026-07-20T00:00:00.000Z' })
+    const admitted = admitTrailers(bootstrap, [recent, old, fresh], { now: NOW })
+    expect(admitted.map((t) => t.videoKey)).toEqual(['fresh'])
   })
 })
 

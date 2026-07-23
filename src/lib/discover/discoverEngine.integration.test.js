@@ -8,6 +8,7 @@ import { buildIdentityRegistry } from './identities.js'
 import { classifyAnnouncement } from './announcementClassifier.js'
 import { ANNOUNCEMENTS_CACHE_KEY } from './announcementStore.js'
 import { TRAILERS_CACHE_KEY } from './trailerStore.js'
+import { catalogueTargets } from './marvelDcCatalogue.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
 
@@ -60,15 +61,23 @@ describe('Scope S — no untracked ordinary media leaks into either feed', () =>
     expect(state.items.find((i) => /ted lasso/i.test(i.showName ?? ''))).toBeUndefined()
   })
 
-  it('fetches trailers only for tracked show ids', async () => {
+  it('fetches trailers only for tracked show ids and the explicit franchise allowlist — never a broad discover query', async () => {
     const requested = []
     await loadTrailers({
       trackedShows: [{ tmdb_id: 1, name: 'From' }], storage: memoryStorage(), now: NOW,
       fetchImpl: async (url) => { requested.push(url); return jsonResponse({ results: [] }) },
     })
-    // Only /tv/1/videos should be requested — no discover / untracked ids
-    // (Marvel/DC exception is disabled until ids are verified).
-    expect(requested.every((u) => u.includes('/tv/1/videos'))).toBe(true)
+    // No broad /discover company query is ever issued.
+    expect(requested.some((u) => u.includes('/discover/'))).toBe(false)
+    // Every request is either the tracked show's videos or an explicit
+    // catalogue target's videos — nothing arbitrary leaks in.
+    const allowed = new Set([
+      '/tv/1/videos',
+      ...catalogueTargets().map((t) => `/${t.mediaType}/${t.id}/videos`),
+    ])
+    expect(requested.every((u) => [...allowed].some((path) => u.includes(path)))).toBe(true)
+    // The franchise allowlist really was exercised (movies + tv both fetched).
+    expect(requested.some((u) => /\/movie\/\d+\/videos/.test(u))).toBe(true)
   })
 })
 
@@ -97,6 +106,42 @@ describe('Scope S — YouTube URLs and no UI dependency', () => {
       fetchImpl: async () => jsonResponse({ results: [{ key: 'abc', site: 'YouTube', type: 'Trailer', name: 'Official Trailer', official: true, iso_639_1: 'en', published_at: '2026-07-10T00:00:00.000Z' }] }),
     })
     expect(state.items[0].youtubeUrl).toBe('https://www.youtube.com/watch?v=abc')
+  })
+})
+
+describe('Scope S — acquisition reaches shows a generic feed would miss', () => {
+  it('discovers an announcement for a tracked show via per-show request terms', async () => {
+    // The endpoint (simulated here) only returns the niche article when the
+    // client actually asks for that show by name — proving loadAnnouncements
+    // sends per-show terms rather than depending on a shared top-ten feed.
+    const niche = { title: 'A Man on the Inside renewed for Season 2 at Netflix', publishedAt: '2026-07-20T00:00:00.000Z', sourceName: 'Deadline', url: 'https://deadline.com/niche', canonicalUrl: 'https://deadline.com/niche' }
+    const fetchImpl = async (url, opts) => {
+      const body = JSON.parse(opts?.body ?? '{}')
+      const titles = (body.shows ?? []).map((s) => s.title)
+      return jsonResponse({ articles: titles.includes('A Man on the Inside') ? [niche] : [] })
+    }
+    const state = await loadAnnouncements({ trackedShows: ALL_STATUS_SHOWS, storage: memoryStorage(), fetchImpl, now: NOW })
+    expect(state.items.map((i) => i.showId)).toContain(20)
+  })
+})
+
+describe('Scope S — franchise trailers go through the same strict filter', () => {
+  it('accepts an official franchise trailer and rejects a franchise clip, tagging the franchise', async () => {
+    const target = catalogueTargets({ franchise: 'marvel', mediaType: 'tv' })[0]
+    const fetchImpl = async (url) => {
+      if (url.includes(`/tv/${target.id}/videos`)) {
+        return jsonResponse({ results: [
+          { key: 'mtrail', site: 'YouTube', type: 'Trailer', name: 'Official Trailer', official: true, iso_639_1: 'en', published_at: '2026-07-10T00:00:00.000Z' },
+          { key: 'mclip', site: 'YouTube', type: 'Clip', name: 'Official Clip', official: true, iso_639_1: 'en', published_at: '2026-07-10T00:00:00.000Z' },
+        ] })
+      }
+      return jsonResponse({ results: [] })
+    }
+    const state = await loadTrailers({ trackedShows: [], storage: memoryStorage(), now: NOW, fetchImpl })
+    const franchiseItem = state.items.find((t) => t.videoKey === 'mtrail')
+    expect(franchiseItem).toBeTruthy()
+    expect(franchiseItem.franchise).toBe('marvel')
+    expect(state.items.find((t) => t.videoKey === 'mclip')).toBeUndefined() // clip rejected
   })
 })
 

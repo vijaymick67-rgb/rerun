@@ -16,12 +16,15 @@ import { readAnnouncementsCache, writeAnnouncementsCache, mergeAnnouncements } f
 import { classifyVideo } from './trailerFilter.js'
 import { buildTrailer, rankTrailers } from './trailerRank.js'
 import { readTrailersCache, writeTrailersCache, mergeTrailers } from './trailerStore.js'
-import { fetchMediaVideos, fetchDiscover, mapWithConcurrency, DEFAULT_CONCURRENCY } from './tmdbVideos.js'
-import {
-  FRANCHISE, buildDiscoverParams, classifyFranchiseMedia, isMarvelDcEnabled,
-} from './marvelDcCatalogue.js'
+import { fetchMediaVideos, mapWithConcurrency, DEFAULT_CONCURRENCY } from './tmdbVideos.js'
+import { catalogueTargets, isMarvelDcEnabled } from './marvelDcCatalogue.js'
 
-export const NEWS_ENDPOINT = '/api/news?limit=10'
+// Dedicated announcements acquisition endpoint (see api/discover/announcements.js).
+// It runs bounded, batched, event-scoped per-show searches — NOT the generic
+// /api/news sample — so the classifier gets real per-show candidates.
+export const ANNOUNCEMENTS_ENDPOINT = '/api/discover/announcements'
+// How many verified alternative titles per show we ask the endpoint to search.
+export const MAX_REQUEST_ALIASES = 2
 
 export function emptyFeedState() {
   return { items: [], loading: false, refreshing: false, error: null, lastSuccess: null }
@@ -36,6 +39,17 @@ function seasonFromName(name) {
   return match ? Number(match[1]) : null
 }
 
+// Derive the bounded per-show search terms the acquisition endpoint needs from
+// the identity registry: canonical title + a capped number of VERIFIED
+// alternative titles (never invented aliases).
+function announcementRequestShows(registry) {
+  return registry.list.map((identity) => ({
+    id: identity.tmdbId,
+    title: identity.canonicalTitle,
+    aliases: (identity.alternativeTitles ?? []).slice(0, MAX_REQUEST_ALIASES),
+  }))
+}
+
 // ---- Announcements -------------------------------------------------------
 export async function loadAnnouncements({
   trackedShows = [], detailsById = {}, storage = globalThis.localStorage,
@@ -44,7 +58,11 @@ export async function loadAnnouncements({
   const cached = readAnnouncementsCache(storage, now)
   const registry = buildIdentityRegistry(trackedShows, detailsById)
   try {
-    const response = await fetchImpl(NEWS_ENDPOINT, { headers: { Accept: 'application/json' } })
+    const response = await fetchImpl(ANNOUNCEMENTS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ shows: announcementRequestShows(registry) }),
+    })
     if (!response?.ok) throw new Error('announcements_source_unavailable')
     const payload = await response.json()
     const articles = Array.isArray(payload?.articles) ? payload.articles : []
@@ -90,29 +108,24 @@ function trailersForShow(show, videos) {
 }
 
 async function franchiseTrailers(fetchOptions) {
-  // Guarded: the Marvel/DC exception stays OFF until company ids are verified
-  // live (honest default). isMarvelDcEnabled() returns false in this build.
+  // The Marvel/DC exception is an EXPLICIT media-id allowlist (see
+  // marvelDcCatalogue.js) — membership is per-title, so it cannot pull unrelated
+  // Disney/Warner catalogues. Each target's videos go through the SAME strict
+  // trailerFilter (classifyVideo) + trailerRank pipeline as tracked shows.
   if (!isMarvelDcEnabled()) return []
-  const collected = []
-  for (const franchise of [FRANCHISE.MARVEL, FRANCHISE.DC]) {
-    for (const mediaType of ['tv', 'movie']) {
-      const query = buildDiscoverParams({ franchise, mediaType })
-      if (!query) continue
-      const items = await fetchDiscover(query.path, query.params, fetchOptions)
-      const confirmed = items.map((item) => classifyFranchiseMedia(item, franchise)).filter(Boolean)
-      const withVideos = await mapWithConcurrency(confirmed, async (item) => {
-        const videos = await fetchMediaVideos(mediaType, item.id, fetchOptions)
-        const context = {
-          mediaType, mediaId: item.id, trackedShowId: null,
-          title: item.name ?? item.title ?? null, posterPath: item.poster_path ?? null, franchise,
-        }
-        return (Array.isArray(videos) ? videos : [])
-          .filter((video) => classifyVideo(video).accepted)
-          .map((video) => buildTrailer(video, { ...context, seasonNumber: seasonFromName(video.name) }))
-      }, fetchOptions.concurrency ?? DEFAULT_CONCURRENCY)
-      for (const list of withVideos) if (Array.isArray(list)) collected.push(...list)
+  const targets = catalogueTargets()
+  const perTarget = await mapWithConcurrency(targets, async (target) => {
+    const videos = await fetchMediaVideos(target.mediaType, target.id, fetchOptions)
+    const context = {
+      mediaType: target.mediaType, mediaId: target.id, trackedShowId: null,
+      title: target.title, posterPath: null, franchise: target.franchise,
     }
-  }
+    return (Array.isArray(videos) ? videos : [])
+      .filter((video) => classifyVideo(video).accepted)
+      .map((video) => buildTrailer(video, { ...context, seasonNumber: seasonFromName(video.name) }))
+  }, fetchOptions.concurrency ?? DEFAULT_CONCURRENCY)
+  const collected = []
+  for (const list of perTarget) if (Array.isArray(list)) collected.push(...list)
   return collected
 }
 

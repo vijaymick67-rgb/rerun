@@ -86,17 +86,12 @@ export async function mapWithConcurrency(items, mapper, concurrency = DEFAULT_CO
 }
 
 // Fetch the `videos` array for one TV show (or movie). Uses append-free direct
-// endpoint. Returns [] on any failure.
+// endpoint. Returns [] on any failure. This is the ONLY TMDB endpoint the
+// trailers engine calls — both tracked shows and the explicit Marvel/DC
+// media-id allowlist resolve to /{tv|movie}/{id}/videos, so there is no broad
+// /discover company query anywhere in the trailer path.
 export async function fetchMediaVideos(mediaType, mediaId, options = {}) {
   const type = mediaType === 'movie' ? 'movie' : 'tv'
   const body = await fetchTmdbJson(`/${type}/${mediaId}/videos`, options)
   return Array.isArray(body?.results) ? body.results : []
-}
-
-// Fetch a franchise discover page (Marvel/DC), longer TTL. Returns the results
-// array (each tagged __fromDiscover so classifyFranchiseMedia can trust it).
-export async function fetchDiscover(path, params, options = {}) {
-  const body = await fetchTmdbJson(path, { ...options, params, ttlMs: options.ttlMs ?? DISCOVER_TTL_MS })
-  const results = Array.isArray(body?.results) ? body.results : []
-  return results.map((item) => ({ ...item, __fromDiscover: true }))
 }

@@ -119,7 +119,7 @@ describe('loadDiscover — independent feeds', () => {
   it('one feed can fail while the other succeeds', async () => {
     const storage = memoryStorage()
     const fetchImpl = async (url) => {
-      if (url.startsWith('/api/news')) return jsonResponse(null, false) // announcements down
+      if (url.startsWith('/api/discover/announcements')) return jsonResponse(null, false) // announcements down
       return jsonResponse({ results: [{ key: 'k7', site: 'YouTube', type: 'Trailer', name: 'Official Trailer', official: true, iso_639_1: 'en', published_at: '2026-07-12T00:00:00.000Z' }] })
     }
     const state = await loadDiscover({ trackedShows: TRACKED, storage, now: NOW, fetchImpl })
