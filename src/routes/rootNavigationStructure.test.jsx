@@ -20,11 +20,15 @@ function renderApp(path) {
     </MemoryRouter>,
   )
 }
+// Settings is intentionally excluded here (Phase 3B): with the bottom bar
+// now icon-only, /settings needs its own visible page heading rather than
+// relying on a redundant nav label the bar no longer shows. Browse,
+// Watching and Stats still identify themselves via their tab icon plus
+// content, so their redundant root <h1> stays removed.
 const rootPages = [
   ['./Browse.jsx', 'Browse'],
   ['./Watching.jsx', 'Watching'],
   ['./Stats.jsx', 'Stats'],
-  ['./Settings.jsx', 'Settings'],
 ]
 
 describe('root navigation polish', () => {
@@ -66,6 +70,15 @@ describe('root navigation polish', () => {
 
   it.each(rootPages)('removes the redundant %s root heading', (path, heading) => {
     expect(source(path)).not.toMatch(new RegExp(`<h1[^>]*>${heading}</h1>`))
+  })
+
+  it('gives /settings its own visible "Settings" page heading (Phase 3B), with no extra eyebrow line', () => {
+    const settingsSource = source('./Settings.jsx')
+    expect(settingsSource).toMatch(/<h1[^>]*>Settings<\/h1>/)
+    // No invented eyebrow/kicker copy above the heading.
+    for (const forbidden of ['Preferences', 'Control room', 'System', 'Personal setup']) {
+      expect(settingsSource).not.toContain(forbidden)
+    }
   })
 
   it('keeps detail headings unchanged', () => {

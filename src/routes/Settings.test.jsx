@@ -189,6 +189,52 @@ afterEach(async () => {
   delete globalThis.Notification
 })
 
+describe('Settings: page structure (Phase 3B)', () => {
+  it('shows a single visible "Settings" page heading', async () => {
+    await mountSettings()
+    const heading = container.querySelector('h1')
+    expect(heading).not.toBeNull()
+    expect(heading.textContent).toBe('Settings')
+  })
+
+  it('keeps the existing section titles, in the existing order', async () => {
+    await mountSettings()
+    const sectionTitles = [...container.querySelectorAll('h2')].map((h) => h.textContent)
+    expect(sectionTitles).toEqual(['Backup & Restore', 'Notifications', 'Account'])
+  })
+
+  it('does not introduce unrelated new settings rows', async () => {
+    await mountSettings()
+    for (const invented of ['Motion', 'Poster Density', 'Opening Tab', 'Confirmations']) {
+      expect(container.textContent).not.toContain(invented)
+    }
+  })
+
+  it('keeps every action row at a 44px-minimum tap target', async () => {
+    await mountSettings()
+    for (const label of ['Export backup', 'Import backup', 'Set recovery password', 'Sign out']) {
+      const row = getByText(label).closest('button')
+      expect(row.className).toContain('min-h-11')
+    }
+  })
+
+  it('visually separates the destructive Sign out row and keeps its accessible label plain text', async () => {
+    await mountSettings()
+    const signOutRow = getByText('Sign out').closest('button')
+    expect(signOutRow.className).toContain('settings-action-row--destructive')
+  })
+
+  it('keeps the notification time control a native <select> element', async () => {
+    globalThis.Notification = { permission: 'granted' }
+    pushClientMock.getExistingPushSubscription.mockResolvedValue({ endpoint: 'https://web.push.apple.com/existing' })
+    await mountSettings()
+    await flush()
+    const select = container.querySelector('#notification-time-select')
+    expect(select).not.toBeNull()
+    expect(select.tagName).toBe('SELECT')
+  })
+})
+
 describe('Settings: Backup & Restore section', () => {
   it('renders Export backup and Import backup action rows', async () => {
     await mountSettings()

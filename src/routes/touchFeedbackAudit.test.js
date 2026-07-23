@@ -101,8 +101,8 @@ describe('touch feedback: minimum target sizing on icon-only and dialog buttons'
   })
 
   it('ConfirmDialog Cancel/Confirm buttons meet the 44px minimum height', () => {
-    expect(confirmDialog).toContain('motion-press min-h-11 rounded-md px-3 py-1.5')
-    expect((confirmDialog.match(/motion-press min-h-11 rounded-md px-3 py-1\.5/g) ?? []).length).toBe(2)
+    expect(confirmDialog).toContain('motion-press min-h-11 rounded-md px-4 py-1.5')
+    expect((confirmDialog.match(/motion-press min-h-11 rounded-md px-4 py-1\.5/g) ?? []).length).toBe(2)
   })
 })
 
@@ -110,8 +110,11 @@ describe('touch feedback: destructive confirmation still required', () => {
   it('ConfirmDialog still requires an explicit onConfirm click and keeps its alertdialog semantics', () => {
     expect(confirmDialog).toContain('role="alertdialog"')
     expect(confirmDialog).toContain('onClick={onConfirm}')
-    // Escape still just calls onCancel — no auto-confirm behavior was introduced.
-    expect(confirmDialog).toContain("if (e.key === 'Escape') onCancel()")
+    // Escape still just calls onCancel — no auto-confirm behavior was introduced
+    // (Phase 3B added a focus trap in the same handler, but Escape's own
+    // branch is untouched: it calls onCancel and nothing else).
+    expect(confirmDialog).toContain("if (e.key === 'Escape') {")
+    expect(confirmDialog).toContain('onCancel()')
   })
 })
 
