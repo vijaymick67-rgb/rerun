@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyTrailersState, sanitizeTrailersState, admitTrailers, mergeTrailers,
   newlyDiscoveredKeys, readTrailersCache, dismissTrailer, TRAILERS_CACHE_KEY,
+  isCachedTrailerEligible,
 } from './trailerStore.js'
 import { DISCOVER_TRAILER_MAX_AGE_MS } from './trailerFreshness.js'
 
@@ -10,6 +11,7 @@ const NOW = Date.parse('2026-07-23T00:00:00.000Z')
 function trailer(overrides = {}) {
   return {
     id: 'trailer:k1', videoKey: 'k1', youtubeUrl: 'https://www.youtube.com/watch?v=k1',
+    videoType: 'Trailer', videoName: 'Official Trailer',
     official: true, publishedAt: '2026-07-01T00:00:00.000Z', ...overrides,
   }
 }
@@ -191,5 +193,124 @@ describe('cache round-trip', () => {
     const correctedDate = { ...expired, publishedAt: '2026-07-22T00:00:00.000Z' }
     expect(admitTrailers(sanitized, [correctedDate], { now: NOW })).toEqual([])
     expect(newlyDiscoveredKeys(sanitized, [correctedDate], { now: NOW })).toEqual([])
+  })
+
+  it('prunes recent cached non-trailer and episodic promotion names on read', () => {
+    const invalid = [
+      trailer({
+        id: 'trailer:countdown-copy',
+        videoKey: 'countdown-copy',
+        videoName: 'One week until a brand new day',
+      }),
+      trailer({
+        id: 'trailer:episode-preview',
+        videoKey: 'episode-preview',
+        videoName: 'Episode 4 Preview',
+      }),
+      trailer({
+        id: 'trailer:first-look',
+        videoKey: 'first-look',
+        videoName: 'First Look Trailer',
+      }),
+      trailer({
+        id: 'trailer:promo',
+        videoKey: 'promo',
+        videoName: 'Official Promo Trailer',
+      }),
+      trailer({
+        id: 'trailer:countdown',
+        videoKey: 'countdown',
+        videoName: 'Official Trailer Countdown',
+      }),
+    ]
+    const storage = memoryStorage({
+      [TRAILERS_CACHE_KEY]: JSON.stringify({
+        version: 2,
+        items: invalid,
+        knownKeys: [],
+        seenKeys: [],
+        dismissedKeys: [],
+        bootstrapped: true,
+        lastSuccess: NOW,
+      }),
+    })
+
+    expect(readTrailersCache(storage, NOW).items).toEqual([])
+  })
+
+  it('preserves recent valid trailer, teaser, and final-trailer cache variants', () => {
+    const valid = [
+      trailer({ id: 'trailer:main', videoKey: 'main', videoName: 'Official Trailer' }),
+      trailer({
+        id: 'trailer:teaser',
+        videoKey: 'teaser',
+        videoType: 'Teaser',
+        videoName: 'Official Teaser',
+        variant: 'teaser',
+      }),
+      trailer({
+        id: 'trailer:final',
+        videoKey: 'final',
+        videoName: 'Final Trailer',
+        variant: 'final',
+      }),
+    ]
+
+    expect(sanitizeTrailersState({
+      version: 2,
+      items: valid,
+      knownKeys: [],
+      seenKeys: [],
+      dismissedKeys: [],
+      bootstrapped: true,
+    }, { now: NOW }).items).toEqual(valid)
+  })
+
+  it('keeps pruned cache keys in every historical state collection and blocks readmission', () => {
+    const invalid = trailer({
+      id: 'trailer:invalid-known',
+      videoKey: 'invalid-known',
+      videoName: 'One week until a brand new day',
+    })
+    const state = sanitizeTrailersState({
+      version: 2,
+      items: [invalid],
+      knownKeys: ['historic'],
+      seenKeys: ['invalid-known', 'seen-before'],
+      dismissedKeys: ['invalid-known', 'dismissed-before'],
+      bootstrapped: true,
+      lastSuccess: NOW,
+    }, { now: NOW })
+
+    expect(state.items).toEqual([])
+    expect(state.knownKeys).toEqual(expect.arrayContaining(['historic', 'invalid-known']))
+    expect(state.seenKeys).toEqual(['invalid-known', 'seen-before'])
+    expect(state.dismissedKeys).toEqual(['invalid-known', 'dismissed-before'])
+    expect(state.bootstrapped).toBe(true)
+
+    const laterIncoming = {
+      ...invalid,
+      videoName: 'Official Trailer',
+      publishedAt: '2026-07-22T00:00:00.000Z',
+    }
+    expect(admitTrailers(state, [laterIncoming], { now: NOW })).toEqual([])
+    expect(newlyDiscoveredKeys(state, [laterIncoming], { now: NOW })).toEqual([])
+  })
+
+  it('keeps the exact 45-day cache boundary and rejects anything older', () => {
+    const exact = trailer({
+      id: 'trailer:exact',
+      videoKey: 'exact',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS).toISOString(),
+    })
+    const older = trailer({
+      id: 'trailer:older',
+      videoKey: 'older',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS - 1).toISOString(),
+    })
+
+    expect(isCachedTrailerEligible(exact, { now: NOW })).toBe(true)
+    expect(isCachedTrailerEligible(older, { now: NOW })).toBe(false)
+    expect(isCachedTrailerEligible({ ...exact, official: false }, { now: NOW })).toBe(false)
   })
 })

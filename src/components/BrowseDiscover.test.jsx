@@ -49,6 +49,7 @@ const trailer = {
   posterPath: '/bear.jpg',
   videoKey: 'bear5',
   youtubeUrl: 'https://www.youtube.com/watch?v=bear5',
+  videoType: 'Trailer',
   videoName: 'Season 5 Official Trailer',
   official: true,
   publishedAt: '2026-07-22T08:00:00.000Z',

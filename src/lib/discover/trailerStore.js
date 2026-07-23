@@ -32,11 +32,12 @@ import {
   DISCOVER_TRAILER_MAX_AGE_MS,
   isDiscoverTrailerFresh,
 } from './trailerFreshness.js'
+import { classifyVideo } from './trailerFilter.js'
 
 export const TRAILERS_CACHE_KEY = 'rerun_discover_trailers:v1'
 // v2: added `knownKeys` baseline. Older-shaped caches are discarded by sanitize
-// (they re-bootstrap cleanly) — this engine has never shipped to production, so
-// no real data is lost, but the version gate keeps Scope O migration honest.
+// (they re-bootstrap cleanly). Production v2 caches are sanitized in place, so
+// the version gate stays stable while current cards and historical keys survive.
 export const TRAILERS_CACHE_VERSION = 2
 export const TRAILERS_MAX_ITEMS = 60
 export const DEFAULT_BOOTSTRAP_WINDOW_MS = 150 * 24 * 60 * 60 * 1000
@@ -63,6 +64,25 @@ function validItem(item) {
   if (!item || typeof item !== 'object') return null
   if (!item.id || !item.videoKey || !item.youtubeUrl) return null
   return item
+}
+
+// Cached items use the normalized public trailer model rather than TMDB's raw
+// video shape. Reconstruct only the classifier fields so production v2 cache
+// entries receive the same precision checks as newly fetched records. The
+// cached official flag remains authoritative, while the stored watch URL/key
+// stay untouched for the existing YouTube handoff.
+export function isCachedTrailerEligible(item, freshnessOptions) {
+  const cached = validItem(item)
+  if (!cached) return false
+  const video = {
+    site: 'YouTube',
+    key: cached.videoKey,
+    type: cached.videoType,
+    name: cached.videoName,
+    official: cached.official,
+  }
+  return classifyVideo(video).accepted
+    && isDiscoverTrailerFresh(cached, freshnessOptions)
 }
 
 function publishedMs(item) {
@@ -96,7 +116,7 @@ export function sanitizeTrailersState(
     validItemKeys.push(item.videoKey)
     if (seen.has(item.videoKey) || dismissed.has(item.videoKey)) continue
     seen.add(item.videoKey)
-    if (!isDiscoverTrailerFresh(item, { now, maxAgeMs })) continue
+    if (!isCachedTrailerEligible(item, { now, maxAgeMs })) continue
     items.push(item)
   }
   const cappedItems = items.slice(0, TRAILERS_MAX_ITEMS)
