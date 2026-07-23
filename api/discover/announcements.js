@@ -48,7 +48,12 @@ import {
 import { createPlanStore } from '../../src/lib/discover/announcementPlanStore.js'
 
 // Re-exported so existing tests importing from this module keep working.
-export { buildAnnouncementQueries, MAX_QUERIES, TERM_BUDGET } from '../../src/lib/discover/announcementPlan.js'
+export {
+  buildAnnouncementQueries,
+  GNEWS_MAX_QUERY_LENGTH,
+  MAX_QUERIES,
+  TERM_BUDGET,
+} from '../../src/lib/discover/announcementPlan.js'
 
 const GNEWS_SEARCH_ENDPOINT = 'https://gnews.io/api/v4/search'
 const QUERY_TIMEOUT_MS = 8000
@@ -66,6 +71,14 @@ function json(res, status, body, headers = {}) {
 
 function errorBody(code, message) {
   return { error: { code, message } }
+}
+
+function logDiagnostic(logger, level, detail) {
+  try {
+    logger?.[level]?.('[discover-announcements]', detail)
+  } catch {
+    // Diagnostics must never affect acquisition.
+  }
 }
 
 function parseBody(req) {
@@ -118,11 +131,24 @@ async function runGnewsQuery(query, { apiKey, fetchImpl, timeoutMs = QUERY_TIMEO
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetchImpl(url, { method: 'GET', headers: { Accept: 'application/json' }, signal: controller.signal })
-    if (!response?.ok) return null
+    if (!response?.ok) {
+      const status = Number(response?.status)
+      return {
+        articles: null,
+        failureCode: Number.isInteger(status) && status >= 400 && status <= 599
+          ? `http_${status}`
+          : 'http_error',
+      }
+    }
     const payload = await response.json()
-    return Array.isArray(payload?.articles) ? payload.articles : []
-  } catch {
-    return null // per-query isolation: a failed query yields nothing, never throws
+    return Array.isArray(payload?.articles)
+      ? { articles: payload.articles, failureCode: null }
+      : { articles: null, failureCode: 'invalid_payload' }
+  } catch (error) {
+    return {
+      articles: null,
+      failureCode: error?.name === 'AbortError' ? 'timeout' : 'network_error',
+    }
   } finally {
     clearTimeout(timer)
   }
@@ -146,7 +172,8 @@ async function mapWithConcurrency(items, mapper, concurrency) {
 
 // Execute a query set through the result cache. Returns { status, body, headers }.
 async function executeSearch({
-  cacheKey, queries, coverageMeta, apiKey, fetchImpl, cache, now, forceRefresh, cacheControl,
+  cacheKey, queries, coverageMeta, apiKey, fetchImpl, cache, now, forceRefresh,
+  cacheControl, logger,
 }) {
   const cacheEntry = cache.read(cacheKey)
   const fresh = cacheEntry && (now - cacheEntry.storedAt <= ACQUISITION_CACHE_TTL_MS)
@@ -165,7 +192,21 @@ async function executeSearch({
     (query) => runGnewsQuery(query, { apiKey, fetchImpl }),
     QUERY_CONCURRENCY,
   )
-  const failureCount = perQuery.filter((r) => r === null).length
+  const failures = perQuery.filter((result) => result?.articles === null)
+  const failureCount = failures.length
+  if (failureCount > 0) {
+    const failureCodes = {}
+    for (const failure of failures) {
+      const code = failure?.failureCode ?? 'unknown'
+      failureCodes[code] = (failureCodes[code] ?? 0) + 1
+    }
+    logDiagnostic(logger, 'warn', {
+      stage: 'upstream_search',
+      code: failureCount === queries.length ? 'ALL_QUERIES_FAILED' : 'PARTIAL_QUERY_FAILURE',
+      queryCount: queries.length,
+      failureCodes,
+    })
+  }
 
   // Every query failed. Serve the last usable candidates if we have them
   // (stale-if-error); only surface an error when there is nothing cached.
@@ -186,9 +227,9 @@ async function executeSearch({
 
   const fetchedAt = coverageMeta.fetchedAt
   const normalized = []
-  for (const articles of perQuery) {
-    if (!Array.isArray(articles)) continue
-    for (const raw of articles) {
+  for (const result of perQuery) {
+    if (!Array.isArray(result?.articles)) continue
+    for (const raw of result.articles) {
       const article = normalizeArticle(raw, { fetchedAt, provider: 'gnews' })
       if (article) normalized.push(article)
     }
@@ -208,6 +249,7 @@ async function executeSearch({
 
 export function createAnnouncementsHandler({
   env = process.env, fetchImpl = globalThis.fetch, cache = defaultCache, planStore,
+  logger = console,
 } = {}) {
   const store = planStore ?? createPlanStore({ env, fetchImpl })
   return async function announcementsHandler(req, res) {
@@ -232,12 +274,21 @@ export function createAnnouncementsHandler({
       // Crucially, NO upstream search runs for an unknown id.
       const stored = await store.get(planId).catch(() => null)
       if (!stored) {
+        logDiagnostic(logger, 'warn', {
+          stage: 'plan_lookup',
+          code: 'PLAN_NOT_REGISTERED',
+          backend: store.backend ?? 'unknown',
+        })
         json(res, 409, errorBody('PLAN_NOT_REGISTERED', 'Unknown or expired plan id — POST the plan to register it'), { 'Cache-Control': 'no-store' })
         return
       }
       const queries = buildQueriesFromTerms(planTerms(stored))
       const coverageMeta = { fetchedAt, queryCount: queries.length }
       if (!apiKey) {
+        logDiagnostic(logger, 'warn', {
+          stage: 'configuration',
+          code: 'GNEWS_API_KEY_MISSING',
+        })
         json(res, 200, { articles: [], meta: { configured: false, ...coverageMeta, count: 0 } }, { 'Cache-Control': 'no-store' })
         return
       }
@@ -247,7 +298,7 @@ export function createAnnouncementsHandler({
       }
       const result = await executeSearch({
         cacheKey: planId, queries, coverageMeta, apiKey, fetchImpl, cache, now: Date.now(),
-        forceRefresh: req.query?.refresh === '1', cacheControl: GET_CACHE_CONTROL,
+        forceRefresh: req.query?.refresh === '1', cacheControl: GET_CACHE_CONTROL, logger,
       })
       json(res, result.status, result.body, result.headers)
       return
@@ -276,6 +327,10 @@ export function createAnnouncementsHandler({
     const coverageMeta = { fetchedAt, queryCount: queries.length, planId, ...plan }
 
     if (!apiKey) {
+      logDiagnostic(logger, 'warn', {
+        stage: 'configuration',
+        code: 'GNEWS_API_KEY_MISSING',
+      })
       json(res, 200, { articles: [], meta: { configured: false, ...coverageMeta, count: 0 } }, { 'Cache-Control': 'no-store' })
       return
     }
@@ -286,7 +341,7 @@ export function createAnnouncementsHandler({
 
     const result = await executeSearch({
       cacheKey: planId, queries, coverageMeta, apiKey, fetchImpl, cache, now: Date.now(),
-      forceRefresh: parsed.forceRefresh === true, cacheControl: 'no-store', // POST is not CDN-cacheable
+      forceRefresh: parsed.forceRefresh === true, cacheControl: 'no-store', logger, // POST is not CDN-cacheable
     })
     json(res, result.status, result.body, result.headers)
   }

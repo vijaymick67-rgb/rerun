@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import handler, {
   createAnnouncementsHandler, buildAnnouncementQueries, MAX_QUERIES, TERM_BUDGET,
-  createAcquisitionCache, ACQUISITION_CACHE_TTL_MS,
+  createAcquisitionCache, ACQUISITION_CACHE_TTL_MS, GNEWS_MAX_QUERY_LENGTH,
 } from './announcements.js'
 import { planFromShows } from '../../src/lib/discover/announcementPlan.js'
 import { createPlanStore } from '../../src/lib/discover/announcementPlanStore.js'
@@ -76,30 +76,32 @@ describe('buildAnnouncementQueries', () => {
     expect(plan.partialCoverage).toBe(false)
   })
 
-  it('covers every canonical title for a large 90–120 show library (two aliases each)', () => {
+  it('schedules canonicals before aliases and reports length-limited large-library coverage', () => {
     const shows = Array.from({ length: 120 }, (_, i) => ({
       id: i, title: `Canonical Series ${i}`,
       aliases: [`Series ${i} Alt A`, `Series ${i} Alt B`],
     }))
     const { queries, plan } = buildAnnouncementQueries(shows)
     const all = queries.join(' ')
-    for (let i = 0; i < 120; i += 1) {
-      expect(all).toContain(`"Canonical Series ${i}"`)
-    }
+    expect(all.match(/"Canonical Series \d+"/g)).toHaveLength(plan.canonicalTitlesSearched)
+    expect(all).not.toContain('Alt A')
+    expect(all).not.toContain('Alt B')
+    expect(queries.every((query) => query.length <= GNEWS_MAX_QUERY_LENGTH)).toBe(true)
     expect(plan.showsReceived).toBe(120)
-    expect(plan.canonicalTitlesSearched).toBe(120)
-    expect(plan.showsOmitted).toBe(0)
-    expect(plan.partialCoverage).toBe(false)
-    expect(plan.aliasesSearched).toBe(TERM_BUDGET - 120)
-    expect(plan.aliasesOmitted).toBe(240 - (TERM_BUDGET - 120))
+    expect(plan.canonicalTitlesSearched).toBeGreaterThan(0)
+    expect(plan.canonicalTitlesSearched).toBeLessThan(120)
+    expect(plan.showsOmitted).toBe(120 - plan.canonicalTitlesSearched)
+    expect(plan.partialCoverage).toBe(true)
+    expect(plan.aliasesSearched).toBe(0)
+    expect(plan.aliasesOmitted).toBe(240)
     expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES)
   })
 
   it('reports an explicit partial-coverage state when canonicals exceed the budget', () => {
     const shows = Array.from({ length: TERM_BUDGET + 25 }, (_, i) => ({ id: i, title: `Overflow Show ${i}` }))
     const { plan } = buildAnnouncementQueries(shows)
-    expect(plan.canonicalTitlesSearched).toBe(TERM_BUDGET)
-    expect(plan.showsOmitted).toBe(25)
+    expect(plan.canonicalTitlesSearched).toBeLessThanOrEqual(TERM_BUDGET)
+    expect(plan.showsOmitted).toBe(shows.length - plan.canonicalTitlesSearched)
     expect(plan.partialCoverage).toBe(true)
   })
 })
@@ -134,11 +136,16 @@ describe('announcements endpoint', () => {
   it('returns an empty candidate set (never a generic feed) when no key is configured', async () => {
     const res = makeRes()
     const fetchImpl = vi.fn()
-    await createAnnouncementsHandler({ env: {}, fetchImpl })({ method: 'POST', body: { shows: [{ id: 1, title: 'From' }] } }, res)
+    const logger = { warn: vi.fn() }
+    await createAnnouncementsHandler({ env: {}, fetchImpl, logger })({ method: 'POST', body: { shows: [{ id: 1, title: 'From' }] } }, res)
     expect(res.statusCode).toBe(200)
     expect(res.body.articles).toEqual([])
     expect(res.body.meta.configured).toBe(false)
     expect(fetchImpl).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[discover-announcements]',
+      { stage: 'configuration', code: 'GNEWS_API_KEY_MISSING' },
+    )
   })
 
   it('discovers an announcement for a tracked show that a generic top-ten feed would miss', async () => {
@@ -167,7 +174,7 @@ describe('announcements endpoint', () => {
     expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(MAX_QUERIES)
   })
 
-  it('reports full canonical coverage in response metadata for a 110-show library', async () => {
+  it('reports honest length-limited coverage metadata for a 110-show library', async () => {
     const shows = Array.from({ length: 110 }, (_, i) => ({
       id: i, title: `Library Show ${i}`, aliases: [`Show ${i} AKA A`, `Show ${i} AKA B`],
     }))
@@ -176,11 +183,13 @@ describe('announcements endpoint', () => {
     await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl })({ method: 'POST', body: { shows } }, res)
     expect(res.statusCode).toBe(200)
     expect(res.body.meta.showsReceived).toBe(110)
-    expect(res.body.meta.canonicalTitlesSearched).toBe(110)
-    expect(res.body.meta.showsOmitted).toBe(0)
-    expect(res.body.meta.partialCoverage).toBe(false)
-    expect(res.body.meta.aliasesSearched).toBe(TERM_BUDGET - 110)
-    expect(res.body.meta.aliasesOmitted).toBe(220 - (TERM_BUDGET - 110))
+    expect(res.body.meta.canonicalTitlesSearched).toBeGreaterThan(0)
+    expect(res.body.meta.canonicalTitlesSearched).toBeLessThan(110)
+    expect(res.body.meta.showsOmitted)
+      .toBe(110 - res.body.meta.canonicalTitlesSearched)
+    expect(res.body.meta.partialCoverage).toBe(true)
+    expect(res.body.meta.aliasesSearched).toBe(0)
+    expect(res.body.meta.aliasesOmitted).toBe(220)
   })
 
   it('signals partial coverage in metadata when the library exceeds the budget', async () => {
@@ -189,8 +198,9 @@ describe('announcements endpoint', () => {
     const res = makeRes()
     await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl })({ method: 'POST', body: { shows } }, res)
     expect(res.body.meta.partialCoverage).toBe(true)
-    expect(res.body.meta.showsOmitted).toBe(40)
-    expect(res.body.meta.canonicalTitlesSearched).toBe(TERM_BUDGET)
+    expect(res.body.meta.showsOmitted)
+      .toBe(shows.length - res.body.meta.canonicalTitlesSearched)
+    expect(res.body.meta.canonicalTitlesSearched).toBeLessThanOrEqual(TERM_BUDGET)
   })
 
   it('deduplicates the same story returned by more than one query', async () => {
@@ -231,6 +241,40 @@ describe('announcements endpoint', () => {
       { method: 'POST', body: { shows: [{ id: 1, title: 'From' }] } }, res,
     )
     expect(res.statusCode).toBe(502)
+  })
+
+  it('logs bounded upstream status diagnostics without keys, titles, queries, or payloads', async () => {
+    const logger = { warn: vi.fn() }
+    const res = makeRes()
+    await createAnnouncementsHandler({
+      env: { GNEWS_API_KEY: 'server-secret-key' },
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({ errors: ['raw upstream payload'] }),
+      }),
+      cache: createAcquisitionCache(),
+      logger,
+    })({
+      method: 'POST',
+      body: { shows: [{ id: 1, title: 'Private Tracked Show' }] },
+    }, res)
+
+    expect(res.statusCode).toBe(502)
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[discover-announcements]',
+      {
+        stage: 'upstream_search',
+        code: 'ALL_QUERIES_FAILED',
+        queryCount: 1,
+        failureCodes: { http_401: 1 },
+      },
+    )
+    const diagnostic = JSON.stringify(logger.warn.mock.calls)
+    expect(diagnostic).not.toContain('server-secret-key')
+    expect(diagnostic).not.toContain('Private Tracked Show')
+    expect(diagnostic).not.toContain('raw upstream payload')
+    expect(diagnostic).not.toContain('renewed OR renewal')
   })
 })
 

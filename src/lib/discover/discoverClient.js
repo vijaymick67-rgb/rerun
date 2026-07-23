@@ -227,10 +227,13 @@ export async function loadTrailers({
     for (const list of perShow) if (Array.isArray(list)) collected.push(...list)
     collected.push(...await franchiseTrailers(fetchOptions))
 
-    const ranked = rankTrailers(collected)
+    const ranked = rankTrailers(collected, { now })
     // Preserve any dismissal written while the network work was in flight.
-    const merged = mergeTrailers(readTrailersCache(storage), ranked, { now })
-    writeTrailersCache(merged, storage)
+    const merged = mergeTrailers(readTrailersCache(storage, now), ranked, {
+      now,
+      baselineItems: collected,
+    })
+    writeTrailersCache(merged, storage, now)
     return {
       items: trailerItemsForTrackedShows(merged.items, trackedShows),
       loading: false,
@@ -239,7 +242,7 @@ export async function loadTrailers({
       lastSuccess: now,
     }
   } catch (error) {
-    const current = readTrailersCache(storage)
+    const current = readTrailersCache(storage, now)
     return {
       items: trailerItemsForTrackedShows(current.items, trackedShows),
       loading: false,

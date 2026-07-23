@@ -55,6 +55,50 @@ describe('loadAnnouncements', () => {
     expect(failed.items).toHaveLength(1) // cached renewal preserved
   })
 
+  it('keeps success-empty, failure-no-cache, and failure-with-cache distinct', async () => {
+    const emptyStorage = memoryStorage()
+    const empty = await loadAnnouncements({
+      trackedShows: TRACKED,
+      storage: emptyStorage,
+      now: NOW,
+      fetchImpl: async () => jsonResponse({ articles: [] }),
+    })
+    expect(empty.error).toBe(null)
+    expect(empty.items).toEqual([])
+
+    const failedWithoutCache = await loadAnnouncements({
+      trackedShows: TRACKED,
+      storage: memoryStorage(),
+      now: NOW,
+      fetchImpl: async () => jsonResponse(null, false),
+    })
+    expect(failedWithoutCache.error).toBeTruthy()
+    expect(failedWithoutCache.items).toEqual([])
+
+    const cachedStorage = memoryStorage()
+    await loadAnnouncements({
+      trackedShows: TRACKED,
+      storage: cachedStorage,
+      now: NOW,
+      fetchImpl: async () => jsonResponse({
+        articles: [{
+          title: 'From renewed for Season 4',
+          publishedAt: '2026-07-20T00:00:00.000Z',
+          sourceName: 'Deadline',
+          url: 'https://deadline.com/cached',
+        }],
+      }),
+    })
+    const failedWithCache = await loadAnnouncements({
+      trackedShows: TRACKED,
+      storage: cachedStorage,
+      now: NOW,
+      fetchImpl: async () => jsonResponse(null, false),
+    })
+    expect(failedWithCache.error).toBeTruthy()
+    expect(failedWithCache.items).toHaveLength(1)
+  })
+
   it('never populates announcements from a legacy news cache', async () => {
     const storage = memoryStorage({ 'rerun_news_cache:v1': JSON.stringify({ version: 1, articles: { x: { id: 'x', title: 'Old generic', publishedAt: '2026-07-20', url: 'https://e.com' } } }) })
     const state = await loadAnnouncements({ trackedShows: TRACKED, storage, now: NOW, fetchImpl: async () => jsonResponse({ articles: [] }) })
@@ -87,6 +131,35 @@ describe('loadTrailers', () => {
     expect(keys).toEqual(['good1', 'good7'])
     expect(state.items.every((t) => t.youtubeUrl.startsWith('https://www.youtube.com/watch?v='))).toBe(true)
     expect(storage._dump()[TRAILERS_CACHE_KEY]).toBeTruthy()
+  })
+
+  it('hides expired trailers while preserving their keys in the bootstrap baseline', async () => {
+    const storage = memoryStorage()
+    const fetchImpl = async (url) => {
+      if (url.includes('/tv/1/videos')) {
+        return jsonResponse({ results: [{
+          key: 'expired',
+          site: 'YouTube',
+          type: 'Trailer',
+          name: 'Official Trailer',
+          official: true,
+          published_at: '2026-05-01T00:00:00.000Z',
+        }] })
+      }
+      return jsonResponse({ results: [] })
+    }
+
+    const state = await loadTrailers({
+      trackedShows: [TRACKED[0]],
+      storage,
+      now: NOW,
+      fetchImpl,
+    })
+    expect(state.items).toEqual([])
+    const persisted = JSON.parse(storage._dump()[TRAILERS_CACHE_KEY])
+    expect(persisted.items).toEqual([])
+    expect(persisted.knownKeys).toContain('expired')
+    expect(persisted.bootstrapped).toBe(true)
   })
 
   it('isolates a single show failure without dropping the whole feed', async () => {

@@ -10,6 +10,8 @@
 //   - selects at most a handful of the most relevant videos per media item so
 //     the feed is not flooded.
 
+import { isDiscoverTrailerFresh } from './trailerFreshness.js'
+
 export function youtubeUrl(key) {
   return key ? `https://www.youtube.com/watch?v=${key}` : null
 }
@@ -130,8 +132,10 @@ export function selectPerMedia(trailers) {
 
 // Full pipeline: build models, filter is applied upstream, then dedupe+select,
 // then a final global ranking (freshest, most relevant first).
-export function rankTrailers(trailers) {
-  return selectPerMedia(trailers).sort((a, b) => {
+export function rankTrailers(trailers, freshnessOptions) {
+  const fresh = (Array.isArray(trailers) ? trailers : [])
+    .filter((trailer) => isDiscoverTrailerFresh(trailer, freshnessOptions))
+  return selectPerMedia(fresh).sort((a, b) => {
     if (a.official !== b.official) return a.official ? -1 : 1
     const published = publishedMs(b) - publishedMs(a)
     if (published) return published

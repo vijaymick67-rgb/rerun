@@ -49,6 +49,7 @@ const trailer = {
   posterPath: '/bear.jpg',
   videoKey: 'bear5',
   youtubeUrl: 'https://www.youtube.com/watch?v=bear5',
+  videoType: 'Trailer',
   videoName: 'Season 5 Official Trailer',
   official: true,
   publishedAt: '2026-07-22T08:00:00.000Z',
@@ -149,6 +150,24 @@ describe('Discover Phase 2 feed presentation', () => {
     expect(failed).toContain('The Bear renewed for Season 5 at FX')
     expect(failed).toContain('Showing saved announcements')
     expect(failed).not.toContain('private-error-detail')
+  })
+
+  it('caps the visible trailer feed at eight cards without reordering it', () => {
+    const trailers = Array.from({ length: 10 }, (_, index) => ({
+      ...trailer,
+      id: `trailer:cap-${index + 1}`,
+      videoKey: `cap-${index + 1}`,
+      youtubeUrl: `https://www.youtube.com/watch?v=cap-${index + 1}`,
+      videoName: `Ranked Trailer ${index + 1}`,
+    }))
+    const html = renderToStaticMarkup(
+      <BrowseDiscoverView state={state(feed(), feed(trailers))} />,
+    )
+    expect((html.match(/Play trailer/g) ?? [])).toHaveLength(8)
+    expect(html).toContain('Ranked Trailer 1')
+    expect(html).toContain('Ranked Trailer 8')
+    expect(html).not.toContain('Ranked Trailer 9')
+    expect(html.indexOf('Ranked Trailer 1')).toBeLessThan(html.indexOf('Ranked Trailer 8'))
   })
 
   it('uses compact honest loading, empty, and unavailable states without generic News fallback', () => {
@@ -394,8 +413,9 @@ describe('Discover Phase 2 static integration contracts', () => {
     expect(component).not.toContain('classifyVideo(')
     expect(component).not.toContain('rankTrailers(')
     expect(client).toContain('collected.push(...await franchiseTrailers(fetchOptions))')
-    expect(client).toContain('const ranked = rankTrailers(collected)')
+    expect(client).toContain('const ranked = rankTrailers(collected, { now })')
     expect(client).toContain('.filter((video) => classifyVideo(video).accepted)')
+    expect(component).toContain('const MAX_VISIBLE_TRAILERS = 8')
   })
 
   it('retains the Phase-1 bootstrap baseline and YouTube watch handoff', () => {

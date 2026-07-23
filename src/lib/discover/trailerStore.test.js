@@ -2,14 +2,16 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyTrailersState, sanitizeTrailersState, admitTrailers, mergeTrailers,
   newlyDiscoveredKeys, readTrailersCache, dismissTrailer, TRAILERS_CACHE_KEY,
-  DEFAULT_BOOTSTRAP_WINDOW_MS,
+  isCachedTrailerEligible,
 } from './trailerStore.js'
+import { DISCOVER_TRAILER_MAX_AGE_MS } from './trailerFreshness.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
 
 function trailer(overrides = {}) {
   return {
     id: 'trailer:k1', videoKey: 'k1', youtubeUrl: 'https://www.youtube.com/watch?v=k1',
+    videoType: 'Trailer', videoName: 'Official Trailer',
     official: true, publishedAt: '2026-07-01T00:00:00.000Z', ...overrides,
   }
 }
@@ -30,7 +32,10 @@ describe('sanitizeTrailersState', () => {
   })
 
   it('dedupes items by video key', () => {
-    const state = sanitizeTrailersState({ version: 2, items: [trailer(), trailer()], knownKeys: [], seenKeys: [], bootstrapped: true })
+    const state = sanitizeTrailersState(
+      { version: 2, items: [trailer(), trailer()], knownKeys: [], seenKeys: [], bootstrapped: true },
+      { now: NOW },
+    )
     expect(state.items).toHaveLength(1)
   })
 
@@ -54,13 +59,11 @@ describe('bootstrap window', () => {
     expect(admitted).toHaveLength(0)
   })
 
-  it('admits a genuinely new (never-seen) trailer after bootstrap, even for a finished show', () => {
+  it('admits a genuinely new recent trailer after bootstrap, even for a finished show', () => {
     const merged = mergeTrailers(emptyTrailersState(), [trailer({ videoKey: 'seed' })], { now: NOW })
-    // bootstrapped now true; an item published just outside the window but with a
-    // key we have never seen is still admitted because it is genuinely new.
     const brandNew = trailer({
       id: 'trailer:late', videoKey: 'late',
-      publishedAt: new Date(NOW - DEFAULT_BOOTSTRAP_WINDOW_MS - 1000).toISOString(),
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS + 1000).toISOString(),
     })
     const admitted = admitTrailers(merged, [brandNew], { now: NOW })
     expect(admitted.map((t) => t.videoKey)).toContain('late')
@@ -139,6 +142,175 @@ describe('newlyDiscoveredKeys', () => {
 describe('cache round-trip', () => {
   it('tolerates malformed JSON', () => {
     const storage = memoryStorage({ [TRAILERS_CACHE_KEY]: '{bad' })
-    expect(readTrailersCache(storage)).toEqual(emptyTrailersState())
+    expect(readTrailersCache(storage, NOW)).toEqual(emptyTrailersState())
+  })
+
+  it('prunes expired v2 items while preserving baseline, seen, dismissed, and bootstrap state', () => {
+    const expired = trailer({
+      id: 'trailer:expired',
+      videoKey: 'expired',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS - 1).toISOString(),
+    })
+    const recent = trailer({ id: 'trailer:recent', videoKey: 'recent' })
+    const storage = memoryStorage({
+      [TRAILERS_CACHE_KEY]: JSON.stringify({
+        version: 2,
+        items: [expired, recent],
+        knownKeys: ['historic'],
+        seenKeys: ['expired', 'seen-before'],
+        dismissedKeys: ['dismissed-before'],
+        bootstrapped: true,
+        lastSuccess: NOW - 1000,
+      }),
+    })
+
+    const state = readTrailersCache(storage, NOW)
+    expect(state.items.map((item) => item.videoKey)).toEqual(['recent'])
+    expect(state.knownKeys).toEqual(expect.arrayContaining(['historic', 'expired', 'recent']))
+    expect(state.seenKeys).toEqual(['expired', 'seen-before'])
+    expect(state.dismissedKeys).toEqual(['dismissed-before'])
+    expect(state.bootstrapped).toBe(true)
+  })
+
+  it('never resurrects an expired cached key as newly discovered', () => {
+    const expired = trailer({
+      id: 'trailer:expired',
+      videoKey: 'expired',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS - 1).toISOString(),
+    })
+    const sanitized = sanitizeTrailersState({
+      version: 2,
+      items: [expired],
+      knownKeys: [],
+      seenKeys: ['expired'],
+      dismissedKeys: [],
+      bootstrapped: true,
+      lastSuccess: NOW,
+    }, { now: NOW })
+    expect(sanitized.items).toEqual([])
+    expect(sanitized.knownKeys).toContain('expired')
+
+    const correctedDate = { ...expired, publishedAt: '2026-07-22T00:00:00.000Z' }
+    expect(admitTrailers(sanitized, [correctedDate], { now: NOW })).toEqual([])
+    expect(newlyDiscoveredKeys(sanitized, [correctedDate], { now: NOW })).toEqual([])
+  })
+
+  it('prunes recent cached non-trailer and episodic promotion names on read', () => {
+    const invalid = [
+      trailer({
+        id: 'trailer:countdown-copy',
+        videoKey: 'countdown-copy',
+        videoName: 'One week until a brand new day',
+      }),
+      trailer({
+        id: 'trailer:episode-preview',
+        videoKey: 'episode-preview',
+        videoName: 'Episode 4 Preview',
+      }),
+      trailer({
+        id: 'trailer:first-look',
+        videoKey: 'first-look',
+        videoName: 'First Look Trailer',
+      }),
+      trailer({
+        id: 'trailer:promo',
+        videoKey: 'promo',
+        videoName: 'Official Promo Trailer',
+      }),
+      trailer({
+        id: 'trailer:countdown',
+        videoKey: 'countdown',
+        videoName: 'Official Trailer Countdown',
+      }),
+    ]
+    const storage = memoryStorage({
+      [TRAILERS_CACHE_KEY]: JSON.stringify({
+        version: 2,
+        items: invalid,
+        knownKeys: [],
+        seenKeys: [],
+        dismissedKeys: [],
+        bootstrapped: true,
+        lastSuccess: NOW,
+      }),
+    })
+
+    expect(readTrailersCache(storage, NOW).items).toEqual([])
+  })
+
+  it('preserves recent valid trailer, teaser, and final-trailer cache variants', () => {
+    const valid = [
+      trailer({ id: 'trailer:main', videoKey: 'main', videoName: 'Official Trailer' }),
+      trailer({
+        id: 'trailer:teaser',
+        videoKey: 'teaser',
+        videoType: 'Teaser',
+        videoName: 'Official Teaser',
+        variant: 'teaser',
+      }),
+      trailer({
+        id: 'trailer:final',
+        videoKey: 'final',
+        videoName: 'Final Trailer',
+        variant: 'final',
+      }),
+    ]
+
+    expect(sanitizeTrailersState({
+      version: 2,
+      items: valid,
+      knownKeys: [],
+      seenKeys: [],
+      dismissedKeys: [],
+      bootstrapped: true,
+    }, { now: NOW }).items).toEqual(valid)
+  })
+
+  it('keeps pruned cache keys in every historical state collection and blocks readmission', () => {
+    const invalid = trailer({
+      id: 'trailer:invalid-known',
+      videoKey: 'invalid-known',
+      videoName: 'One week until a brand new day',
+    })
+    const state = sanitizeTrailersState({
+      version: 2,
+      items: [invalid],
+      knownKeys: ['historic'],
+      seenKeys: ['invalid-known', 'seen-before'],
+      dismissedKeys: ['invalid-known', 'dismissed-before'],
+      bootstrapped: true,
+      lastSuccess: NOW,
+    }, { now: NOW })
+
+    expect(state.items).toEqual([])
+    expect(state.knownKeys).toEqual(expect.arrayContaining(['historic', 'invalid-known']))
+    expect(state.seenKeys).toEqual(['invalid-known', 'seen-before'])
+    expect(state.dismissedKeys).toEqual(['invalid-known', 'dismissed-before'])
+    expect(state.bootstrapped).toBe(true)
+
+    const laterIncoming = {
+      ...invalid,
+      videoName: 'Official Trailer',
+      publishedAt: '2026-07-22T00:00:00.000Z',
+    }
+    expect(admitTrailers(state, [laterIncoming], { now: NOW })).toEqual([])
+    expect(newlyDiscoveredKeys(state, [laterIncoming], { now: NOW })).toEqual([])
+  })
+
+  it('keeps the exact 45-day cache boundary and rejects anything older', () => {
+    const exact = trailer({
+      id: 'trailer:exact',
+      videoKey: 'exact',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS).toISOString(),
+    })
+    const older = trailer({
+      id: 'trailer:older',
+      videoKey: 'older',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS - 1).toISOString(),
+    })
+
+    expect(isCachedTrailerEligible(exact, { now: NOW })).toBe(true)
+    expect(isCachedTrailerEligible(older, { now: NOW })).toBe(false)
+    expect(isCachedTrailerEligible({ ...exact, official: false }, { now: NOW })).toBe(false)
   })
 })
