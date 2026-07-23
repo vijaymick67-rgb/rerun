@@ -7,12 +7,18 @@
 export const ANNOUNCEMENTS_CACHE_KEY = 'rerun_discover_announcements:v1'
 export const ANNOUNCEMENTS_CACHE_VERSION = 1
 export const ANNOUNCEMENTS_MAX_ITEMS = 40
+export const ANNOUNCEMENTS_MAX_DISMISSED_IDS = 500
 // Stored announcements older than this (by publishedAt) are pruned even if a
 // refresh has not run — the feed must not resurrect stale events on reload.
 export const ANNOUNCEMENTS_MAX_AGE_MS = 100 * 24 * 60 * 60 * 1000
 
 export function emptyAnnouncementsState() {
-  return { version: ANNOUNCEMENTS_CACHE_VERSION, items: [], lastSuccess: null }
+  return {
+    version: ANNOUNCEMENTS_CACHE_VERSION,
+    items: [],
+    dismissedIds: [],
+    lastSuccess: null,
+  }
 }
 
 function validItem(item) {
@@ -30,11 +36,16 @@ export function sanitizeAnnouncementsState(value, now = Date.now()) {
   if (!value || value.version !== ANNOUNCEMENTS_CACHE_VERSION || !Array.isArray(value.items)) {
     return emptyAnnouncementsState()
   }
+  const dismissedIds = [...new Set(
+    (Array.isArray(value.dismissedIds) ? value.dismissedIds : [])
+      .filter((id) => typeof id === 'string' && id),
+  )].slice(-ANNOUNCEMENTS_MAX_DISMISSED_IDS)
+  const dismissed = new Set(dismissedIds)
   const seen = new Set()
   const items = []
   for (const raw of value.items) {
     const item = validItem(raw)
-    if (!item || seen.has(item.id)) continue
+    if (!item || seen.has(item.id) || dismissed.has(item.id)) continue
     if (ageMs(item, now) > ANNOUNCEMENTS_MAX_AGE_MS) continue
     seen.add(item.id)
     items.push(item)
@@ -43,6 +54,7 @@ export function sanitizeAnnouncementsState(value, now = Date.now()) {
   return {
     version: ANNOUNCEMENTS_CACHE_VERSION,
     items: items.slice(0, ANNOUNCEMENTS_MAX_ITEMS),
+    dismissedIds,
     lastSuccess: Number.isFinite(value.lastSuccess) ? value.lastSuccess : null,
   }
 }
@@ -67,10 +79,11 @@ export function writeAnnouncementsCache(state, storage = globalThis.localStorage
 // the combined set is re-deduped, capped, and timestamped.
 export function mergeAnnouncements(state, incoming, now = Date.now()) {
   const current = sanitizeAnnouncementsState(state, now)
+  const dismissed = new Set(current.dismissedIds)
   const byId = new Map(current.items.map((item) => [item.id, item]))
   for (const raw of Array.isArray(incoming) ? incoming : []) {
     const item = validItem(raw)
-    if (!item) continue
+    if (!item || dismissed.has(item.id)) continue
     const existing = byId.get(item.id)
     // Keep whichever report is newer (supersession already resolved upstream by
     // dedupeAnnouncements; this guards a cross-refresh replacement too).
@@ -79,7 +92,22 @@ export function mergeAnnouncements(state, incoming, now = Date.now()) {
     }
   }
   return sanitizeAnnouncementsState(
-    { version: ANNOUNCEMENTS_CACHE_VERSION, items: [...byId.values()], lastSuccess: now },
+    {
+      version: ANNOUNCEMENTS_CACHE_VERSION,
+      items: [...byId.values()],
+      dismissedIds: current.dismissedIds,
+      lastSuccess: now,
+    },
     now,
   )
+}
+
+export function dismissAnnouncement(state, announcementId, now = Date.now()) {
+  const current = sanitizeAnnouncementsState(state, now)
+  if (typeof announcementId !== 'string' || !announcementId) return current
+  return sanitizeAnnouncementsState({
+    ...current,
+    items: current.items.filter((item) => item.id !== announcementId),
+    dismissedIds: [...current.dismissedIds, announcementId],
+  }, now)
 }

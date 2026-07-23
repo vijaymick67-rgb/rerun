@@ -31,16 +31,19 @@ describe('Discover page heading', () => {
   it('places the heading directly above the search field, preserving section order', () => {
     const headerIndex = browseSource.indexOf('<header className="route-heading">')
     const searchIndex = browseSource.indexOf('className="browse-search"')
-    const newsIndex = browseSource.indexOf('<BrowseNews')
+    const discoverIndex = browseSource.indexOf('<BrowseDiscover')
     expect(headerIndex).toBeGreaterThan(-1)
     expect(headerIndex).toBeLessThan(searchIndex)
-    expect(searchIndex).toBeLessThan(newsIndex)
+    expect(searchIndex).toBeLessThan(discoverIndex)
   })
 
-  it('does not touch search, News, or tracking behavior', () => {
+  it('preserves search and tracking behavior while handing feed ownership to Discover', () => {
     expect((browseSource.match(/searchShows\(/g) ?? []).length).toBe(1)
     expect(browseSource).toContain('DEBOUNCE_MS = 400')
-    expect(browseSource).toContain('<BrowseNews trackedShows={trackedShows} trackedShowsReady={trackedShowsReady} />')
+    expect(browseSource).toContain("import BrowseDiscover from '../components/BrowseDiscover'")
+    expect(browseSource).toContain('trackedShowsReady={trackedShowsReady}')
+    expect(browseSource).toContain('hidden={Boolean(query.trim())}')
+    expect(browseSource).not.toContain('<BrowseNews')
     expect(browseSource).not.toContain('fetch(')
   })
 })

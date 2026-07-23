@@ -13,7 +13,9 @@ function accepted(overrides = {}) {
 }
 function article(overrides = {}) {
   return {
+    title: 'The Bear renewed for Season 5',
     sourceName: 'Deadline', canonicalUrl: 'https://deadline.com/a',
+    imageUrl: 'https://example.com/bear.jpg',
     publishedAt: '2026-07-20T00:00:00.000Z', ...overrides,
   }
 }
@@ -24,6 +26,8 @@ describe('normalizeAnnouncement', () => {
     expect(a.label).toBe('Renewed')
     expect(a.detail).toBe('The Bear will return for Season 5')
     expect(a.posterPath).toBe('/bear.jpg')
+    expect(a.imageUrl).toBe('https://example.com/bear.jpg')
+    expect(a.articleHeadline).toBe('The Bear renewed for Season 5')
     expect(a.sourceUrl).toBe('https://deadline.com/a')
   })
 

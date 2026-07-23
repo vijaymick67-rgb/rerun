@@ -42,6 +42,25 @@ export function emptyDiscoverState() {
   return { announcements: emptyFeedState(), trailers: emptyFeedState() }
 }
 
+function trackedIdSet(trackedShows) {
+  return new Set((Array.isArray(trackedShows) ? trackedShows : [])
+    .map((show) => show?.tmdb_id ?? show?.id)
+    .filter((id) => id != null)
+    .map(String))
+}
+
+export function announcementItemsForTrackedShows(items, trackedShows) {
+  const trackedIds = trackedIdSet(trackedShows)
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => trackedIds.has(String(item?.showId)))
+}
+
+export function trailerItemsForTrackedShows(items, trackedShows) {
+  const trackedIds = trackedIdSet(trackedShows)
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item?.franchise || trackedIds.has(String(item?.trackedShowId)))
+}
+
 function seasonFromName(name) {
   const match = typeof name === 'string' && name.match(/season (\d{1,2})/i)
   return match ? Number(match[1]) : null
@@ -65,12 +84,21 @@ export async function loadAnnouncements({
 } = {}) {
   const cached = readAnnouncementsCache(storage, now)
   const registry = buildIdentityRegistry(trackedShows, detailsById)
+  const requestShows = announcementRequestShows(registry)
+  if (!requestShows.length) {
+    return {
+      items: [],
+      loading: false,
+      refreshing: false,
+      error: null,
+      lastSuccess: cached.lastSuccess,
+    }
+  }
   try {
     // GET the durable, CDN-cacheable plan URL by its OPAQUE id: the id is a SHA-256
     // digest computed from the same shared plan code the server uses, so identical
     // libraries hit the edge cache with zero upstream GNews calls — and the URL
     // never contains any show title (see announcementPlan.js + the endpoint).
-    const requestShows = announcementRequestShows(registry)
     const { planId } = await planFromShows(requestShows)
     let response = await fetchImpl(`${ANNOUNCEMENTS_ENDPOINT}?plan=${encodeURIComponent(planId)}`, {
       headers: { Accept: 'application/json' },
@@ -97,17 +125,26 @@ export async function loadAnnouncements({
       if (announcement) normalized.push(announcement)
     }
     const deduped = dedupeAnnouncements(normalized)
-    const merged = mergeAnnouncements(cached, deduped, now)
+    // Re-read before merging so a dismissal made while this refresh was in
+    // flight wins the race and cannot be restored by the response.
+    const merged = mergeAnnouncements(readAnnouncementsCache(storage, now), deduped, now)
     writeAnnouncementsCache(merged, storage, now)
-    return { items: merged.items, loading: false, refreshing: false, error: null, lastSuccess: now }
+    return {
+      items: announcementItemsForTrackedShows(merged.items, trackedShows),
+      loading: false,
+      refreshing: false,
+      error: null,
+      lastSuccess: now,
+    }
   } catch (error) {
     // Failure isolation: keep whatever valid items the cache already holds.
+    const current = readAnnouncementsCache(storage, now)
     return {
-      items: cached.items,
+      items: announcementItemsForTrackedShows(current.items, trackedShows),
       loading: false,
       refreshing: false,
       error: error?.message ?? 'announcements_error',
-      lastSuccess: cached.lastSuccess,
+      lastSuccess: current.lastSuccess,
     }
   }
 }
@@ -120,6 +157,7 @@ function trailersForShow(show, videos) {
     trackedShowId: show.tmdb_id ?? show.id,
     title: show.name ?? show.title ?? null,
     posterPath: show.poster_path ?? null,
+    firstAirDate: show.first_air_date ?? null,
   }
   const built = []
   for (const video of Array.isArray(videos) ? videos : []) {
@@ -163,6 +201,7 @@ async function franchiseTrailers(fetchOptions) {
     const context = {
       mediaType: member.mediaType, mediaId: member.mediaId, trackedShowId: null,
       title: member.title, posterPath: member.posterPath ?? null, franchise: member.franchise,
+      releaseDate: member.releaseDate ?? null, firstAirDate: member.firstAirDate ?? null,
     }
     return (Array.isArray(videos) ? videos : [])
       .filter((video) => classifyVideo(video).accepted)
@@ -177,7 +216,6 @@ export async function loadTrailers({
   trackedShows = [], storage = globalThis.localStorage, fetchImpl = globalThis.fetch,
   now = Date.now(), concurrency = DEFAULT_CONCURRENCY,
 } = {}) {
-  const cached = readTrailersCache(storage)
   const fetchOptions = { storage, fetchImpl, now, concurrency }
   try {
     const perShow = await mapWithConcurrency(
@@ -190,16 +228,24 @@ export async function loadTrailers({
     collected.push(...await franchiseTrailers(fetchOptions))
 
     const ranked = rankTrailers(collected)
-    const merged = mergeTrailers(cached, ranked, { now })
+    // Preserve any dismissal written while the network work was in flight.
+    const merged = mergeTrailers(readTrailersCache(storage), ranked, { now })
     writeTrailersCache(merged, storage)
-    return { items: merged.items, loading: false, refreshing: false, error: null, lastSuccess: now }
-  } catch (error) {
     return {
-      items: cached.items,
+      items: trailerItemsForTrackedShows(merged.items, trackedShows),
+      loading: false,
+      refreshing: false,
+      error: null,
+      lastSuccess: now,
+    }
+  } catch (error) {
+    const current = readTrailersCache(storage)
+    return {
+      items: trailerItemsForTrackedShows(current.items, trackedShows),
       loading: false,
       refreshing: false,
       error: error?.message ?? 'trailers_error',
-      lastSuccess: cached.lastSuccess,
+      lastSuccess: current.lastSuccess,
     }
   }
 }

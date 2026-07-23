@@ -122,6 +122,8 @@ export function buildShowIdentity(show, details = null) {
     originCountry: Array.isArray(details?.origin_country) ? details.origin_country : [],
     networks: collectNetworks(details),
     knownCast: collectCast(details),
+    posterPath: details?.poster_path ?? show?.poster_path ?? null,
+    backdropPath: details?.backdrop_path ?? show?.backdrop_path ?? null,
     normalizedCanonical,
     normalizedOriginal: normalizedOriginal || null,
     primaryForms,
