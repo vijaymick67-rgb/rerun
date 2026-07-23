@@ -130,6 +130,14 @@
 
 html {
   min-height: 100%;
+  /* Root horizontal-drift guard: clips any transient document-level
+     horizontal offset (e.g. iOS standalone-PWA viewport pan while a focused
+     input is dismissed during navigation) without turning html into a new
+     scroll container the way an overflow scrollbar rule would. No
+     intentional horizontal scrolling exists at this boundary — every
+     scrollable strip in the app (e.g. .stats-all-preview__row) owns its own
+     overflow locally. */
+  overflow-x: clip;
   background-color: var(--color-canvas);
 }
 

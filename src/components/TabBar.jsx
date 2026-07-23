@@ -50,6 +50,21 @@ const TABS = [
   { to: '/settings', label: 'Settings', Icon: SettingsIcon },
 ]
 
+// On the installed iPhone PWA, tapping a bottom-nav tab while the Discover
+// search input is still focused can leave the standalone visual viewport
+// panned after the route changes (the input unmounts, but that doesn't
+// undo an in-flight iOS keyboard/viewport pan). Releasing focus here, before
+// the Link's navigation is committed, gives the keyboard dismissal a frame
+// to settle first. Scoped to exactly the Browse search input (its unique
+// `.browse-search` class) so no other focused control — dialogs, Settings
+// rows, nested Show/Season Detail links — is ever touched.
+function releaseBrowseSearchFocus() {
+  const active = typeof document !== 'undefined' ? document.activeElement : null
+  if (active instanceof HTMLElement && active.classList.contains('browse-search')) {
+    active.blur()
+  }
+}
+
 export default function TabBar() {
   const { pathname } = useLocation()
   const activeTabPath = getRouteShellKey(pathname)
@@ -57,6 +72,7 @@ export default function TabBar() {
   return (
     <nav
       aria-label="Primary"
+      onPointerDown={releaseBrowseSearchFocus}
       className="app-tab-bar fixed inset-x-0 bottom-0 flex border-t border-(--color-border) bg-(--color-surface)"
     >
       {TABS.map(({ to, label, Icon }) => {

@@ -92,7 +92,14 @@ describe('cinematic secondary surfaces', () => {
     expect(css).toContain('.auth-boot-shell,\n.app-loading-shell {')
     expect(css).toContain('background: var(--launch-canvas-atmosphere-legacy);')
     expect(css).toContain('background: var(--canvas-atmosphere);')
-    expect(css).toContain('html {\n  min-height: 100%;\n  background-color: var(--color-canvas);\n}')
+    const htmlRule = css.match(/html\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(htmlRule).toContain('min-height: 100%;')
+    expect(htmlRule).toContain('background-color: var(--color-canvas);')
+    // Root horizontal-drift guard, added alongside min-height/background —
+    // still the same minimal boot-shell contract, just with one more
+    // declaration (see src/rootOverflowContainment.test.jsx for its own
+    // dedicated coverage).
+    expect(htmlRule).toContain('overflow-x: clip;')
     expect(css).toContain('.app-shell {')
     expect(css).toContain('max-width: 42rem;')
   })
