@@ -138,7 +138,7 @@ function finishRefresh(result, trackedShows, storage, now) {
   }
 }
 
-function AnnouncementCard({ announcement, onDismiss }) {
+function AnnouncementCard({ announcement, onDismiss, priority = false }) {
   const headline = announcement.articleHeadline ?? announcement.headline ?? announcement.detail
   const url = safeExternalUrl(announcement.sourceUrl)
   const LinkSurface = url ? 'a' : 'div'
@@ -158,6 +158,8 @@ function AnnouncementCard({ announcement, onDismiss }) {
           src={artworkUrl(announcement)}
           alt={`${announcement.showName} artwork`}
           fallbackLabel="No artwork"
+          loading={priority ? 'eager' : 'lazy'}
+          fetchPriority={priority ? 'high' : undefined}
           className="discover-card__artwork"
         />
         <div className="discover-card__copy">
@@ -181,7 +183,7 @@ function AnnouncementCard({ announcement, onDismiss }) {
   )
 }
 
-function TrailerCard({ trailer, onDismiss }) {
+function TrailerCard({ trailer, onDismiss, priority = false }) {
   const url = safeExternalUrl(trailer.youtubeUrl)
   const freshness = formatDiscoverFreshness(trailer.publishedAt)
   const release = formatReleaseContext(trailer.releaseDate)
@@ -201,6 +203,8 @@ function TrailerCard({ trailer, onDismiss }) {
           src={artworkUrl(trailer)}
           alt={`${trailer.title} artwork`}
           fallbackLabel="No artwork"
+          loading={priority ? 'eager' : 'lazy'}
+          fetchPriority={priority ? 'high' : undefined}
           className="discover-card__artwork"
         />
         <div className="discover-card__copy">
@@ -288,11 +292,12 @@ export function BrowseDiscoverView({
           emptyCopy="No announcements from your shows right now."
         >
           <div className="discover-feed__list">
-            {announcements.map((announcement) => (
+            {announcements.map((announcement, index) => (
               <AnnouncementCard
                 key={announcement.id}
                 announcement={announcement}
                 onDismiss={onDismissAnnouncement}
+                priority={!hidden && index === 0}
               />
             ))}
           </div>
@@ -312,11 +317,12 @@ export function BrowseDiscoverView({
           emptyCopy="No new trailers right now."
         >
           <div className="discover-feed__list">
-            {trailers.map((trailer) => (
+            {trailers.map((trailer, index) => (
               <TrailerCard
                 key={trailer.videoKey}
                 trailer={trailer}
                 onDismiss={onDismissTrailer}
+                priority={!hidden && index === 0}
               />
             ))}
           </div>

@@ -31,7 +31,7 @@ const QUICK_MARK_MIN_DWELL_MS = 340
 
 export default function WatchingRow({
   show, isRemoving, isOpen, onOpenChange, onRemove, onQuickMark, isQuickMarking,
-  canQuickMark = true,
+  canQuickMark = true, priority = false,
 }) {
   const navigate = useNavigate()
   const rowRef = useRef(null)
@@ -361,6 +361,8 @@ export default function WatchingRow({
             src={show.poster_path ? POSTER_BASE + show.poster_path : null}
             alt={show.name}
             fallbackLabel="No poster"
+            loading={priority ? 'eager' : 'lazy'}
+            fetchPriority={priority ? 'high' : undefined}
             className="phase2-poster-frame h-24 w-16 shrink-0"
           />
 

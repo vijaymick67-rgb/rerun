@@ -302,6 +302,19 @@ describe('PWA foundation', () => {
     expect(PWA_IMAGE_CACHE_MAX_AGE_SECONDS).toBeGreaterThan(0)
   })
 
+  it('pins the poster-cache policy to a bounded, poster-heavy-aware cap', () => {
+    // Single-size posters (POSTER_BASE = w342) mean one show = one entry, so
+    // the cap is a real poster count. 200 gives the tracked library + Discover
+    // headroom past ordinary Browse search churn without evicting the core
+    // library, while staying firmly bounded (not an arbitrary 300/400). 30-day
+    // retention is safe because TMDB image URLs are content-addressed.
+    expect(PWA_IMAGE_CACHE_MAX_ENTRIES).toBe(200)
+    expect(PWA_IMAGE_CACHE_MAX_AGE_SECONDS).toBe(30 * 24 * 60 * 60)
+    // Still bounded — a finite LRU cap and a finite age, never unbounded.
+    expect(Number.isFinite(PWA_IMAGE_CACHE_MAX_ENTRIES)).toBe(true)
+    expect(PWA_IMAGE_CACHE_MAX_ENTRIES).toBeLessThanOrEqual(250)
+  })
+
   it('excludes API paths from the service-worker navigation fallback', () => {
     expect(isNavigationFallbackAllowed('/watching/123')).toBe(true)
     expect(isNavigationFallbackAllowed('/api/tmdb/tv/123')).toBe(false)

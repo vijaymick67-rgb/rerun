@@ -23,6 +23,11 @@ import {
 const DEBOUNCE_MS = 400
 const DELAYED_ADD_THRESHOLD_DAYS = 60
 
+// The search results grid is two columns, so only its first row — the first
+// two posters — is above the fold. Those load eagerly/high-priority; every
+// later result stays lazy.
+const SEARCH_ABOVE_FOLD_COUNT = 2
+
 function upsertTrackedShowForDiscover(trackedShows, show) {
   return upsertTrackedShowForNews(trackedShows, show).map((item) => (
     item.tmdb_id === show.id
@@ -363,7 +368,7 @@ export default function Browse() {
             Search results
           </h2>
           <div className="mt-2 grid grid-cols-2 gap-3">
-          {results.map((show) => {
+          {results.map((show, index) => {
             const isTracked = trackedIds.has(show.id)
             const isAdding = addingIds.has(show.id)
             const isRemoving = removingIds.has(show.id)
@@ -372,6 +377,12 @@ export default function Browse() {
             const year = show.first_air_date
               ? show.first_air_date.slice(0, 4)
               : null
+            // Only the first row of the two-column grid is above the fold, so
+            // just those two posters load eagerly/high-priority. Everything
+            // below stays lazy. The results section only renders while Browse
+            // is the active tab (it is unmounted, not merely hidden, on other
+            // tabs), so no offscreen route can request these.
+            const priority = index < SEARCH_ABOVE_FOLD_COUNT
 
             return (
               <div
@@ -382,6 +393,8 @@ export default function Browse() {
                   src={show.poster_path ? POSTER_BASE + show.poster_path : null}
                   alt={show.name}
                   fallbackLabel="No poster"
+                  loading={priority ? 'eager' : 'lazy'}
+                  fetchPriority={priority ? 'high' : undefined}
                   className="aspect-2/3 w-full"
                 />
 
