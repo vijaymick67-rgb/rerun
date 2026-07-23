@@ -9,7 +9,6 @@ import { classifyAnnouncement } from './announcementClassifier.js'
 import { ANNOUNCEMENTS_CACHE_KEY } from './announcementStore.js'
 import { TRAILERS_CACHE_KEY } from './trailerStore.js'
 import { FRANCHISE_CATALOGUE_ENDPOINT } from './discoverClient.js'
-import { decodePlanToken } from './announcementPlan.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
 
@@ -134,11 +133,15 @@ describe('Scope S — acquisition reaches shows a generic feed would miss', () =
     // client actually asks for that show by name — proving loadAnnouncements
     // sends per-show terms rather than depending on a shared top-ten feed.
     const niche = { title: 'A Man on the Inside renewed for Season 2 at Netflix', publishedAt: '2026-07-20T00:00:00.000Z', sourceName: 'Deadline', url: 'https://deadline.com/niche', canonicalUrl: 'https://deadline.com/niche' }
-    // The client now GETs a cacheable ?plan=<token> URL; the per-show terms live in
-    // the (decodable) token, proving the request still targets that show by name.
-    const fetchImpl = async (url) => {
-      const token = new URL(url, 'http://x').searchParams.get('plan')
-      const titles = decodePlanToken(token)?.canonical ?? []
+    // The client GETs a cacheable ?plan=<opaque id> URL that carries NO titles; a
+    // cold plan store returns 409, and the client registers the plan via POST. The
+    // POST body carries the per-show terms, proving the request still targets that
+    // show by name (rather than depending on a shared top-ten feed).
+    const fetchImpl = async (url, options = {}) => {
+      if ((options.method ?? 'GET') === 'GET') {
+        return { ok: false, status: 409, json: async () => ({ error: { code: 'PLAN_NOT_REGISTERED' } }) }
+      }
+      const titles = (JSON.parse(options.body).shows ?? []).map((s) => s.title)
       return jsonResponse({ articles: titles.includes('A Man on the Inside') ? [niche] : [] })
     }
     const state = await loadAnnouncements({ trackedShows: ALL_STATUS_SHOWS, storage: memoryStorage(), fetchImpl, now: NOW })

@@ -66,13 +66,25 @@ export async function loadAnnouncements({
   const cached = readAnnouncementsCache(storage, now)
   const registry = buildIdentityRegistry(trackedShows, detailsById)
   try {
-    // GET the durable, CDN-cacheable plan URL: the token is derived from the same
-    // shared plan code the server uses, so identical libraries hit the edge cache
-    // with zero upstream GNews calls (see announcementPlan.js + the endpoint).
-    const { token } = planFromShows(announcementRequestShows(registry))
-    const response = await fetchImpl(`${ANNOUNCEMENTS_ENDPOINT}?plan=${encodeURIComponent(token)}`, {
+    // GET the durable, CDN-cacheable plan URL by its OPAQUE id: the id is a SHA-256
+    // digest computed from the same shared plan code the server uses, so identical
+    // libraries hit the edge cache with zero upstream GNews calls — and the URL
+    // never contains any show title (see announcementPlan.js + the endpoint).
+    const requestShows = announcementRequestShows(registry)
+    const { planId } = await planFromShows(requestShows)
+    let response = await fetchImpl(`${ANNOUNCEMENTS_ENDPOINT}?plan=${encodeURIComponent(planId)}`, {
       headers: { Accept: 'application/json' },
     })
+    // A GET for an unregistered / expired opaque id is explicitly recoverable:
+    // POST the plan to register it (the POST also returns the fresh results), so a
+    // cold plan store never leaves the feed permanently empty.
+    if (response?.status === 409) {
+      response = await fetchImpl(ANNOUNCEMENTS_ENDPOINT, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shows: requestShows }),
+      })
+    }
     if (!response?.ok) throw new Error('announcements_source_unavailable')
     const payload = await response.json()
     const articles = Array.isArray(payload?.articles) ? payload.articles : []

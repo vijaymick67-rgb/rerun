@@ -8,36 +8,44 @@
 // in src/lib/discover/announcementPlan.js and is shared with the client.
 //
 // -----------------------------------------------------------------------------
-// SERVER CACHE + ACTUAL PERSISTENCE GUARANTEE (Part 12)
+// OPAQUE PLAN ID + SERVER CACHE + ACTUAL PERSISTENCE GUARANTEES (Part 12 + Blocker 2)
 // -----------------------------------------------------------------------------
-// Normal Discover mounts must NOT trigger up to 20 GNews calls. Two layers:
+// Normal Discover mounts must NOT trigger up to 20 GNews calls, and the URL must
+// NOT leak the tracked library. The GET path carries only an OPAQUE plan id (a
+// SHA-256 digest — no titles, constant length); the server rebuilds the query set
+// from the normalized plan it stored under that id. Layers:
 //
-//   1. DURABLE layer — the Vercel edge CDN. The client calls this endpoint as a
-//      GET with a stable ?plan=<token> (the token is derived from the sorted
-//      scheduled terms, so identical libraries produce an identical URL). The GET
-//      response carries `Cache-Control: s-maxage=... , stale-while-revalidate,
-//      stale-if-error`, so the CDN serves repeat requests within the TTL WITHOUT
-//      invoking the function at all — genuinely zero upstream GNews calls, shared
-//      across all clients/POPs, and persistent across serverless cold starts.
-//      This is the real persistence guarantee. A POST `Cache-Control` header alone
-//      would NOT be cacheable, which is exactly why the durable path is a GET.
+//   0. PLAN REGISTRY (durable, Blocker 2) — announcementPlanStore.js maps the
+//      opaque id -> { terms }. A POST registers the plan; a GET looks it up. Its
+//      durable backend is a Redis-compatible REST KV (Vercel KV / Upstash) when
+//      configured, with a bounded in-process fallback otherwise. A missing/expired
+//      id yields an explicit, recoverable PLAN_NOT_REGISTERED (the client re-POSTs)
+//      — never a guessed query, never a client-supplied self-describing payload.
 //
-//   2. Best-effort in-process layer — a small bounded Map, injected so it is
-//      testable, that dedupes upstream calls WITHIN a warm invocation and lets a
-//      full-upstream-failure serve the last usable candidates (stale-if-error).
-//      It is explicitly NOT relied on for durability across invocations; the CDN
-//      is. Corruption in this layer is treated as a miss, never a crash.
+//   1. RESULT DURABLE layer — the Vercel edge CDN. The GET response carries
+//      `Cache-Control: s-maxage=..., stale-while-revalidate, stale-if-error`, so
+//      the CDN serves repeat requests within the TTL WITHOUT invoking the function
+//      — genuinely zero upstream GNews calls, shared across clients/POPs, and
+//      persistent across cold starts. A POST `Cache-Control` alone is not
+//      cacheable, which is why the durable read path is a GET by opaque id.
+//
+//   2. Best-effort in-process result cache — a small bounded Map, injected so it
+//      is testable, that dedupes upstream calls WITHIN a warm invocation and lets
+//      a full-upstream-failure serve the last usable candidates (stale-if-error).
+//      NOT relied on for durability across invocations. Corruption -> treated as a
+//      miss, never a crash.
 //
 // The GNews key stays server-side. Absent key -> empty candidate set with
 // configured:false, NEVER a generic feed. `refresh=1` (GET) / `forceRefresh`
-// (POST) is the only way to bypass the cache — normal mounts never do.
+// (POST) is the only way to bypass the result cache — normal mounts never do.
 
 import { normalizeArticle } from '../../src/lib/news/normalizeArticle.js'
 import { dedupeArticles } from '../../src/lib/news/dedupeArticles.js'
 import {
-  buildAnnouncementQueries, buildQueriesFromTerms, buildPlanToken, decodePlanToken,
-  QUERY_CONCURRENCY, GNEWS_MAX_PER_QUERY,
+  buildAnnouncementQueries, buildQueriesFromTerms, computePlanId, normalizedPlan,
+  planTerms, isValidPlanId, QUERY_CONCURRENCY, GNEWS_MAX_PER_QUERY,
 } from '../../src/lib/discover/announcementPlan.js'
+import { createPlanStore } from '../../src/lib/discover/announcementPlanStore.js'
 
 // Re-exported so existing tests importing from this module keep working.
 export { buildAnnouncementQueries, MAX_QUERIES, TERM_BUDGET } from '../../src/lib/discover/announcementPlan.js'
@@ -136,11 +144,11 @@ async function mapWithConcurrency(items, mapper, concurrency) {
   return results
 }
 
-// Execute a query set through the cache. Returns { status, body, headers }.
+// Execute a query set through the result cache. Returns { status, body, headers }.
 async function executeSearch({
-  token, queries, coverageMeta, apiKey, fetchImpl, cache, now, forceRefresh, cacheControl,
+  cacheKey, queries, coverageMeta, apiKey, fetchImpl, cache, now, forceRefresh, cacheControl,
 }) {
-  const cacheEntry = cache.read(token)
+  const cacheEntry = cache.read(cacheKey)
   const fresh = cacheEntry && (now - cacheEntry.storedAt <= ACQUISITION_CACHE_TTL_MS)
 
   // Cache HIT within TTL -> zero upstream GNews calls.
@@ -189,7 +197,7 @@ async function executeSearch({
   const value = { articles: deduped, meta: { configured: true, failureCount, count: deduped.length } }
   // Cache the usable candidates even on a PARTIAL failure so a later request within
   // TTL is a hit and a subsequent total failure can still serve them.
-  cache.write(token, value, now)
+  cache.write(cacheKey, value, now)
 
   return {
     status: 200,
@@ -198,24 +206,36 @@ async function executeSearch({
   }
 }
 
-export function createAnnouncementsHandler({ env = process.env, fetchImpl = globalThis.fetch, cache = defaultCache } = {}) {
+export function createAnnouncementsHandler({
+  env = process.env, fetchImpl = globalThis.fetch, cache = defaultCache, planStore,
+} = {}) {
+  const store = planStore ?? createPlanStore({ env, fetchImpl })
   return async function announcementsHandler(req, res) {
     const apiKey = env.GNEWS_API_KEY
     const fetchedAt = new Date().toISOString()
 
-    // ---- GET: durable, CDN-cacheable plan execution --------------------------
+    // ---- GET: opaque id -> stored plan -> CDN-cacheable execution ------------
     if (req.method === 'GET') {
-      const token = req.query?.plan
-      if (typeof token !== 'string' || !token) {
-        json(res, 400, errorBody('MISSING_PLAN', 'GET requires a ?plan=<token> parameter'))
+      const planId = req.query?.plan
+      if (typeof planId !== 'string' || !planId) {
+        json(res, 400, errorBody('MISSING_PLAN', 'GET requires a ?plan=<id> parameter'))
         return
       }
-      const decoded = decodePlanToken(token)
-      if (!decoded) {
-        json(res, 400, errorBody('INVALID_PLAN', 'plan token is malformed'))
+      // Validate the SHAPE before any lookup: garbage is a cheap 400, never a
+      // query. We never accept a client-supplied self-describing payload here.
+      if (!isValidPlanId(planId)) {
+        json(res, 400, errorBody('INVALID_PLAN', 'plan id is malformed'))
         return
       }
-      const queries = buildQueriesFromTerms(decoded.terms)
+      // Resolve the opaque id to its stored terms. A missing / expired / forged id
+      // is a recoverable PLAN_NOT_REGISTERED — the client re-registers via POST.
+      // Crucially, NO upstream search runs for an unknown id.
+      const stored = await store.get(planId).catch(() => null)
+      if (!stored) {
+        json(res, 409, errorBody('PLAN_NOT_REGISTERED', 'Unknown or expired plan id — POST the plan to register it'), { 'Cache-Control': 'no-store' })
+        return
+      }
+      const queries = buildQueriesFromTerms(planTerms(stored))
       const coverageMeta = { fetchedAt, queryCount: queries.length }
       if (!apiKey) {
         json(res, 200, { articles: [], meta: { configured: false, ...coverageMeta, count: 0 } }, { 'Cache-Control': 'no-store' })
@@ -226,14 +246,14 @@ export function createAnnouncementsHandler({ env = process.env, fetchImpl = glob
         return
       }
       const result = await executeSearch({
-        token, queries, coverageMeta, apiKey, fetchImpl, cache, now: Date.now(),
+        cacheKey: planId, queries, coverageMeta, apiKey, fetchImpl, cache, now: Date.now(),
         forceRefresh: req.query?.refresh === '1', cacheControl: GET_CACHE_CONTROL,
       })
       json(res, result.status, result.body, result.headers)
       return
     }
 
-    // ---- POST: plan from shows + execute (also returns the token) ------------
+    // ---- POST: plan from shows, register the id, execute ---------------------
     if (req.method !== 'POST') {
       res.setHeader('Allow', 'GET, POST')
       json(res, 405, errorBody('METHOD_NOT_ALLOWED', 'Only GET and POST are supported'))
@@ -248,8 +268,12 @@ export function createAnnouncementsHandler({ env = process.env, fetchImpl = glob
     }
 
     const { queries, plan, canonicalScheduled, aliasesScheduled } = buildAnnouncementQueries(shows)
-    const token = buildPlanToken({ canonicalScheduled, aliasesScheduled })
-    const coverageMeta = { fetchedAt, queryCount: queries.length, planToken: token, ...plan }
+    const normalized = normalizedPlan({ canonicalScheduled, aliasesScheduled })
+    const planId = await computePlanId(normalized)
+    // Register the opaque id -> normalized plan so subsequent GETs by this id
+    // resolve to the same terms (durable when a KV backend is configured).
+    await store.set(planId, normalized).catch(() => {})
+    const coverageMeta = { fetchedAt, queryCount: queries.length, planId, ...plan }
 
     if (!apiKey) {
       json(res, 200, { articles: [], meta: { configured: false, ...coverageMeta, count: 0 } }, { 'Cache-Control': 'no-store' })
@@ -261,7 +285,7 @@ export function createAnnouncementsHandler({ env = process.env, fetchImpl = glob
     }
 
     const result = await executeSearch({
-      token, queries, coverageMeta, apiKey, fetchImpl, cache, now: Date.now(),
+      cacheKey: planId, queries, coverageMeta, apiKey, fetchImpl, cache, now: Date.now(),
       forceRefresh: parsed.forceRefresh === true, cacheControl: 'no-store', // POST is not CDN-cacheable
     })
     json(res, result.status, result.body, result.headers)

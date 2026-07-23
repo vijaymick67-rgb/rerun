@@ -113,12 +113,16 @@ export function verifiedCompanyIdsFor(franchise, seeds = FRANCHISE_COMPANY_SEEDS
 // Live-verify a single candidate seed against the real TMDB API (via an injected
 // fetchJson that hits /company/{id} and /discover). A seed passes only when:
 //   1. it is not a rejected broad-company id;
-//   2. the live company name matches the candidate name;
-//   3. a discover sample is NARROW (total_results <= MAX_NARROW_SAMPLE) — proving
-//      it is a franchise entity, not a whole parent-studio slate.
-// Returns evidence; it NEVER enables anything itself — a maintainer reviews the
-// evidence and edits the seed flags. This keeps verification honest and auditable.
-export async function verifySeed(seed, { fetchJson, sampleMediaType = MEDIA_TYPE.MOVIE } = {}) {
+//   2. the live company name matches the candidate name EXACTLY (normalized);
+//   3. BOTH the movie AND tv discover samples are NARROW — neither exceeds
+//      MAX_NARROW_SAMPLE and at least one has results — proving it is a franchise
+//      entity, not a whole parent-studio slate (a slate is broad in at least one
+//      media type). Sampling only one type could miss a company that is narrow in
+//      film but a broad slate in television, or vice versa.
+// Returns EVIDENCE only — this function never mutates or enables a seed itself.
+// The runtime verifier (franchiseSeedVerifier.js) consumes the evidence server
+// side and decides which seeds may participate; a maintainer needs no source edit.
+export async function verifySeed(seed, { fetchJson } = {}) {
   if (!seed || typeof fetchJson !== 'function') {
     return { companyId: seed?.companyId ?? null, ok: false, reason: 'no_fetch_impl' }
   }
@@ -130,19 +134,44 @@ export async function verifySeed(seed, { fetchJson, sampleMediaType = MEDIA_TYPE
     return { companyId: seed.companyId, ok: false, reason: 'company_unresolved' }
   }
   const nameMatch = normalizeName(company.name) === normalizeName(seed.candidateName)
-  const type = sampleMediaType === MEDIA_TYPE.TV ? 'tv' : 'movie'
-  const sample = await fetchJson(`/discover/${type}`, { with_companies: String(seed.companyId), page: '1' })
-  const totalResults = Number(sample?.total_results)
-  const narrow = Number.isFinite(totalResults) && totalResults > 0 && totalResults <= MAX_NARROW_SAMPLE
+
+  // Sample BOTH media types for narrowness.
+  const [movieSample, tvSample] = await Promise.all([
+    fetchJson('/discover/movie', { with_companies: String(seed.companyId), page: '1' }),
+    fetchJson('/discover/tv', { with_companies: String(seed.companyId), page: '1' }),
+  ])
+  const movieResults = toCount(movieSample?.total_results)
+  const tvResults = toCount(tvSample?.total_results)
+  const anyResults = (movieResults ?? 0) + (tvResults ?? 0) > 0
+  const withinBound = isWithinBound(movieResults) && isWithinBound(tvResults)
+  const narrow = anyResults && withinBound
+  const totalResults = movieResults != null || tvResults != null
+    ? (movieResults ?? 0) + (tvResults ?? 0)
+    : null
+
   return {
     companyId: seed.companyId,
     resolvedName: company.name,
     nameMatch,
-    totalResults: Number.isFinite(totalResults) ? totalResults : null,
+    movieResults,
+    tvResults,
+    totalResults,
     narrow,
     ok: Boolean(nameMatch && narrow),
     reason: !nameMatch ? 'name_mismatch' : !narrow ? 'too_broad_or_empty' : 'ok',
   }
+}
+
+function toCount(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+// A missing sample (null) is treated as "unknown", not "broad": it must not by
+// itself brand a company broad, but it also cannot prove narrowness (see
+// anyResults). A present sample must not exceed the ceiling.
+function isWithinBound(count) {
+  return count == null || count <= MAX_NARROW_SAMPLE
 }
 
 function normalizeName(value) {

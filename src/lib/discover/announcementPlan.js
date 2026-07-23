@@ -10,14 +10,22 @@
 // large library's later shows are never silently dropped for an earlier show's
 // alias. Beyond the budget the plan reports partialCoverage + showsOmitted.
 //
-// CACHE TOKEN (Part 12): the plan produces a stable, self-describing token from
-// the SORTED scheduled canonical titles + SORTED scheduled aliases + vocabulary /
-// schema / language versions. Equivalent search plans (same shows in any received
-// order) therefore yield the SAME token — and the same cacheable GET URL — so the
-// Vercel edge CDN serves repeat requests with zero upstream GNews calls. The token
-// is self-describing: the server decodes it to rebuild the exact query set (it is
-// the authority on the token), while the client computes the same token to form
-// the cacheable URL without an extra round-trip.
+// OPAQUE PLAN ID (Blocker 2): the plan produces a stable, OPAQUE identifier — a
+// SHA-256 digest (64 hex chars) of the normalized plan (SORTED scheduled canonical
+// titles + SORTED scheduled aliases + vocabulary / schema / language versions).
+//   * It is SHORT and CONSTANT-LENGTH regardless of library size, so a 120-show
+//     library can never overflow the URL (the old Base64 token grew unbounded and
+//     leaked every tracked title into the query string).
+//   * It is OPAQUE: the id contains no show titles or aliases, so the URL no longer
+//     exposes the tracked library.
+//   * Equivalent plans (same shows in any received order) produce the SAME id and
+//     therefore the SAME cacheable GET URL; different plans produce different ids.
+// The id is NOT self-describing, so the server cannot reconstruct the query set
+// from it alone — the normalized plan is stored server-side, keyed by the id, in a
+// durable, server-accessible plan store (announcementPlanStore.js). A GET carries
+// only the opaque id; the server looks up the stored terms. A forged / unknown /
+// expired id resolves to nothing and triggers no upstream search (an explicit,
+// recoverable PLAN_NOT_REGISTERED response tells the client to re-register).
 
 export const MAX_ALIASES_PER_SHOW = 2 // verified alternative titles per show
 export const MAX_TERMS_PER_QUERY = 8 // OR-batched title terms per query
@@ -115,51 +123,78 @@ export function buildAnnouncementQueries(shows) {
   return { queries, plan, canonicalScheduled, aliasesScheduled }
 }
 
-// ---- Cache token -----------------------------------------------------------
-function toBase64Url(str) {
-  const bytes = new TextEncoder().encode(str)
-  let bin = ''
-  for (const b of bytes) bin += String.fromCharCode(b)
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+// ---- Opaque plan id --------------------------------------------------------
+// A well-formed plan id is exactly this: a lowercase 64-char SHA-256 hex digest.
+// The server validates GET ids against it before any lookup, so garbage is a
+// cheap 400 and a well-formed-but-unknown id is a cheap, recoverable 409.
+export const PLAN_ID_PATTERN = /^[a-f0-9]{64}$/
+export function isValidPlanId(id) {
+  return typeof id === 'string' && PLAN_ID_PATTERN.test(id)
 }
 
-function fromBase64Url(token) {
-  const b64 = String(token).replace(/-/g, '+').replace(/_/g, '/')
-  const bin = atob(b64)
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
-  return new TextDecoder().decode(bytes)
-}
-
-// Stable token from SORTED scheduled terms + versions. Sorting makes the token
-// order-independent so equivalent libraries share one cache entry.
-export function buildPlanToken({ canonicalScheduled = [], aliasesScheduled = [] } = {}) {
-  const payload = {
+// The normalized plan: the canonical, order-independent description of a search
+// plan. Sorting the term lists makes it identical for equivalent libraries. This
+// is what gets stored server-side (keyed by the opaque id) and hashed into the id.
+export function normalizedPlan({ canonicalScheduled = [], aliasesScheduled = [] } = {}) {
+  return {
     v: ACQUISITION_SCHEMA_VERSION,
     ev: EVENT_VOCAB_VERSION,
     l: ACQUISITION_LANG,
-    c: [...canonicalScheduled].sort(),
-    a: [...aliasesScheduled].sort(),
-  }
-  return toBase64Url(JSON.stringify(payload))
-}
-
-// Decode a token back to its terms. Returns null on any corruption (the endpoint
-// treats that as a cache miss and re-plans rather than crashing).
-export function decodePlanToken(token) {
-  try {
-    const parsed = JSON.parse(fromBase64Url(token))
-    if (!parsed || parsed.v !== ACQUISITION_SCHEMA_VERSION) return null
-    const canonical = Array.isArray(parsed.c) ? parsed.c.filter((t) => typeof t === 'string') : []
-    const aliases = Array.isArray(parsed.a) ? parsed.a.filter((t) => typeof t === 'string') : []
-    return { canonical, aliases, terms: [...canonical, ...aliases] }
-  } catch {
-    return null
+    c: [...canonicalScheduled].filter((t) => typeof t === 'string').sort(),
+    a: [...aliasesScheduled].filter((t) => typeof t === 'string').sort(),
   }
 }
 
-// One-shot plan for the client: queries (not used client-side), coverage plan, and
-// the cache token that forms the cacheable GET URL.
-export function planFromShows(shows) {
+// The flat query terms a stored plan expands to (canonical first, then aliases) —
+// used by the server GET path to rebuild the exact query set from the stored plan.
+export function planTerms(plan) {
+  const c = Array.isArray(plan?.c) ? plan.c.filter((t) => typeof t === 'string') : []
+  const a = Array.isArray(plan?.a) ? plan.a.filter((t) => typeof t === 'string') : []
+  return [...c, ...a]
+}
+
+// Deterministic serialization: fixed key order (v, ev, l, c, a) + sorted arrays,
+// so equivalent plans serialize identically and hash to the same id.
+function serializePlan(plan) {
+  return JSON.stringify({ v: plan.v, ev: plan.ev, l: plan.l, c: plan.c, a: plan.a })
+}
+
+// Opaque, short, constant-length plan id = SHA-256 hex of the normalized plan.
+// Uses Web Crypto (present in browsers on secure/localhost contexts and in Node
+// 18+). Async because subtle.digest is async. `input` may be a normalizedPlan or
+// the { canonicalScheduled, aliasesScheduled } shape.
+export async function computePlanId(input, { subtle = globalThis.crypto?.subtle } = {}) {
+  const plan = input && Array.isArray(input.c) ? input : normalizedPlan(input)
+  const serialized = serializePlan(plan)
+  if (subtle && typeof subtle.digest === 'function') {
+    const digest = await subtle.digest('SHA-256', new TextEncoder().encode(serialized))
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+  }
+  // Defensive fallback (Web Crypto absent — e.g. an http non-secure context):
+  // a deterministic, opaque 256-bit digest. Never self-describing.
+  return fallbackDigest(serialized)
+}
+
+// A deterministic 256-bit hash assembled from eight independently-seeded FNV-1a
+// passes, so it is 64 hex chars like SHA-256 and has a negligible collision rate
+// across realistic plan counts. Only used when Web Crypto is unavailable.
+function fallbackDigest(str) {
+  const seeds = [0x811c9dc5, 0x01000193, 0xdeadbeef, 0xcafebabe, 0x9e3779b9, 0x7f4a7c15, 0x2545f491, 0x94d049bb]
+  return seeds.map((seed) => {
+    let h = seed >>> 0
+    for (let i = 0; i < str.length; i += 1) {
+      h ^= str.charCodeAt(i)
+      h = Math.imul(h, 0x01000193) >>> 0
+    }
+    return h.toString(16).padStart(8, '0')
+  }).join('')
+}
+
+// One-shot plan for the client: coverage plan, the opaque id (for the cacheable
+// GET URL), and the normalized plan + terms (for POST registration).
+export async function planFromShows(shows, options = {}) {
   const { queries, plan, canonicalScheduled, aliasesScheduled } = buildAnnouncementQueries(shows)
-  return { queries, plan, token: buildPlanToken({ canonicalScheduled, aliasesScheduled }) }
+  const normalized = normalizedPlan({ canonicalScheduled, aliasesScheduled })
+  const planId = await computePlanId(normalized, options)
+  return { queries, plan, planId, normalized, terms: planTerms(normalized) }
 }

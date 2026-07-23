@@ -26,8 +26,10 @@ harm than a wrong one shown as fact.
 | `trailerFilter.js` | TMDB video accept/reject rules (site/type/name). |
 | `trailerRank.js` | Trailer model, dedup, deterministic ranking, per-media selection. |
 | `trailerStore.js` | Versioned trailers cache + bootstrap baseline + seen-state (`rerun_discover_trailers:v1`). |
-| `announcementPlan.js` | Shared query planner + cache token (guaranteed canonical coverage; stable token for the cacheable GET). Imported by both the client and the acquisition endpoint. |
-| `franchiseSeeds.js` | **Verified narrow franchise company seeds** (Marvel Studios / Marvel Television / DC Studios candidates) + rejected broad-company ids + live `verifySeed`. Ships all seeds disabled/unverified. |
+| `announcementPlan.js` | Shared query planner + **opaque plan id** (guaranteed canonical coverage; a SHA-256 digest that is short, constant-length, and title-free). Imported by both the client and the acquisition endpoint. |
+| `announcementPlanStore.js` | **Durable, server-accessible plan registry**: opaque id → normalized plan. Redis-compatible REST KV backend (Vercel KV / Upstash) when configured, bounded in-memory fallback otherwise. |
+| `franchiseSeeds.js` | Candidate narrow franchise company seeds (Marvel Studios / Marvel Television / DC Studios) + rejected broad-company ids + live `verifySeed` (samples movie **and** tv for narrowness). |
+| `franchiseSeedVerifier.js` | **Automatic runtime seed verification**: verifies each candidate live with the server key, isolates per-seed failures, caches successful evidence for a long TTL, returns only verified seeds. Removes the manual `verified:true` source edit. |
 | `franchiseCatalogue.js` | **Dynamic** Marvel/DC discovery: TMDB `/discover` (movie+TV) → detail-level company confirmation → moving date window → bounded pagination → dedup → overrides. Membership is TMDB company attribution, never keyword. |
 | `franchiseOverrides.js` | Tiny exceptional include/exclude override layer (empty by default). |
 | `franchiseCatalogueStore.js` | Versioned SWR catalogue cache (`rerun_discover_franchise_catalogue:v1`, 24h TTL, config-keyed, stale-on-error). |
@@ -37,9 +39,10 @@ harm than a wrong one shown as fact.
 Server-side: `api/discover/announcements.js` is the announcements **acquisition**
 endpoint (bounded, batched, event-scoped per-show search + server cache), and
 `api/discover/franchise-catalogue.js` runs the dynamic Marvel/DC discovery
-pipeline with the protected TMDB key (CDN-cached). `scripts/verify-franchise-seeds.mjs`
-is a maintainer tool that live-verifies the franchise **company seeds** when a
-TMDB key is present.
+pipeline with the protected TMDB key (CDN-cached) — and now verifies its seeds
+**automatically at runtime** with that key, so no manual source edit is needed.
+`scripts/verify-franchise-seeds.mjs` is an optional CLI diagnostic that previews
+that same live verification.
 
 ## Tracked-show coverage
 
@@ -58,10 +61,12 @@ dedicated endpoint, not the generic `/api/news` feed:
 
 - The client (`loadAnnouncements`) derives per-show search terms from the
   identity registry — each show's canonical title plus up to two **verified**
-  alternative titles (never invented aliases). It computes a stable plan **token**
-  (shared `announcementPlan.js`) and **GETs** the cacheable
-  `/api/discover/announcements?plan=<token>` URL, so identical libraries hit the
-  edge CDN with zero upstream calls (see the server-cache section below).
+  alternative titles (never invented aliases). It computes a stable **opaque plan
+  id** (shared `announcementPlan.js`; a SHA-256 digest — no titles, constant
+  length) and **GETs** the cacheable `/api/discover/announcements?plan=<id>` URL, so
+  identical libraries hit the edge CDN with zero upstream calls. A cold plan store
+  returns `409 PLAN_NOT_REGISTERED`; the client then POSTs the plan to register it
+  (see the plan-registry section below).
 - The endpoint builds **bounded, batched** queries: several shows' terms are
   OR-joined per query and ANDed with a shared clause scoped to **only the four
   allowed event categories** (renewed/renewal, canceled/cancelled/"final season",
@@ -95,39 +100,55 @@ dedicated endpoint, not the generic `/api/news` feed:
 - The GNews key stays server-side. With no key configured the endpoint returns
   an **empty** candidate set (`configured: false`) — never a generic feed.
 
-### Server acquisition cache & actual persistence guarantee
+### Opaque plan id, plan registry & actual persistence guarantees
 
 A refresh can issue up to 20 GNews searches, so normal Discover mounts must not
-trigger them every time. Two cache layers, with an honest account of what each
-actually guarantees:
+trigger them every time — and the URL must not leak the tracked library. Three
+layers, with an honest account of what each actually guarantees:
 
-1. **Durable layer — the Vercel edge CDN.** The client requests the endpoint as a
-   **GET** with a stable `?plan=<token>`. The token is a self-describing encoding
-   of the **sorted** scheduled canonical titles + sorted scheduled aliases +
-   vocabulary/schema/language versions, so equivalent libraries (same shows in any
-   order) produce an **identical URL**. The GET response carries
+0. **Opaque plan id + durable plan registry (`announcementPlanStore.js`).** The
+   GET path carries only an **opaque id** — a SHA-256 hex digest of the normalized
+   plan (sorted canonical titles + sorted aliases + vocab/schema/lang versions).
+   It is **short and constant-length** (64 chars) regardless of library size — a
+   120-show library can never overflow the URL — and it contains **no titles**, so
+   the URL no longer exposes the library. Equivalent plans yield the **same** id
+   and same cacheable URL; different plans yield different ids. Because the id is
+   *not* self-describing, the server cannot rebuild the query set from it alone: it
+   looks the normalized plan up in a **durable, server-accessible registry** keyed
+   by the id. That registry is a **Redis-compatible REST KV** (Vercel KV or Upstash
+   — set `KV_REST_API_URL`+`KV_REST_API_TOKEN` or the `UPSTASH_REDIS_REST_*` pair)
+   when configured, giving real cross-cold-start, cross-instance durability with a
+   TTL (bounded storage + expiry). When no KV is configured it falls back to a
+   bounded in-process Map — **explicitly best-effort, not durable** — and a lost
+   registration is not fatal: a GET for a missing/expired/forged id returns an
+   explicit, recoverable `409 PLAN_NOT_REGISTERED`, and the client re-registers via
+   POST. A **POST** (with the raw `shows`) is the only path that registers a plan;
+   the GET never trusts a client-supplied self-describing payload, and a forged id
+   triggers **no** upstream search.
+1. **Result durable layer — the Vercel edge CDN.** The GET-by-id response carries
    `Cache-Control: public, s-maxage=1800, stale-while-revalidate=10800,
    stale-if-error=86400`, so within the 30-minute TTL the CDN serves repeats
    **without invoking the function at all** — genuinely zero upstream GNews calls,
-   shared across clients/POPs and persistent across serverless cold starts. This
-   is the real persistence guarantee. A `Cache-Control` header on a **POST** would
-   *not* be cacheable — which is exactly why the durable path is a GET with a
-   token (generated by shared code; the server is the authority that decodes it to
-   rebuild the exact query set).
-2. **Best-effort in-process layer.** A small bounded `Map` (injectable, so it is
-   unit-testable) dedupes upstream calls **within a warm invocation** and lets a
-   full-upstream failure serve the last usable candidates (`stale-if-error`). It is
-   explicitly **not** relied on for durability across invocations — the CDN is.
-   Corruption in this layer is treated as a miss, never a crash.
+   shared across clients/POPs and persistent across serverless cold starts. A
+   `Cache-Control` header on a **POST** would *not* be cacheable — which is exactly
+   why the durable read path is a GET by opaque id.
+2. **Best-effort in-process result cache.** A small bounded `Map` (injectable, so
+   it is unit-testable) dedupes upstream calls **within a warm invocation** and lets
+   a full-upstream failure serve the last usable candidates (`stale-if-error`). It
+   is explicitly **not** relied on for durability across invocations. Corruption in
+   this layer is treated as a miss, never a crash.
 
-The cache key is the plan token, so differing query plans never contaminate each
-other. A partial upstream failure still caches the usable candidates. `refresh=1`
-(GET) / `forceRefresh` (POST) is the only bypass — normal mounts never force. The
-POST path (used for planning/tests) also returns the `planToken` so a client can
-switch to the cacheable GET. Cache behaviour is proven by eight endpoint tests
-(first request calls upstream; second within TTL calls zero; changed plan → new
-key; expiry refreshes; partial failure preserves candidates; full failure serves
-stale; no cross-plan contamination; corruption does not crash).
+The result-cache key is the opaque id, so differing query plans never contaminate
+each other. A partial upstream failure still caches the usable candidates.
+`refresh=1` (GET) / `forceRefresh` (POST) is the only bypass — normal mounts never
+force. The POST path returns the `planId` so a client can switch to the cacheable
+GET. Behaviour is proven by the endpoint tests (registered GET calls upstream;
+second within TTL calls zero; forged id → recoverable 409 with no upstream; changed
+plan → different id; expiry refreshes; partial failure preserves candidates; full
+failure serves stale; no cross-plan contamination; corruption does not crash) plus
+the plan-id and plan-store unit suites (120-show URL stays short + title-free;
+equivalent plans reuse one id; changed plans differ; KV vs in-memory backend
+selection; TTL expiry + bounded eviction).
 
 This is a clean retirement path: Phase 2 removes the legacy generic-news code
 without touching this endpoint.
@@ -318,7 +339,7 @@ exactly the titles most likely to publish a fresh trailer would be missing until
 someone edited the array. **It has been deleted.** Future Marvel/DC projects must
 enter automatically, without a source-code title addition.
 
-### Verified narrow company seeds (`franchiseSeeds.js`)
+### Narrow company seeds + AUTOMATIC runtime verification (`franchiseSeeds.js` + `franchiseSeedVerifier.js`)
 
 A `/discover?with_companies=<id>` query is only as safe as the company id is
 **narrow**. Parent-studio ids are dangerously broad — `429` "DC Comics" (a loose
@@ -326,15 +347,36 @@ source-material credit on decades of unrelated media), `174`/`2` (Warner Bros.
 Pictures / Walt Disney Pictures, entire slates), `128`, `6704` — and are listed in
 `REJECTED_BROAD_COMPANY_IDS`, never used. Eligible seeds are only franchise-specific
 production entities: **Marvel Studios, Marvel Television, DC Studios** (and the
-like). Each seed is a **candidate** shipped `verified: false, enabled: false`; a
-seed is never queried at runtime until it is live-verified. We never ship
-`verified: false, enabled: true`.
+like). Each seed is a compact **candidate** in source; nothing is asserted as
+verified in the committed code.
+
+**Verification is automatic at runtime, not a manual source edit.** When the
+catalogue endpoint runs with a TMDB key, `resolveVerifiedSeeds`
+(`franchiseSeedVerifier.js`) verifies every candidate **live** and admits only the
+ones that pass — flipping `verified/enabled` **in memory** as a consequence of live
+evidence. There is no `verified: true` to hand-edit for a normal deployment; the
+old empty-production-catalogue bug (every candidate shipped disabled forever) is
+gone.
 
 `verifySeed(seed, { fetchJson })` performs the live check: it rejects broad ids
-outright, confirms the live company **name** matches the candidate, and inspects a
-`/discover` sample to confirm the company is **narrow** (`total_results ≤
-MAX_NARROW_SAMPLE`, i.e. a franchise entity, not a studio slate). It returns
-evidence only — a maintainer reviews it and edits the seed flags.
+outright, confirms the live company **name** matches the candidate exactly, and
+samples **both** `/discover/movie` and `/discover/tv` to confirm the company is
+**narrow** (neither media type exceeds `MAX_NARROW_SAMPLE`, and at least one has
+results — a studio slate is broad in at least one type). The verifier then:
+
+- caches **successful** evidence for a long TTL (7 days), so the live checks run at
+  most once per TTL per warm server (and the 24h CDN-cached catalogue response
+  collapses even that);
+- **isolates** each seed — one company failing (renamed, gone broad, a network
+  blip, or a thrown error) never disables the others;
+- produces **honest** metadata (`meta.seedVerification`: per-seed `ok`/`reason`/
+  samples + a summary), never a silent guess;
+- keeps the TMDB key server-side (used only by the injected server fetch).
+
+Unverified seeds are never returned, so the core rule holds: **an unverified seed
+is never queried for catalogue membership.** `scripts/verify-franchise-seeds.mjs`
+is an optional CLI that prints the same live evidence for a maintainer spot-check;
+it is no longer required for the feature to work.
 
 ### Detail-level membership confirmation (`franchiseCatalogue.js`)
 
@@ -403,23 +445,24 @@ pruned once TMDB corrects the metadata.
 ### Honest live-verification status
 
 **Exact live checks performed in this build: none.** The build/CI sandbox has no
-TMDB key and cannot reach `api.themoviedb.org`. Because **no company seed could be
-live-verified here, every seed stays disabled and the dynamic catalogue is empty
-in this environment** — the feature is safely inert rather than guessing. A safe
-disabled seed is strictly preferable to an enabled guessed one.
+TMDB key and cannot reach `api.themoviedb.org`, so no seed is live-verified *here*
+and the dynamic catalogue is empty *in this environment* — the feature is safely
+inert rather than guessing. Crucially, this is now a property of the **sandbox
+lacking a key**, not of the code lacking a manual flag: in the key-holding
+production/preview environment the endpoint verifies its seeds automatically at
+runtime (above), so the catalogue populates itself with **no source edit and no
+manual step**.
 
-**Maintenance workflow** (documented so the catalogue stays current on its own):
+**Operation** (no per-deployment action required):
 
-1. Run `TMDB_API_KEY=… node scripts/verify-franchise-seeds.mjs` in a key-holding
-   environment. For each candidate seed it resolves the company, confirms its live
-   name, and samples `/discover` (movie + TV) to confirm narrowness, printing an
-   OK/FAIL row.
-2. For each seed that resolves narrow and name-matched, set `verified: true,
-   enabled: true` in `franchiseSeeds.js`. Keep any that fail **disabled**.
-3. Deploy. From then on, new Marvel/DC projects enter the catalogue automatically
-   as TMDB attributes them to a verified company — **no per-title source edits**.
-4. Revisit only if TMDB reorganises a franchise company id, or to prune an
-   override once its metadata gap is fixed upstream.
+1. Deploy. With `TMDB_API_KEY` present, `api/discover/franchise-catalogue.js`
+   verifies each candidate seed live on first request per TTL and builds the
+   catalogue from the ones that pass.
+2. New Marvel/DC projects then enter automatically as TMDB attributes them to a
+   verified company — **no per-title source edits**.
+3. `TMDB_API_KEY=… node scripts/verify-franchise-seeds.mjs` is an **optional**
+   spot-check that prints the same live evidence; revisit a candidate id only if
+   TMDB reorganises a franchise company entity.
 
 ## Cache schema & versioning (migration)
 
@@ -433,10 +476,13 @@ Three separate, versioned localStorage namespaces, all distinct from the legacy
 - `rerun_discover_franchise_catalogue:v1` (dynamic Marvel/DC catalogue, 24h TTL,
   config-keyed on the verified seed set + window version, stale-on-error)
 
-Server-side, the announcement acquisition cache's durable layer is the **Vercel
-edge CDN** (GET `?plan=<token>`, `s-maxage`) — not an in-memory module Map, which
-is used only as a best-effort per-invocation layer. The franchise catalogue
-endpoint is likewise CDN-cached.
+Server-side, the announcement result cache's durable layer is the **Vercel edge
+CDN** (GET `?plan=<opaque id>`, `s-maxage`) — not an in-memory module Map, which is
+used only as a best-effort per-invocation layer. The opaque id → normalized-plan
+mapping lives in the **durable plan registry** (`announcementPlanStore.js`: a
+Redis-compatible REST KV when configured, bounded in-memory fallback otherwise; see
+the plan-registry section for the actual persistence guarantees). The franchise
+catalogue endpoint is likewise CDN-cached.
 
 Each has robust JSON parsing, an explicit version, a TTL / max-age, bounded
 storage, and a clean reset on corruption or version mismatch (no boot crash). The
@@ -471,23 +517,25 @@ modules.
 
 ## Known limitations
 
-- The Marvel/DC franchise **company seeds are not live-verified** in this build
-  (no TMDB key in the sandbox — exact live checks performed: none). All seeds ship
-  `verified: false, enabled: false`, so **the dynamic catalogue is empty here** and
-  no franchise trailers surface until a maintainer runs
-  `scripts/verify-franchise-seeds.mjs` and enables the seeds that pass. This is the
-  intended safe state: a disabled seed is preferable to an enabled guessed one. Once
-  seeds are enabled, new Marvel/DC projects enter automatically via TMDB company
-  attribution — no per-title source edits.
+- The Marvel/DC franchise **company seeds are not live-verified in this sandbox**
+  (no TMDB key — exact live checks performed: none), so the dynamic catalogue is
+  empty *here*. This is now a property of the missing key, not the code: in a
+  key-holding environment the endpoint verifies its seeds automatically at runtime
+  and the catalogue populates itself with no source edit. `scripts/verify-franchise-seeds.mjs`
+  is an optional spot-check, not a required step.
 - Announcement acquisition depends on a configured GNews key server-side. Without
   it the endpoint returns an empty candidate set (never a generic feed), so the
   Announcements feed is empty until the key is present. Canonical coverage is
   guaranteed up to 160 tracked shows per refresh; beyond that the response reports
   `partialCoverage` and raising it means raising `MAX_QUERIES`.
-- The announcement cache's durable persistence is the Vercel edge CDN (per-POP,
-  best-effort, honouring `s-maxage`/SWR/`stale-if-error`). It is not a strongly
-  consistent store; for a personal single-user app this is more than sufficient and
-  no cross-user data is involved. The in-process Map is explicitly non-durable.
+- The announcement **plan registry** is durable only when a Redis-compatible REST
+  KV is configured (`KV_REST_API_*` / `UPSTASH_REDIS_REST_*`). Without it the
+  registry falls back to a bounded in-process Map — best-effort, non-durable — and
+  a lost registration is recovered transparently by the client's POST on the next
+  `409 PLAN_NOT_REGISTERED`. The announcement **result** cache's durable layer is
+  the Vercel edge CDN (per-POP, best-effort, honouring `s-maxage`/SWR/
+  `stale-if-error`); its in-process Map is explicitly non-durable. For a personal
+  single-user app this is more than sufficient and no cross-user data is involved.
 - Person-name extraction for cast additions uses capitalization heuristics on the
   raw headline; ambiguous guest/recurring distinctions default to rejection.
 - No live TMDB/GNews calls were made in this build (no keys available); tests use

@@ -1,34 +1,33 @@
 #!/usr/bin/env node
-// Live verification for the dynamic Marvel/DC franchise company SEEDS (Scope J).
+// OPTIONAL diagnostic for the dynamic Marvel/DC franchise company SEEDS (Scope J).
 //
-// Franchise membership is discovered dynamically from a small set of narrow,
-// franchise-specific TMDB production companies (src/lib/discover/franchiseSeeds.js).
-// Every seed ships `verified: false, enabled: false` because the build sandbox has
-// no TMDB key. Run this script in an environment that DOES have the key to:
-//   1. resolve each candidate company id -> confirm its live name;
-//   2. inspect a discover sample -> confirm it is NARROW (a franchise entity, not a
-//      whole parent-studio slate);
-// then flip `verified`/`enabled` in franchiseSeeds.js for the seeds that pass.
+// Verification is now AUTOMATIC at runtime: api/discover/franchise-catalogue.js
+// verifies each candidate seed live on the server (franchiseSeedVerifier.js) using
+// the protected TMDB key, and only verified seeds participate in discovery. NO
+// manual `verified: true` source edit is required for a normal deployment.
+//
+// This script simply lets a maintainer PREVIEW that same verification from the
+// command line — e.g. to sanity-check a candidate id after TMDB reorganises a
+// company. It changes nothing; it just prints each candidate's live evidence.
 //
 //   TMDB_API_KEY=... node scripts/verify-franchise-seeds.mjs
 //
 // It calls api.themoviedb.org directly with the server-side key (the same key the
 // api/tmdb proxy uses); it never exposes the key and makes only read requests.
-// Exit code is non-zero if any candidate fails, so it can gate a manual step.
-// Nothing here runs in the app; it is a maintainer tool. A seed that cannot be
-// verified stays DISABLED — we never fall back to a static title list.
+// Exit code is non-zero if any candidate fails, so it can gate a manual check.
 
-import { FRANCHISE_COMPANY_SEEDS, verifySeed, MEDIA_TYPE } from '../src/lib/discover/franchiseSeeds.js'
+import { FRANCHISE_COMPANY_SEEDS } from '../src/lib/discover/franchiseSeeds.js'
+import { resolveVerifiedSeeds } from '../src/lib/discover/franchiseSeedVerifier.js'
 
 const API_KEY = process.env.TMDB_API_KEY
 if (!API_KEY) {
-  console.error('TMDB_API_KEY is not set — cannot perform live seed verification. Seeds stay disabled.')
+  console.error('TMDB_API_KEY is not set — cannot perform live seed verification.')
   process.exit(2)
 }
 
 const BASE = 'https://api.themoviedb.org/3'
 
-// fetchJson matching the shape franchiseSeeds.verifySeed expects: (path, params).
+// fetchJson matching the shape verifySeed expects: (path, params) -> JSON | null.
 async function fetchJson(path, params = {}) {
   const url = new URL(`${BASE}${path}`)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
@@ -38,26 +37,24 @@ async function fetchJson(path, params = {}) {
   return res.json()
 }
 
+// Run the exact runtime verification the endpoint uses.
+const { evidence, summary } = await resolveVerifiedSeeds({ fetchJson })
+const byId = new Map(evidence.map((e) => [e.companyId, e]))
+
 let failures = 0
 for (const seed of FRANCHISE_COMPANY_SEEDS) {
-  // Verify against BOTH movie and TV discover so a TV-only franchise entity is not
-  // wrongly rejected for an empty movie sample.
-  const movie = await verifySeed(seed, { fetchJson, sampleMediaType: MEDIA_TYPE.MOVIE })
-  const tv = await verifySeed(seed, { fetchJson, sampleMediaType: MEDIA_TYPE.TV })
-  const nameMatch = movie.nameMatch || tv.nameMatch
-  const narrow = movie.narrow || tv.narrow
-  const ok = Boolean(nameMatch && narrow)
-  if (!ok) failures += 1
+  const e = byId.get(seed.companyId) ?? { ok: false, reason: 'no_evidence' }
+  if (!e.ok) failures += 1
   console.log(
-    `${ok ? 'OK  ' : 'FAIL'} ${seed.franchise.toUpperCase().padEnd(6)} id=${String(seed.companyId).padEnd(8)} ` +
-    `candidate="${seed.candidateName}" live="${movie.resolvedName ?? tv.resolvedName ?? '-'}" ` +
-    `movieResults=${movie.totalResults ?? '-'} tvResults=${tv.totalResults ?? '-'} ` +
-    `nameMatch=${nameMatch} narrow=${narrow}`,
+    `${e.ok ? 'OK  ' : 'FAIL'} ${seed.franchise.toUpperCase().padEnd(6)} id=${String(seed.companyId).padEnd(8)} ` +
+    `candidate="${seed.candidateName}" live="${e.resolvedName ?? '-'}" ` +
+    `movieResults=${e.movieResults ?? '-'} tvResults=${e.tvResults ?? '-'} ` +
+    `narrow=${e.narrow ?? '-'} reason=${e.reason}`,
   )
 }
 
 console.log(
-  `\n${FRANCHISE_COMPANY_SEEDS.length - failures}/${FRANCHISE_COMPANY_SEEDS.length} seeds verifiable. ` +
-  `${failures ? `${failures} FAILED — keep those disabled.` : 'All candidates resolved narrow — safe to enable.'}`,
+  `\n${summary.verified}/${summary.candidates} seeds verify live. ` +
+  `${failures ? `${failures} did NOT — those stay out of the catalogue automatically.` : 'All candidates resolved narrow.'}`,
 )
 process.exit(failures ? 1 : 0)
