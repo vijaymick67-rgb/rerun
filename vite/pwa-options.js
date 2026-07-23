@@ -54,8 +54,26 @@ export const PWA_NEVER_CACHE_PATTERNS = [
 
 export const PWA_IMAGE_PATTERN = /^https:\/\/image\.tmdb\.org\/t\/p\//i
 export const PWA_IMAGE_CACHE_NAME = 'rerun-tmdb-images'
-export const PWA_IMAGE_CACHE_MAX_ENTRIES = 120
-export const PWA_IMAGE_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+// Every poster in the app is built from a single size builder — POSTER_BASE =
+// `https://image.tmdb.org/t/p/w342` (see lib/tmdb.js) — with no query string,
+// so one show contributes exactly one cache entry, not several size variants.
+// That makes the entry cap efficient (120 entries was ~120 distinct posters,
+// not 120/N shows) but also easy to exhaust: the persistent Watching library,
+// the Discover franchise/announcement/trailer artwork, and — the real churn —
+// every Browse search surfacing up to ~20 fresh posters all share this one
+// CacheFirst cache. At 120 a handful of searches evicts the core library the
+// owner returns to daily. 200 gives the tracked library + Discover steady
+// state comfortable headroom past ordinary search churn while staying firmly
+// bounded (not an arbitrary 300/400). w342 posters are small, so even a full
+// 200 is a few MB — negligible against a PWA storage quota.
+export const PWA_IMAGE_CACHE_MAX_ENTRIES = 200
+// TMDB image URLs are content-addressed: a show's artwork changing yields a new
+// `poster_path` (a new hash → a new URL), so a longer retention window can
+// never serve stale artwork — a stale entry is simply an unused old URL that
+// LRU eviction reclaims. For a watch-log the owner revisits the same shows for
+// months, so 30 days keeps that library resident instead of forcing a weekly
+// re-download of unchanged posters. Bounded by maxEntries regardless.
+export const PWA_IMAGE_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 export function isNavigationFallbackAllowed(pathname) {
   return !PWA_NAVIGATION_FALLBACK_DENYLIST.some((pattern) => pattern.test(pathname))

@@ -29,4 +29,37 @@ describe('WatchingRow image adoption', () => {
     expect(html).toContain('watching-row')
     expect(html).toContain('Up next: S1E2')
   })
+
+  function renderRow(extraProps = {}) {
+    return renderToStaticMarkup(
+      <MemoryRouter>
+        <WatchingRow
+          show={{
+            id: 7,
+            tmdb_id: 7,
+            name: 'Lucky',
+            poster_path: '/lucky.jpg',
+            status: { type: 'nextUp', season_number: 1, episode_number: 2 },
+          }}
+          isRemoving={false}
+          isOpen={false}
+          onOpenChange={vi.fn()}
+          onRemove={vi.fn()}
+          {...extraProps}
+        />
+      </MemoryRouter>,
+    )
+  }
+
+  it('defaults the poster to lazy, non-priority loading', () => {
+    const html = renderRow()
+    expect(html).toContain('loading="lazy"')
+    expect(html).not.toMatch(/fetchpriority/i)
+  })
+
+  it('marks the poster eager and high-priority only when priority is set', () => {
+    const html = renderRow({ priority: true })
+    expect(html).toContain('loading="eager"')
+    expect(html).toMatch(/fetchpriority="high"/i)
+  })
 })

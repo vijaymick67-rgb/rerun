@@ -25,6 +25,15 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import WatchingRow from '../components/WatchingRow'
 import WatchingRowSkeleton from '../components/WatchingRowSkeleton'
 
+// Number of leading Watching rows treated as above-the-fold on the opening
+// tab. At 375px the heading plus two ~96px rows are what's visible before the
+// first scroll, so only these get eager/high-priority poster loading — and
+// only while the list is actually on screen (see `active` gating below). Every
+// later row stays lazy, and a hidden Watching subtree (another tab active, or
+// a detail overlay open) marks nothing as priority so it never races the
+// visible route for bandwidth.
+const WATCHING_ABOVE_FOLD_COUNT = 2
+
 function sortWatchingShows(shows) {
   const statusRank = { nextUp: 0, countdown: 1, caughtUp: 2, completed: 3 }
   return [...shows].sort((a, b) => {
@@ -613,7 +622,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
 
       {!loading && visibleShows.length > 0 && (
         <section className="watching-list" aria-label="Tracked shows">
-          {visibleShows.map((show) => (
+          {visibleShows.map((show, index) => (
             <WatchingRow
               key={show.id}
               show={show}
@@ -624,6 +633,7 @@ export default function Watching({ active = true, refreshSignal = 0 }) {
               onQuickMark={handleQuickMark}
               isQuickMarking={quickMarkingIds.has(show.id)}
               canQuickMark={readyShowIds.has(show.tmdb_id)}
+              priority={active && index < WATCHING_ABOVE_FOLD_COUNT}
             />
           ))}
         </section>

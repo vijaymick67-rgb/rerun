@@ -401,7 +401,7 @@ describe('Discover Phase 2 static integration contracts', () => {
     expect(browse).toContain('const DEBOUNCE_MS = 400')
     expect((browse.match(/searchShows\(/g) ?? [])).toHaveLength(1)
     expect(browse).toContain('active.map((row) => row.tmdb_id)')
-    expect(browse).toContain('results.map((show) =>')
+    expect(browse).toContain('results.map((show, index) =>')
     expect(browse).toContain(".select('tmdb_id, name, poster_path, hidden_at')")
     expect(browse).toContain('upsertTrackedShowForDiscover(prev, show)')
   })
