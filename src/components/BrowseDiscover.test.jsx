@@ -54,6 +54,20 @@ const trailer = {
   publishedAt: '2026-07-22T08:00:00.000Z',
 }
 
+const franchiseTrailer = {
+  ...trailer,
+  id: 'trailer:marvel',
+  mediaType: 'movie',
+  mediaId: 100,
+  trackedShowId: null,
+  title: 'Avengers: Secret Wars',
+  posterPath: '/secret-wars.jpg',
+  videoKey: 'marvel',
+  youtubeUrl: 'https://www.youtube.com/watch?v=marvel',
+  videoName: 'Official Teaser Trailer',
+  franchise: 'marvel',
+}
+
 function feed(items = [], overrides = {}) {
   return {
     items,
@@ -184,6 +198,103 @@ describe('Discover Phase 2 feed presentation', () => {
 })
 
 describe('Discover Phase 2 route ownership and persisted dismissal', () => {
+  it('waits for tracked-show eligibility before showing filtered cache and loading once', async () => {
+    const storage = memoryStorage()
+    const oldAnnouncement = {
+      ...announcement,
+      id: 'ann:99|renewal|2',
+      showId: 99,
+      showName: 'Removed Show',
+      articleHeadline: 'Removed Show renewed for Season 2',
+    }
+    const oldTrackedTrailer = {
+      ...trailer,
+      id: 'trailer:removed',
+      mediaId: 99,
+      trackedShowId: 99,
+      title: 'Removed Show',
+      videoKey: 'removed',
+      youtubeUrl: 'https://www.youtube.com/watch?v=removed',
+      videoName: 'Removed Show Official Trailer',
+    }
+    writeAnnouncementsCache({
+      version: 1,
+      items: [oldAnnouncement, announcement],
+      dismissedIds: [],
+      lastSuccess: NOW,
+    }, storage, NOW)
+    writeTrailersCache({
+      version: 2,
+      items: [oldTrackedTrailer, trailer, franchiseTrailer],
+      knownKeys: [oldTrackedTrailer.videoKey, trailer.videoKey, franchiseTrailer.videoKey],
+      seenKeys: [oldTrackedTrailer.videoKey, trailer.videoKey, franchiseTrailer.videoKey],
+      dismissedKeys: [],
+      bootstrapped: true,
+      lastSuccess: NOW,
+    }, storage)
+
+    const pending = deferred()
+    const loadDiscoverImpl = vi.fn(() => pending.promise)
+    mountedContainer = document.createElement('div')
+    document.body.append(mountedContainer)
+    mountedRoot = createRoot(mountedContainer)
+
+    await act(async () => {
+      mountedRoot.render(
+        <StrictMode>
+          <BrowseDiscover
+            trackedShows={trackedShows}
+            trackedShowsReady={false}
+            storage={storage}
+            loadDiscoverImpl={loadDiscoverImpl}
+          />
+        </StrictMode>,
+      )
+    })
+
+    expect(mountedContainer.textContent).not.toContain(oldAnnouncement.articleHeadline)
+    expect(mountedContainer.textContent).not.toContain(oldTrackedTrailer.videoName)
+    expect(mountedContainer.textContent).not.toContain(announcement.articleHeadline)
+    expect(mountedContainer.textContent).not.toContain(trailer.videoName)
+    expect(mountedContainer.textContent).not.toContain(franchiseTrailer.videoName)
+    expect(mountedContainer.querySelector(
+      '[role="status"][aria-label="Loading announcements"]',
+    )).not.toBeNull()
+    expect(mountedContainer.querySelector(
+      '[role="status"][aria-label="Loading trailers"]',
+    )).not.toBeNull()
+    expect(loadDiscoverImpl).not.toHaveBeenCalled()
+
+    await act(async () => {
+      mountedRoot.render(
+        <StrictMode>
+          <BrowseDiscover
+            trackedShows={trackedShows}
+            trackedShowsReady
+            storage={storage}
+            loadDiscoverImpl={loadDiscoverImpl}
+          />
+        </StrictMode>,
+      )
+    })
+
+    expect(loadDiscoverImpl).toHaveBeenCalledTimes(1)
+    expect(mountedContainer.textContent).not.toContain(oldAnnouncement.articleHeadline)
+    expect(mountedContainer.textContent).not.toContain(oldTrackedTrailer.videoName)
+    expect(mountedContainer.textContent).toContain(announcement.articleHeadline)
+    expect(mountedContainer.textContent).toContain(trailer.videoName)
+    expect(mountedContainer.textContent).toContain(franchiseTrailer.videoName)
+
+    await act(async () => {
+      pending.resolve({
+        announcements: feed([announcement]),
+        trailers: feed([trailer, franchiseTrailer]),
+      })
+      await pending.promise
+    })
+    expect(loadDiscoverImpl).toHaveBeenCalledTimes(1)
+  })
+
   it('shows cache first, performs one StrictMode-safe route load, and persists both dismissals', async () => {
     const storage = memoryStorage()
     writeAnnouncementsCache({

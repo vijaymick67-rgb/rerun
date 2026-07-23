@@ -72,42 +72,28 @@ function createInitialDiscoverState({
   storage = globalThis.localStorage,
   now = Date.now(),
 } = {}) {
+  if (!trackedShowsReady) {
+    return {
+      announcements: initialFeed([], null),
+      trailers: initialFeed([], null),
+    }
+  }
   const announcements = readAnnouncementsCache(storage, now)
   const trailers = readTrailersCache(storage)
-  const announcementItems = trackedShowsReady
-    ? announcementItemsForTrackedShows(announcements.items, trackedShows)
-    : announcements.items
-  const trailerItems = trackedShowsReady
-    ? trailerItemsForTrackedShows(trailers.items, trackedShows)
-    : trailers.items
+  const announcementItems = announcementItemsForTrackedShows(announcements.items, trackedShows)
+  const trailerItems = trailerItemsForTrackedShows(trailers.items, trackedShows)
   return {
     announcements: initialFeed(announcementItems, announcements.lastSuccess),
     trailers: initialFeed(trailerItems, trailers.lastSuccess),
   }
 }
 
-function beginRefresh(state, trackedShows) {
-  const announcementItems = announcementItemsForTrackedShows(
-    state.announcements.items,
+function beginRefresh(trackedShows, storage) {
+  return createInitialDiscoverState({
     trackedShows,
-  )
-  const trailerItems = trailerItemsForTrackedShows(state.trailers.items, trackedShows)
-  return {
-    announcements: {
-      ...state.announcements,
-      items: announcementItems,
-      loading: announcementItems.length === 0,
-      refreshing: announcementItems.length > 0,
-      error: null,
-    },
-    trailers: {
-      ...state.trailers,
-      items: trailerItems,
-      loading: trailerItems.length === 0,
-      refreshing: trailerItems.length > 0,
-      error: null,
-    },
-  }
+    trackedShowsReady: true,
+    storage,
+  })
 }
 
 function finishRefresh(result, trackedShows, storage, now) {
@@ -346,7 +332,7 @@ export default function BrowseDiscover({
   useEffect(() => {
     if (!trackedShowsReady) return undefined
     let cancelled = false
-    setState((current) => beginRefresh(current, trackedShows))
+    setState(beginRefresh(trackedShows, storage))
 
     const requestKey = trackedShowsKey
     let request = requestRef.current?.key === requestKey
@@ -417,7 +403,9 @@ export default function BrowseDiscover({
 
   return (
     <BrowseDiscoverView
-      state={state}
+      state={trackedShowsReady
+        ? state
+        : createInitialDiscoverState({ trackedShowsReady: false })}
       hidden={hidden}
       onDismissAnnouncement={handleDismissAnnouncement}
       onDismissTrailer={handleDismissTrailer}
