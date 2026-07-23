@@ -303,6 +303,32 @@ describe('StatsAllPreview — literal ">>" continuation overlay', () => {
     expect(previewCss).toContain('.stats-all-preview__more-link:focus-visible {')
     expect(rule('.stats-all-preview__more-link:focus-visible')).toContain('outline:')
   })
+
+  // Real-device polish: the "SHOW HISTORY" eyebrow and the "Archive" hint
+  // word are removed from this preview header specifically. All(n) is the
+  // only visible label left — no replacement eyebrow/secondary word, and no
+  // leftover dead wrapper for either removed label.
+  it('no longer renders the "Show history" eyebrow or the "Archive" hint word', () => {
+    const html = render(manyShows(90))
+    expect(html).not.toContain('Show history')
+    expect(html).not.toContain('SHOW HISTORY')
+    expect(html).not.toContain('>Archive<')
+    expect(html).toContain('All(90)')
+  })
+
+  it('does not replace either removed label with a different eyebrow/secondary word', () => {
+    const source = readFileSync(new NodeURL('./StatsAllPreview.jsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('type-badge')
+    expect(source).not.toContain('stats-archive-preview__hint')
+  })
+
+  it('leaves the poster preview, continuation link, and z-index protection unchanged', () => {
+    const html = render(manyShows(90))
+    expect(html).toContain('href="/stats/all"')
+    expect(html).toContain('&gt;&gt;')
+    const posterCount = (html.match(/class="stats-all-preview__poster"/g) ?? []).length
+    expect(posterCount).toBeLessThanOrEqual(6)
+  })
 })
 
 describe('StatsAllPreview — interaction cleanup', () => {

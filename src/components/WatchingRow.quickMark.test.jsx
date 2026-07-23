@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// The persistent rounded-square status button that replaced the mobile
+// The persistent circular status button that replaced the mobile
 // right-swipe quick-mark gesture (see WatchingRow.leftSwipe.test.jsx for the
 // gesture-removal coverage). This file covers the button's own visual
 // states (notReady / available / accepted / caughtUp), its accessible
@@ -141,15 +141,13 @@ describe('status button — shape and dimensions', () => {
     expect(html).toMatch(/class="motion-press watching-status-button absolute top-1\/2 right-2 -translate-y-1\/2"/)
   })
 
-  it('uses a fixed 44px rounded-square footprint, not a circle', () => {
+  it('uses a fixed 44px true-circle footprint, not a rounded square', () => {
     const ruleStart = indexCss.indexOf('.watching-status-button {')
     const rule = indexCss.slice(ruleStart, indexCss.indexOf('}', ruleStart) + 1)
     expect(rule).toContain('width: 2.75rem')
     expect(rule).toContain('height: 2.75rem')
-    expect(rule).toContain('border-radius: 0.625rem')
-    expect(rule).not.toContain('border-radius: 50%')
-    expect(rule).not.toContain('border-radius: 9999px')
-    expect(rule).not.toContain('border-radius: 999px')
+    expect(rule).toContain('border-radius: 9999px')
+    expect(rule).not.toContain('border-radius: 0.625rem')
   })
 
   it('never overrides width/height/border-radius per visual state — shape is identical grey vs green vs not-ready', () => {
