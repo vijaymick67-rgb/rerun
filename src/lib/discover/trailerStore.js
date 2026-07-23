@@ -28,6 +28,11 @@
 //                 for a later UI "new" badge; NOT used to gate admission.
 //   * items     — currently displayed/cached trailers.
 
+import {
+  DISCOVER_TRAILER_MAX_AGE_MS,
+  isDiscoverTrailerFresh,
+} from './trailerFreshness.js'
+
 export const TRAILERS_CACHE_KEY = 'rerun_discover_trailers:v1'
 // v2: added `knownKeys` baseline. Older-shaped caches are discarded by sanitize
 // (they re-bootstrap cleanly) — this engine has never shipped to production, so
@@ -70,7 +75,10 @@ function stringKeys(value, cap) {
     .slice(0, cap)
 }
 
-export function sanitizeTrailersState(value) {
+export function sanitizeTrailersState(
+  value,
+  { now = Date.now(), maxAgeMs = DISCOVER_TRAILER_MAX_AGE_MS } = {},
+) {
   if (!value || value.version !== TRAILERS_CACHE_VERSION || !Array.isArray(value.items)) {
     return emptyTrailersState()
   }
@@ -81,18 +89,26 @@ export function sanitizeTrailersState(value) {
   const dismissed = new Set(dismissedKeys)
   const seen = new Set()
   const items = []
+  const validItemKeys = []
   for (const raw of value.items) {
     const item = validItem(raw)
-    if (!item || seen.has(item.videoKey) || dismissed.has(item.videoKey)) continue
+    if (!item) continue
+    validItemKeys.push(item.videoKey)
+    if (seen.has(item.videoKey) || dismissed.has(item.videoKey)) continue
     seen.add(item.videoKey)
+    if (!isDiscoverTrailerFresh(item, { now, maxAgeMs })) continue
     items.push(item)
   }
   const cappedItems = items.slice(0, TRAILERS_MAX_ITEMS)
   return {
     version: TRAILERS_CACHE_VERSION,
     items: cappedItems,
-    // Displayed keys are, by definition, part of the baseline.
-    knownKeys: stringKeys([...(Array.isArray(value.knownKeys) ? value.knownKeys : []), ...cappedItems.map((i) => i.videoKey)], TRAILERS_MAX_KNOWN_KEYS),
+    // Every structurally valid cached key stays in the baseline, including keys
+    // whose visible item just expired under the freshness policy.
+    knownKeys: stringKeys(
+      [...(Array.isArray(value.knownKeys) ? value.knownKeys : []), ...validItemKeys],
+      TRAILERS_MAX_KNOWN_KEYS,
+    ),
     seenKeys: stringKeys(value.seenKeys, TRAILERS_MAX_SEEN_KEYS),
     dismissedKeys,
     bootstrapped: value.bootstrapped === true,
@@ -100,17 +116,17 @@ export function sanitizeTrailersState(value) {
   }
 }
 
-export function readTrailersCache(storage = globalThis.localStorage) {
+export function readTrailersCache(storage = globalThis.localStorage, now = Date.now()) {
   try {
     const raw = storage?.getItem(TRAILERS_CACHE_KEY)
-    return raw ? sanitizeTrailersState(JSON.parse(raw)) : emptyTrailersState()
+    return raw ? sanitizeTrailersState(JSON.parse(raw), { now }) : emptyTrailersState()
   } catch {
     return emptyTrailersState()
   }
 }
 
-export function writeTrailersCache(state, storage = globalThis.localStorage) {
-  const safe = sanitizeTrailersState(state)
+export function writeTrailersCache(state, storage = globalThis.localStorage, now = Date.now()) {
+  const safe = sanitizeTrailersState(state, { now })
   try { storage?.setItem(TRAILERS_CACHE_KEY, JSON.stringify(safe)) } catch { /* best effort */ }
   return safe
 }
@@ -135,7 +151,7 @@ function incomingKeys(incoming) {
 //     (genuinely newly discovered) and not already displayed. "New" is decided
 //     by the baseline, never by whether an old video happened to be displayed.
 export function admitTrailers(state, incoming, { now = Date.now(), bootstrapWindowMs = DEFAULT_BOOTSTRAP_WINDOW_MS } = {}) {
-  const current = sanitizeTrailersState(state)
+  const current = sanitizeTrailersState(state, { now })
   const known = new Set(current.knownKeys)
   const cachedKeys = new Set(current.items.map((item) => item.videoKey))
   const admitted = []
@@ -143,6 +159,7 @@ export function admitTrailers(state, incoming, { now = Date.now(), bootstrapWind
     const item = validItem(trailer)
     if (!item) continue
     if (cachedKeys.has(item.videoKey)) continue
+    if (!isDiscoverTrailerFresh(item, { now })) continue
     if (!current.bootstrapped) {
       const published = publishedMs(item)
       if (published === null || now - published > bootstrapWindowMs) continue
@@ -161,7 +178,7 @@ export function admitTrailers(state, incoming, { now = Date.now(), bootstrapWind
 // as seen, flips `bootstrapped`, and caps every collection.
 export function mergeTrailers(state, incoming, options = {}) {
   const now = options.now ?? Date.now()
-  const current = sanitizeTrailersState(state)
+  const current = sanitizeTrailersState(state, { now })
   const admitted = admitTrailers(current, incoming, options)
   const byKey = new Map(current.items.map((item) => [item.videoKey, item]))
   for (const item of admitted) byKey.set(item.videoKey, item)
@@ -174,7 +191,11 @@ export function mergeTrailers(state, incoming, options = {}) {
   // Baseline = everything we already knew + everything TMDB just returned
   // (whether or not it was displayed) + everything currently displayed.
   const knownKeys = stringKeys(
-    [...current.knownKeys, ...incomingKeys(incoming), ...items.map((item) => item.videoKey)],
+    [
+      ...current.knownKeys,
+      ...incomingKeys(options.baselineItems ?? incoming),
+      ...items.map((item) => item.videoKey),
+    ],
     TRAILERS_MAX_KNOWN_KEYS,
   )
   const seenKeys = [...new Set([...current.seenKeys, ...items.map((item) => item.videoKey)])]
@@ -195,7 +216,7 @@ export function mergeTrailers(state, incoming, options = {}) {
 // Lets a future UI badge "new" without changing what is displayed, and without
 // inferring "new" from mere non-display of an old historical key.
 export function newlyDiscoveredKeys(state, incoming, options = {}) {
-  const current = sanitizeTrailersState(state)
+  const current = sanitizeTrailersState(state, { now: options.now ?? Date.now() })
   const known = new Set(current.knownKeys)
   return admitTrailers(current, incoming, options)
     .filter((item) => !known.has(item.videoKey))

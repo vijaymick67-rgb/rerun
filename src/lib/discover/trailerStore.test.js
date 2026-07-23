@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyTrailersState, sanitizeTrailersState, admitTrailers, mergeTrailers,
   newlyDiscoveredKeys, readTrailersCache, dismissTrailer, TRAILERS_CACHE_KEY,
-  DEFAULT_BOOTSTRAP_WINDOW_MS,
 } from './trailerStore.js'
+import { DISCOVER_TRAILER_MAX_AGE_MS } from './trailerFreshness.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
 
@@ -30,7 +30,10 @@ describe('sanitizeTrailersState', () => {
   })
 
   it('dedupes items by video key', () => {
-    const state = sanitizeTrailersState({ version: 2, items: [trailer(), trailer()], knownKeys: [], seenKeys: [], bootstrapped: true })
+    const state = sanitizeTrailersState(
+      { version: 2, items: [trailer(), trailer()], knownKeys: [], seenKeys: [], bootstrapped: true },
+      { now: NOW },
+    )
     expect(state.items).toHaveLength(1)
   })
 
@@ -54,13 +57,11 @@ describe('bootstrap window', () => {
     expect(admitted).toHaveLength(0)
   })
 
-  it('admits a genuinely new (never-seen) trailer after bootstrap, even for a finished show', () => {
+  it('admits a genuinely new recent trailer after bootstrap, even for a finished show', () => {
     const merged = mergeTrailers(emptyTrailersState(), [trailer({ videoKey: 'seed' })], { now: NOW })
-    // bootstrapped now true; an item published just outside the window but with a
-    // key we have never seen is still admitted because it is genuinely new.
     const brandNew = trailer({
       id: 'trailer:late', videoKey: 'late',
-      publishedAt: new Date(NOW - DEFAULT_BOOTSTRAP_WINDOW_MS - 1000).toISOString(),
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS + 1000).toISOString(),
     })
     const admitted = admitTrailers(merged, [brandNew], { now: NOW })
     expect(admitted.map((t) => t.videoKey)).toContain('late')
@@ -139,6 +140,56 @@ describe('newlyDiscoveredKeys', () => {
 describe('cache round-trip', () => {
   it('tolerates malformed JSON', () => {
     const storage = memoryStorage({ [TRAILERS_CACHE_KEY]: '{bad' })
-    expect(readTrailersCache(storage)).toEqual(emptyTrailersState())
+    expect(readTrailersCache(storage, NOW)).toEqual(emptyTrailersState())
+  })
+
+  it('prunes expired v2 items while preserving baseline, seen, dismissed, and bootstrap state', () => {
+    const expired = trailer({
+      id: 'trailer:expired',
+      videoKey: 'expired',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS - 1).toISOString(),
+    })
+    const recent = trailer({ id: 'trailer:recent', videoKey: 'recent' })
+    const storage = memoryStorage({
+      [TRAILERS_CACHE_KEY]: JSON.stringify({
+        version: 2,
+        items: [expired, recent],
+        knownKeys: ['historic'],
+        seenKeys: ['expired', 'seen-before'],
+        dismissedKeys: ['dismissed-before'],
+        bootstrapped: true,
+        lastSuccess: NOW - 1000,
+      }),
+    })
+
+    const state = readTrailersCache(storage, NOW)
+    expect(state.items.map((item) => item.videoKey)).toEqual(['recent'])
+    expect(state.knownKeys).toEqual(expect.arrayContaining(['historic', 'expired', 'recent']))
+    expect(state.seenKeys).toEqual(['expired', 'seen-before'])
+    expect(state.dismissedKeys).toEqual(['dismissed-before'])
+    expect(state.bootstrapped).toBe(true)
+  })
+
+  it('never resurrects an expired cached key as newly discovered', () => {
+    const expired = trailer({
+      id: 'trailer:expired',
+      videoKey: 'expired',
+      publishedAt: new Date(NOW - DISCOVER_TRAILER_MAX_AGE_MS - 1).toISOString(),
+    })
+    const sanitized = sanitizeTrailersState({
+      version: 2,
+      items: [expired],
+      knownKeys: [],
+      seenKeys: ['expired'],
+      dismissedKeys: [],
+      bootstrapped: true,
+      lastSuccess: NOW,
+    }, { now: NOW })
+    expect(sanitized.items).toEqual([])
+    expect(sanitized.knownKeys).toContain('expired')
+
+    const correctedDate = { ...expired, publishedAt: '2026-07-22T00:00:00.000Z' }
+    expect(admitTrailers(sanitized, [correctedDate], { now: NOW })).toEqual([])
+    expect(newlyDiscoveredKeys(sanitized, [correctedDate], { now: NOW })).toEqual([])
   })
 })

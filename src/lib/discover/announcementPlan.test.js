@@ -42,6 +42,19 @@ describe('opaque plan id (Blocker 2)', () => {
     expect(a.planId).toBe(b.planId)
   })
 
+  it('keeps length-limited large plans order-independent', async () => {
+    const shows = Array.from({ length: 120 }, (_, index) => ({
+      id: index,
+      title: `Canonical Series ${index}`,
+      aliases: [`Series ${index} Alternate`],
+    }))
+    const forward = await planFromShows(shows)
+    const reversed = await planFromShows([...shows].reverse())
+    expect(forward.planId).toBe(reversed.planId)
+    expect(forward.queries).toEqual(reversed.queries)
+    expect(forward.plan).toEqual(reversed.plan)
+  })
+
   it('a changed plan produces a DIFFERENT id', async () => {
     const a = await planFromShows([{ id: 1, title: 'From' }, { id: 2, title: 'The Bear' }])
     const c = await planFromShows([{ id: 9, title: 'Severance' }])

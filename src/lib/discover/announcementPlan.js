@@ -5,10 +5,10 @@
 // from the same code. Keeping it here (not in the api file) means the client
 // bundle never imports the serverless handler.
 //
-// GUARANTEED CANONICAL COVERAGE (unchanged, Part 13): every tracked show's
-// canonical title is scheduled into the shared term budget BEFORE any alias, so a
-// large library's later shows are never silently dropped for an earlier show's
-// alias. Beyond the budget the plan reports partialCoverage + showsOmitted.
+// CANONICAL-FIRST COVERAGE: every tracked show's canonical title is scheduled
+// before any alias. The upstream 200-character query limit and bounded request
+// count are both enforced; anything that cannot fit is reported through
+// partialCoverage + showsOmitted instead of being sent as an invalid query.
 //
 // OPAQUE PLAN ID (Blocker 2): the plan produces a stable, OPAQUE identifier — a
 // SHA-256 digest (64 hex chars) of the normalized plan (SORTED scheduled canonical
@@ -32,41 +32,72 @@ export const MAX_TERMS_PER_QUERY = 8 // OR-batched title terms per query
 export const MAX_QUERIES = 20 // hard request cap (bounds total upstream calls)
 export const QUERY_CONCURRENCY = 4
 export const GNEWS_MAX_PER_QUERY = 10
-// Total term capacity across ALL queries. Canonicals fill it first; complete
-// canonical coverage is guaranteed for up to TERM_BUDGET tracked shows.
+export const GNEWS_MAX_QUERY_LENGTH = 200
+// Theoretical count ceiling across all queries. The character limit can produce
+// a lower real capacity for long titles, which the coverage metadata reports.
 export const TERM_BUDGET = MAX_QUERIES * MAX_TERMS_PER_QUERY // 160
 export const MAX_SHOWS = TERM_BUDGET
 
 // Bump these when the query vocabulary / plan schema / language changes so old
 // cache tokens naturally stop matching.
-export const ACQUISITION_SCHEMA_VERSION = 2
-export const EVENT_VOCAB_VERSION = 1
+export const ACQUISITION_SCHEMA_VERSION = 3
+export const EVENT_VOCAB_VERSION = 2
 export const ACQUISITION_LANG = 'en'
 
 // Scope to the four allowed event categories only (renewal, cancellation, season
 // date, cast addition). The client classifier does the precise work.
-export const EVENT_CLAUSE = '(renewed OR renewal OR canceled OR cancelled OR "final season" OR premiere OR premieres OR "release date" OR "joins the cast" OR "cast")'
+export const EVENT_CLAUSE =
+  '(renewed OR canceled OR cancelled OR premiere OR "release date" OR cast OR joins)'
 
 function quotePhrase(term) {
   return `"${String(term).replace(/["\\]+/g, ' ').trim()}"`
 }
 
 // Pack scheduled terms into bounded OR-batched queries, each ANDed with the shared
-// event clause. Pure — used both when planning and when rebuilding from a token.
-export function buildQueriesFromTerms(terms) {
-  const list = Array.isArray(terms) ? terms.filter((t) => typeof t === 'string' && t.trim()) : []
-  const queries = []
-  for (let i = 0; i < list.length; i += MAX_TERMS_PER_QUERY) {
-    const slice = list.slice(i, i + MAX_TERMS_PER_QUERY)
-    const titleClause = `(${slice.map(quotePhrase).join(' OR ')})`
-    queries.push(`${titleClause} AND ${EVENT_CLAUSE}`)
-  }
-  return queries
+// event clause and never exceeding GNews's documented 200-character q limit.
+// Pure — used both when planning and when rebuilding from a token.
+function queryForTerms(terms) {
+  const titleClause = `(${terms.map(quotePhrase).join(' OR ')})`
+  return `${titleClause} AND ${EVENT_CLAUSE}`
 }
 
-// Two-phase term scheduling with guaranteed canonical coverage. Returns the
-// queries, the coverage plan, and the scheduled canonical/alias term lists (needed
-// to build the cache token).
+function packTerms(terms) {
+  const list = Array.isArray(terms) ? terms.filter((t) => typeof t === 'string' && t.trim()) : []
+  const queries = []
+  const scheduledTerms = []
+  let current = []
+
+  function flush() {
+    if (!current.length || queries.length >= MAX_QUERIES) return
+    queries.push(queryForTerms(current))
+    scheduledTerms.push(...current)
+    current = []
+  }
+
+  for (const term of list) {
+    if (queries.length >= MAX_QUERIES) break
+    const candidate = [...current, term]
+    if (
+      candidate.length <= MAX_TERMS_PER_QUERY
+      && queryForTerms(candidate).length <= GNEWS_MAX_QUERY_LENGTH
+    ) {
+      current = candidate
+      continue
+    }
+    flush()
+    if (queries.length >= MAX_QUERIES) break
+    if (queryForTerms([term]).length <= GNEWS_MAX_QUERY_LENGTH) current = [term]
+  }
+  flush()
+  return { queries, scheduledTerms }
+}
+
+export function buildQueriesFromTerms(terms) {
+  return packTerms(terms).queries
+}
+
+// Two-phase canonical-first scheduling. Returns the queries, the honest coverage
+// plan, and the scheduled canonical/alias term lists (needed for the cache token).
 export function buildAnnouncementQueries(shows) {
   const rawList = Array.isArray(shows) ? shows : []
   const seen = new Set()
@@ -105,12 +136,21 @@ export function buildAnnouncementQueries(shows) {
 
   // Phase 3 — schedule into the shared budget: canonicals first, aliases fill the
   // remainder. Canonicals beyond the budget are omitted (partial coverage).
-  const canonicalScheduled = canonical.slice(0, TERM_BUDGET)
+  const candidateCanonicals = [...canonical]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, TERM_BUDGET)
+  const remaining = Math.max(0, TERM_BUDGET - candidateCanonicals.length)
+  const candidateAliases = [...aliasTerms]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, remaining)
+  const { queries, scheduledTerms } = packTerms([...candidateCanonicals, ...candidateAliases])
+  const scheduled = new Set(scheduledTerms.map((term) => term.toLowerCase()))
+  const canonicalScheduled = candidateCanonicals
+    .filter((term) => scheduled.has(term.toLowerCase()))
+  const aliasesScheduled = candidateAliases
+    .filter((term) => scheduled.has(term.toLowerCase()))
   const showsOmitted = canonical.length - canonicalScheduled.length
-  const remaining = Math.max(0, TERM_BUDGET - canonicalScheduled.length)
-  const aliasesScheduled = aliasTerms.slice(0, remaining)
   const aliasesOmitted = aliasTerms.length - aliasesScheduled.length
-  const queries = buildQueriesFromTerms([...canonicalScheduled, ...aliasesScheduled])
 
   const plan = {
     showsReceived,

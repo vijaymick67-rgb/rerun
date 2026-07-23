@@ -18,7 +18,7 @@ import {
 } from '../lib/discover/trailerStore.js'
 
 const MAX_VISIBLE_ANNOUNCEMENTS = 10
-const MAX_VISIBLE_TRAILERS = 12
+const MAX_VISIBLE_TRAILERS = 8
 
 function safeExternalUrl(value) {
   if (typeof value !== 'string') return null
@@ -79,7 +79,7 @@ function createInitialDiscoverState({
     }
   }
   const announcements = readAnnouncementsCache(storage, now)
-  const trailers = readTrailersCache(storage)
+  const trailers = readTrailersCache(storage, now)
   const announcementItems = announcementItemsForTrackedShows(announcements.items, trackedShows)
   const trailerItems = trailerItemsForTrackedShows(trailers.items, trackedShows)
   return {
@@ -98,7 +98,7 @@ function beginRefresh(trackedShows, storage) {
 
 function finishRefresh(result, trackedShows, storage, now) {
   const announcementCache = readAnnouncementsCache(storage, now)
-  const trailerCache = readTrailersCache(storage)
+  const trailerCache = readTrailersCache(storage, now)
   const dismissedAnnouncementIds = new Set(announcementCache.dismissedIds)
   const dismissedTrailerKeys = new Set(trailerCache.dismissedKeys)
   return {

@@ -18,19 +18,26 @@ export const REJECTED_TMDB_TYPES = new Set([
 // a Trailer/Teaser (TMDB typing is frequently wrong). Matched against the
 // lower-cased name.
 const REJECT_NAME_PATTERNS = [
-  /\bofficial clip\b/, /\bclip\b/, /\bpreview\b/, /\bepisode preview\b/, /\bnext episode\b/,
-  /\bpromo\b/, /\bsneak peek\b/, /\bfeaturette\b/, /\bbehind the scenes\b/, /\bmaking of\b/,
+  /\bofficial clip\b/, /\bclips?\b/, /\bpreview\b/,
+  /\bepisode (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/,
+  /\bnext episode\b/,
+  /\bnext on\b/, /\bcoming up\b/, /\b(?:this|next) week\b/,
+  /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+) (?:days?|weeks?|months?) (?:until|to go)\b/,
+  /\bcountdown\b/, /\bpromo\b/, /\bsneak peek\b/, /\bfirst look\b/, /\bspecial look\b/,
+  /\bdate announcement\b/, /\bfeaturette\b/, /\bbehind the scenes\b/, /\bmaking of\b/,
   /\binterview\b/, /\bcast interview\b/, /\bcast reacts\b/, /\binside the episode\b/,
-  /\brecap\b/, /\bexplained\b/, /\breaction\b/, /\bfan (?:trailer|made)\b/, /\bconcept (?:trailer|teaser)\b/,
+  /\brecap\b/, /\bexplained\b/, /\breaction\b/, /\bbreakdown\b/,
+  /\bfan (?:made )?(?:trailer|teaser)\b/, /\bconcept (?:trailer|teaser)\b/,
   /\bopening credits\b/, /\btitle sequence\b/, /\bbloopers?\b/, /\bgag reel\b/, /\bdeleted scene\b/,
 ]
 
-// Names that are unambiguously trailers/teasers. Used as a positive allow signal
-// so a clean "Official Trailer" is never accidentally caught by a broad reject.
+// A Trailer/Teaser type is not enough: the normalized name must independently
+// contain a trailer/teaser signal. Word boundaries keep this flexible across
+// forms such as "Official Trailer 2", "Trailer - Season 2", and "Final Trailer"
+// without accepting unrelated promotional names.
 const ACCEPT_NAME_PATTERNS = [
-  /\bofficial trailer\b/, /\bfinal trailer\b/, /\bteaser trailer\b/, /\bofficial teaser\b/,
-  /\bseason \d+ (?:official )?(?:trailer|teaser)\b/, /\bmain trailer\b/, /\blaunch trailer\b/,
-  /^trailer$/, /^teaser$/, /\bred band trailer\b/,
+  /\btrailer(?: \d+)?\b/,
+  /\bteaser\b/,
 ]
 
 function normalizeName(name) {
@@ -48,12 +55,8 @@ export function classifyVideo(video, { allowUnofficialFallback = false } = {}) {
   const name = normalizeName(video.name)
   const nameAccepted = ACCEPT_NAME_PATTERNS.some((p) => p.test(name))
   const nameRejected = REJECT_NAME_PATTERNS.some((p) => p.test(name))
-  // A clean positive name overrides a broad reject only when it is not ALSO an
-  // explicit clip/featurette phrase. "Official Clip" -> rejected. "Official
-  // Trailer" -> accepted.
-  if (nameRejected && !(nameAccepted && !/\b(?:clip|featurette|behind the scenes|preview|sneak peek|promo)\b/.test(name))) {
-    reasons.push('rejected_name')
-  }
+  if (!nameAccepted) reasons.push('missing_name_signal')
+  if (nameRejected) reasons.push('rejected_name')
 
   if (!allowUnofficialFallback && video.official !== true) reasons.push('unofficial')
 
