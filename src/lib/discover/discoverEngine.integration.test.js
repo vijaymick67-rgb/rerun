@@ -8,9 +8,21 @@ import { buildIdentityRegistry } from './identities.js'
 import { classifyAnnouncement } from './announcementClassifier.js'
 import { ANNOUNCEMENTS_CACHE_KEY } from './announcementStore.js'
 import { TRAILERS_CACHE_KEY } from './trailerStore.js'
-import { catalogueTargets } from './marvelDcCatalogue.js'
+import { FRANCHISE_CATALOGUE_ENDPOINT } from './discoverClient.js'
+import { decodePlanToken } from './announcementPlan.js'
 
 const NOW = Date.parse('2026-07-23T00:00:00.000Z')
+
+// A dynamic franchise catalogue as the server endpoint would return it: members
+// discovered from TMDB company attribution, NOT a static source-code title list.
+const FRANCHISE_CATALOGUE = {
+  media: [
+    { mediaType: 'movie', mediaId: 700001, title: 'A New Marvel Movie', franchise: 'marvel', posterPath: null, matchedCompanyIds: [420] },
+    { mediaType: 'tv', mediaId: 700002, title: 'A New Marvel Series', franchise: 'marvel', posterPath: null, matchedCompanyIds: [420] },
+  ],
+  coverage: { seedsEnabled: 1, partial: false },
+  meta: { seedCompanyIds: [420] },
+}
 
 function memoryStorage(initial = {}) {
   const store = new Map(Object.entries(initial))
@@ -61,22 +73,29 @@ describe('Scope S — no untracked ordinary media leaks into either feed', () =>
     expect(state.items.find((i) => /ted lasso/i.test(i.showName ?? ''))).toBeUndefined()
   })
 
-  it('fetches trailers only for tracked show ids and the explicit franchise allowlist — never a broad discover query', async () => {
+  it('fetches trailers only for tracked show ids and the dynamic franchise catalogue — the client never issues a broad discover query', async () => {
     const requested = []
     await loadTrailers({
       trackedShows: [{ tmdb_id: 1, name: 'From' }], storage: memoryStorage(), now: NOW,
-      fetchImpl: async (url) => { requested.push(url); return jsonResponse({ results: [] }) },
+      fetchImpl: async (url) => {
+        requested.push(url)
+        if (url.includes(FRANCHISE_CATALOGUE_ENDPOINT)) return jsonResponse(FRANCHISE_CATALOGUE)
+        return jsonResponse({ results: [] })
+      },
     })
-    // No broad /discover company query is ever issued.
-    expect(requested.some((u) => u.includes('/discover/'))).toBe(false)
-    // Every request is either the tracked show's videos or an explicit
-    // catalogue target's videos — nothing arbitrary leaks in.
-    const allowed = new Set([
+    // The CLIENT never issues a TMDB /discover company query — discovery is
+    // server-side behind the catalogue endpoint. The client only asks for the
+    // catalogue endpoint + videos (never /api/tmdb/discover/movie|tv).
+    expect(requested.some((u) => /discover\/(?:movie|tv)/.test(u))).toBe(false)
+    // Every request is the tracked show's videos, the franchise catalogue endpoint,
+    // or a discovered member's videos — nothing arbitrary leaks in.
+    const allowed = [
       '/tv/1/videos',
-      ...catalogueTargets().map((t) => `/${t.mediaType}/${t.id}/videos`),
-    ])
-    expect(requested.every((u) => [...allowed].some((path) => u.includes(path)))).toBe(true)
-    // The franchise allowlist really was exercised (movies + tv both fetched).
+      FRANCHISE_CATALOGUE_ENDPOINT,
+      ...FRANCHISE_CATALOGUE.media.map((m) => `/${m.mediaType}/${m.mediaId}/videos`),
+    ]
+    expect(requested.every((u) => allowed.some((path) => u.includes(path)))).toBe(true)
+    // The dynamic catalogue really was exercised (a discovered movie was fetched).
     expect(requested.some((u) => /\/movie\/\d+\/videos/.test(u))).toBe(true)
   })
 })
@@ -115,9 +134,11 @@ describe('Scope S — acquisition reaches shows a generic feed would miss', () =
     // client actually asks for that show by name — proving loadAnnouncements
     // sends per-show terms rather than depending on a shared top-ten feed.
     const niche = { title: 'A Man on the Inside renewed for Season 2 at Netflix', publishedAt: '2026-07-20T00:00:00.000Z', sourceName: 'Deadline', url: 'https://deadline.com/niche', canonicalUrl: 'https://deadline.com/niche' }
-    const fetchImpl = async (url, opts) => {
-      const body = JSON.parse(opts?.body ?? '{}')
-      const titles = (body.shows ?? []).map((s) => s.title)
+    // The client now GETs a cacheable ?plan=<token> URL; the per-show terms live in
+    // the (decodable) token, proving the request still targets that show by name.
+    const fetchImpl = async (url) => {
+      const token = new URL(url, 'http://x').searchParams.get('plan')
+      const titles = decodePlanToken(token)?.canonical ?? []
       return jsonResponse({ articles: titles.includes('A Man on the Inside') ? [niche] : [] })
     }
     const state = await loadAnnouncements({ trackedShows: ALL_STATUS_SHOWS, storage: memoryStorage(), fetchImpl, now: NOW })
@@ -127,9 +148,10 @@ describe('Scope S — acquisition reaches shows a generic feed would miss', () =
 
 describe('Scope S — franchise trailers go through the same strict filter', () => {
   it('accepts an official franchise trailer and rejects a franchise clip, tagging the franchise', async () => {
-    const target = catalogueTargets({ franchise: 'marvel', mediaType: 'tv' })[0]
+    const target = FRANCHISE_CATALOGUE.media.find((m) => m.mediaType === 'tv' && m.franchise === 'marvel')
     const fetchImpl = async (url) => {
-      if (url.includes(`/tv/${target.id}/videos`)) {
+      if (url.includes(FRANCHISE_CATALOGUE_ENDPOINT)) return jsonResponse(FRANCHISE_CATALOGUE)
+      if (url.includes(`/tv/${target.mediaId}/videos`)) {
         return jsonResponse({ results: [
           { key: 'mtrail', site: 'YouTube', type: 'Trailer', name: 'Official Trailer', official: true, iso_639_1: 'en', published_at: '2026-07-10T00:00:00.000Z' },
           { key: 'mclip', site: 'YouTube', type: 'Clip', name: 'Official Clip', official: true, iso_639_1: 'en', published_at: '2026-07-10T00:00:00.000Z' },

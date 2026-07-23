@@ -16,13 +16,21 @@ import { readAnnouncementsCache, writeAnnouncementsCache, mergeAnnouncements } f
 import { classifyVideo } from './trailerFilter.js'
 import { buildTrailer, rankTrailers } from './trailerRank.js'
 import { readTrailersCache, writeTrailersCache, mergeTrailers } from './trailerStore.js'
+import { planFromShows } from './announcementPlan.js'
 import { fetchMediaVideos, mapWithConcurrency, DEFAULT_CONCURRENCY } from './tmdbVideos.js'
-import { catalogueTargets, isMarvelDcEnabled } from './marvelDcCatalogue.js'
+import {
+  readFranchiseCatalogue, writeFranchiseCatalogue, catalogueConfigKey,
+} from './franchiseCatalogueStore.js'
 
 // Dedicated announcements acquisition endpoint (see api/discover/announcements.js).
 // It runs bounded, batched, event-scoped per-show searches — NOT the generic
 // /api/news sample — so the classifier gets real per-show candidates.
 export const ANNOUNCEMENTS_ENDPOINT = '/api/discover/announcements'
+// Dynamic franchise catalogue endpoint (see api/discover/franchise-catalogue.js).
+// It returns Marvel/DC members discovered from TMDB company attribution — NOT a
+// static title list. New future projects appear automatically once TMDB attributes
+// them to a verified franchise company.
+export const FRANCHISE_CATALOGUE_ENDPOINT = '/api/discover/franchise-catalogue'
 // How many verified alternative titles per show we ask the endpoint to search.
 export const MAX_REQUEST_ALIASES = 2
 
@@ -58,10 +66,12 @@ export async function loadAnnouncements({
   const cached = readAnnouncementsCache(storage, now)
   const registry = buildIdentityRegistry(trackedShows, detailsById)
   try {
-    const response = await fetchImpl(ANNOUNCEMENTS_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ shows: announcementRequestShows(registry) }),
+    // GET the durable, CDN-cacheable plan URL: the token is derived from the same
+    // shared plan code the server uses, so identical libraries hit the edge cache
+    // with zero upstream GNews calls (see announcementPlan.js + the endpoint).
+    const { token } = planFromShows(announcementRequestShows(registry))
+    const response = await fetchImpl(`${ANNOUNCEMENTS_ENDPOINT}?plan=${encodeURIComponent(token)}`, {
+      headers: { Accept: 'application/json' },
     })
     if (!response?.ok) throw new Error('announcements_source_unavailable')
     const payload = await response.json()
@@ -107,18 +117,40 @@ function trailersForShow(show, videos) {
   return built
 }
 
+// Load the dynamic Marvel/DC franchise catalogue: a fresh client-cache copy short
+// circuits; otherwise fetch the server endpoint (which discovers members from
+// TMDB company attribution) and cache it. A failed refresh returns the last usable
+// stale catalogue (stale-on-error) so the trailers feed never empties.
+export async function loadFranchiseCatalogue({ storage, fetchImpl = globalThis.fetch, now = Date.now() } = {}) {
+  const cached = readFranchiseCatalogue(storage, now)
+  if (cached?.fresh) return cached.media
+  try {
+    const response = await fetchImpl(FRANCHISE_CATALOGUE_ENDPOINT, { headers: { Accept: 'application/json' } })
+    if (!response?.ok) throw new Error('franchise_catalogue_unavailable')
+    const payload = await response.json()
+    const media = Array.isArray(payload?.media) ? payload.media : []
+    const configKey = catalogueConfigKey({ seedCompanyIds: payload?.meta?.seedCompanyIds ?? [] })
+    writeFranchiseCatalogue({ media, coverage: payload?.coverage ?? null }, storage, now, { configKey })
+    return media
+  } catch {
+    // stale-on-error: keep the last usable catalogue rather than emptying the feed.
+    return cached?.media ?? []
+  }
+}
+
 async function franchiseTrailers(fetchOptions) {
-  // The Marvel/DC exception is an EXPLICIT media-id allowlist (see
-  // marvelDcCatalogue.js) — membership is per-title, so it cannot pull unrelated
-  // Disney/Warner catalogues. Each target's videos go through the SAME strict
-  // trailerFilter (classifyVideo) + trailerRank pipeline as tracked shows.
-  if (!isMarvelDcEnabled()) return []
-  const targets = catalogueTargets()
-  const perTarget = await mapWithConcurrency(targets, async (target) => {
-    const videos = await fetchMediaVideos(target.mediaType, target.id, fetchOptions)
+  // The Marvel/DC exception is a DYNAMIC catalogue discovered from TMDB company
+  // attribution (see franchiseCatalogue.js) — membership is confirmed at the
+  // detail level, so it cannot pull unrelated Disney/Warner catalogues. Each
+  // member's videos go through the SAME strict trailerFilter (classifyVideo) +
+  // trailerRank pipeline as tracked shows.
+  const members = await loadFranchiseCatalogue(fetchOptions)
+  if (!members.length) return []
+  const perTarget = await mapWithConcurrency(members, async (member) => {
+    const videos = await fetchMediaVideos(member.mediaType, member.mediaId, fetchOptions)
     const context = {
-      mediaType: target.mediaType, mediaId: target.id, trackedShowId: null,
-      title: target.title, posterPath: null, franchise: target.franchise,
+      mediaType: member.mediaType, mediaId: member.mediaId, trackedShowId: null,
+      title: member.title, posterPath: member.posterPath ?? null, franchise: member.franchise,
     }
     return (Array.isArray(videos) ? videos : [])
       .filter((video) => classifyVideo(video).accepted)

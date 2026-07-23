@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import handler, {
   createAnnouncementsHandler, buildAnnouncementQueries, MAX_QUERIES, TERM_BUDGET,
+  createAcquisitionCache, ACQUISITION_CACHE_TTL_MS,
 } from './announcements.js'
+import { planFromShows } from '../../src/lib/discover/announcementPlan.js'
 
 function makeRes() {
   const headers = new Map()
@@ -101,10 +103,24 @@ describe('buildAnnouncementQueries', () => {
 })
 
 describe('announcements endpoint', () => {
-  it('rejects non-POST', async () => {
+  it('rejects an unsupported method (only GET and POST allowed)', async () => {
+    const res = makeRes()
+    await handler({ method: 'DELETE', query: {} }, res)
+    expect(res.statusCode).toBe(405)
+  })
+
+  it('rejects a GET with no plan token', async () => {
     const res = makeRes()
     await handler({ method: 'GET', query: {} }, res)
-    expect(res.statusCode).toBe(405)
+    expect(res.statusCode).toBe(400)
+    expect(res.body.error.code).toBe('MISSING_PLAN')
+  })
+
+  it('rejects a GET with a malformed plan token', async () => {
+    const res = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' } })({ method: 'GET', query: { plan: 'not-a-token' } }, res)
+    expect(res.statusCode).toBe(400)
+    expect(res.body.error.code).toBe('INVALID_PLAN')
   })
 
   it('rejects a body without a shows array', async () => {
@@ -208,12 +224,179 @@ describe('announcements endpoint', () => {
     expect(res.body.meta.failureCount).toBeGreaterThanOrEqual(1)
   })
 
-  it('surfaces a 502 only when every query fails (so the client keeps its cache)', async () => {
+  it('surfaces a 502 only when every query fails with no cache (so the client keeps its cache)', async () => {
     const fetchImpl = async () => { throw new Error('network down') }
     const res = makeRes()
-    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl })(
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache: createAcquisitionCache() })(
       { method: 'POST', body: { shows: [{ id: 1, title: 'From' }] } }, res,
     )
     expect(res.statusCode).toBe(502)
+  })
+})
+
+describe('announcements server cache (Part 12)', () => {
+  const shows = [{ id: 1, title: 'From' }, { id: 2, title: 'The Bear' }]
+  const otherShows = [{ id: 9, title: 'Severance' }]
+
+  function planUrl(list) {
+    return { plan: planFromShows(list).token }
+  }
+
+  it('1. first identical request performs upstream searches', async () => {
+    const cache = createAcquisitionCache()
+    const fetchImpl = vi.fn(async () => gnews([]))
+    const res = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })(
+      { method: 'GET', query: planUrl(shows) }, res,
+    )
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(0)
+    expect(res.body.meta.cache).toBe('miss')
+  })
+
+  it('2. second identical request within TTL performs zero upstream searches', async () => {
+    const cache = createAcquisitionCache()
+    const fetchImpl = vi.fn(async () => gnews([rawArticle()]))
+    const make = () => createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })
+    const first = makeRes()
+    await make()({ method: 'GET', query: planUrl(shows) }, first)
+    const callsAfterFirst = fetchImpl.mock.calls.length
+    const second = makeRes()
+    await make()({ method: 'GET', query: planUrl(shows) }, second)
+    expect(fetchImpl.mock.calls.length).toBe(callsAfterFirst) // no new upstream calls
+    expect(second.body.meta.cache).toBe('hit')
+    expect(second.body.articles.length).toBe(first.body.articles.length)
+  })
+
+  it('3. a changed tracked-show plan creates a new cache key (upstream runs again)', async () => {
+    const cache = createAcquisitionCache()
+    const fetchImpl = vi.fn(async () => gnews([]))
+    const handlerFn = createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })
+    await handlerFn({ method: 'GET', query: planUrl(shows) }, makeRes())
+    const callsAfterFirst = fetchImpl.mock.calls.length
+    const other = makeRes()
+    await handlerFn({ method: 'GET', query: planUrl(otherShows) }, other)
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(callsAfterFirst)
+    expect(other.body.meta.cache).toBe('miss')
+  })
+
+  it('4. an expired cache entry refreshes', async () => {
+    let now = 1_000_000
+    const cache = createAcquisitionCache()
+    const fetchImpl = vi.fn(async () => gnews([]))
+    // Freeze Date.now so we control TTL expiry.
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const handlerFn = createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })
+      await handlerFn({ method: 'GET', query: planUrl(shows) }, makeRes())
+      const callsAfterFirst = fetchImpl.mock.calls.length
+      now += ACQUISITION_CACHE_TTL_MS + 1 // step past the TTL
+      const res = makeRes()
+      await handlerFn({ method: 'GET', query: planUrl(shows) }, res)
+      expect(fetchImpl.mock.calls.length).toBeGreaterThan(callsAfterFirst)
+      expect(res.body.meta.cache).toBe('miss')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('5. a partial upstream failure still preserves usable candidates', async () => {
+    const cache = createAcquisitionCache()
+    let call = 0
+    const good = rawArticle({ url: 'https://deadline.com/good', title: 'Survivor renewal' })
+    // First query fails, the rest succeed -> partial failure, usable candidates.
+    const fetchImpl = async () => { call += 1; return call === 1 ? { ok: false, json: async () => ({}) } : gnews([good]) }
+    const res = makeRes()
+    const many = Array.from({ length: 20 }, (_, i) => ({ id: i, title: `Show Alpha Bravo ${i}` }))
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })(
+      { method: 'GET', query: planUrl(many) }, res,
+    )
+    expect(res.body.articles.map((a) => a.title)).toContain('Survivor renewal')
+    // The usable candidates were cached: a follow-up hit returns them with no calls.
+    const hit = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl: async () => { throw new Error('down') }, cache })(
+      { method: 'GET', query: planUrl(many) }, hit,
+    )
+    expect(hit.body.meta.cache).toBe('hit')
+    expect(hit.body.articles.map((a) => a.title)).toContain('Survivor renewal')
+  })
+
+  it('6. a full upstream failure returns stale cache when available (stale-if-error)', async () => {
+    let now = 5_000_000
+    const cache = createAcquisitionCache()
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const good = rawArticle({ url: 'https://deadline.com/stale', title: 'Cached renewal' })
+      // Seed the cache with a successful run.
+      await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl: async () => gnews([good]), cache })(
+        { method: 'GET', query: planUrl(shows) }, makeRes(),
+      )
+      // Expire it, then fail every upstream call.
+      now += ACQUISITION_CACHE_TTL_MS + 1
+      const res = makeRes()
+      await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl: async () => { throw new Error('down') }, cache })(
+        { method: 'GET', query: planUrl(shows) }, res,
+      )
+      expect(res.statusCode).toBe(200) // not a 502 — stale served
+      expect(res.body.meta.cache).toBe('stale')
+      expect(res.body.articles.map((a) => a.title)).toContain('Cached renewal')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('7. no cache contamination between differing query plans', async () => {
+    const cache = createAcquisitionCache()
+    const fromArticle = rawArticle({ url: 'https://deadline.com/from', title: 'From renewed' })
+    const sevArticle = rawArticle({ url: 'https://deadline.com/sev', title: 'Severance renewed' })
+    const fetchImpl = async (url) => {
+      const q = new URL(url).searchParams.get('q') ?? ''
+      if (q.includes('From')) return gnews([fromArticle])
+      if (q.includes('Severance')) return gnews([sevArticle])
+      return gnews([])
+    }
+    const handlerFn = createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })
+    const a = makeRes(); await handlerFn({ method: 'GET', query: planUrl(shows) }, a)
+    const b = makeRes(); await handlerFn({ method: 'GET', query: planUrl(otherShows) }, b)
+    expect(a.body.articles.map((x) => x.title)).toContain('From renewed')
+    expect(a.body.articles.map((x) => x.title)).not.toContain('Severance renewed')
+    expect(b.body.articles.map((x) => x.title)).toContain('Severance renewed')
+    expect(b.body.articles.map((x) => x.title)).not.toContain('From renewed')
+  })
+
+  it('8. cache corruption does not crash the endpoint', async () => {
+    // A cache whose read throws / returns garbage must be treated as a miss.
+    const corruptCache = {
+      read() { throw new Error('corrupt store') },
+      write() { /* noop */ },
+    }
+    const fetchImpl = async () => gnews([rawArticle()])
+    const res = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache: {
+      read() { try { return corruptCache.read() } catch { return null } }, write() {},
+    } })({ method: 'GET', query: planUrl(shows) }, res)
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('forces a refresh past the cache only through the explicit option', async () => {
+    const cache = createAcquisitionCache()
+    const fetchImpl = vi.fn(async () => gnews([]))
+    const handlerFn = createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl, cache })
+    await handlerFn({ method: 'GET', query: planUrl(shows) }, makeRes())
+    const afterFirst = fetchImpl.mock.calls.length
+    // Normal repeat -> hit, no calls.
+    await handlerFn({ method: 'GET', query: planUrl(shows) }, makeRes())
+    expect(fetchImpl.mock.calls.length).toBe(afterFirst)
+    // Explicit refresh -> bypasses the cache.
+    await handlerFn({ method: 'GET', query: { ...planUrl(shows), refresh: '1' } }, makeRes())
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(afterFirst)
+  })
+
+  it('POST returns the plan token so the client can switch to the cacheable GET', async () => {
+    const res = makeRes()
+    await createAnnouncementsHandler({ env: { GNEWS_API_KEY: 'k' }, fetchImpl: async () => gnews([]), cache: createAcquisitionCache() })(
+      { method: 'POST', body: { shows } }, res,
+    )
+    expect(typeof res.body.meta.planToken).toBe('string')
+    expect(res.body.meta.planToken).toBe(planFromShows(shows).token)
   })
 })
