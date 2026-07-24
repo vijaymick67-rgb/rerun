@@ -16,13 +16,12 @@ RERUN is a personal-only, mobile-first TV tracker PWA.
 6. Stop and report if the working tree contains unrelated uncommitted changes.
 7. Keep each task focused. Avoid unrelated refactors.
 8. Preserve existing protected product logic unless the task explicitly targets it.
-9. Before finishing, run:
-   - focused tests;
-   - full test suite;
-   - `npm run lint`;
-   - `npm run build`;
-   - `npm run check:encoding`;
-   - `git diff --check`.
+9. Use progressive validation to avoid waste:
+   - During implementation, run only the smallest relevant focused test.
+   - Do not repeatedly run the full test suite, lint, build, or encoding check after every edit.
+   - After focused tests pass and implementation is believed complete, run the full test suite once.
+   - Then run `npm run lint`, `npm run build`, `npm run check:encoding`, and `git diff --check`.
+   - Rerun a full validation command only when subsequent changes could reasonably affect its result.
 10. Push the task branch and open a draft pull request.
 11. Do not merge any pull request.
 12. Report the branch name, final commit SHA, PR number, files changed, validation results, and remaining uncertainty.
