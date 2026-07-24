@@ -19,8 +19,10 @@ export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 // v4: getShowDetails() now also trims in `next_episode_to_air` — shows
 // cached before this holds it undefined forever, which would silently fall
 // back to "Caught up" instead of a premiere countdown.
-// v6: normalized details retain compact genre names for Stats analytics.
-const CACHE_SCHEMA_VERSION = '6'
+// Show-detail shape revisions use the detail-specific cache key below. Keep
+// this global schema stable so adding genres does not wipe unrelated cached
+// season episode responses that Stats can continue to reuse.
+const CACHE_SCHEMA_VERSION = '5'
 const SCHEMA_KEY = 'tmdb_cache_schema_version'
 
 function pruneCacheIfSchemaChanged() {
