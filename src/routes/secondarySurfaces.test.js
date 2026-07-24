@@ -25,6 +25,8 @@ describe('cinematic secondary surfaces', () => {
     expect(stats).toContain('{formatWatchTime(totalMinutes)}')
     expect(stats).toContain('aria-label="Personal insight"')
     expect(stats).not.toContain('Daily insight')
+    expect(stats).toContain('<GenreOrbit distribution={genreDistribution} />')
+    expect(stats).toContain('stats-loading__orbit skeleton-block')
     // The long open "Show history" grid was collapsed into the compact
     // All(n) preview — it must not linger on the main page alongside it.
     expect(stats).not.toContain('Show history')

@@ -12,6 +12,8 @@
 //   :v3 added `episode_run_time` (per-show runtime fallback used by Stats
 //       when an individual episode's own runtime is null)
 //   :v4 added `last_episode_to_air` for post-air archived-show eligibility
+//   :v5 added compact genre names for Stats analytics. Networks and genres are
+//       both retained as name arrays; no raw TMDB objects enter localStorage.
 export function normalizeShowDetails(data) {
   return {
     id: data.id,
@@ -40,6 +42,9 @@ export function normalizeShowDetails(data) {
         }
       : null,
     networks: (data.networks ?? []).map((network) => network.name),
+    genres: (data.genres ?? [])
+      .map((genre) => genre?.name?.trim())
+      .filter(Boolean),
     seasons: (data.seasons ?? []).map((season) => ({
       season_number: season.season_number,
       name: season.name,

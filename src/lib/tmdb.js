@@ -19,7 +19,8 @@ export const POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 // v4: getShowDetails() now also trims in `next_episode_to_air` — shows
 // cached before this holds it undefined forever, which would silently fall
 // back to "Caught up" instead of a premiere countdown.
-const CACHE_SCHEMA_VERSION = '5'
+// v6: normalized details retain compact genre names for Stats analytics.
+const CACHE_SCHEMA_VERSION = '6'
 const SCHEMA_KEY = 'tmdb_cache_schema_version'
 
 function pruneCacheIfSchemaChanged() {
@@ -129,7 +130,7 @@ export async function searchShows(query) {
 // platform threshold from this already-fetched metadata. See tmdbNormalize.js
 // for the shared trimming logic and its cache-schema version history.
 export async function getShowDetails(tmdbId, options = {}) {
-  const cacheKey = `/tv/${tmdbId}:v4`
+  const cacheKey = `/tv/${tmdbId}:v5`
   const cached = readCache(cacheKey)
   if (cached && !options.refreshDynamic) return cached
   const cachedAt = readCacheTime(cacheKey)

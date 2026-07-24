@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getShowDetails, getSeasonEpisodes } from '../lib/tmdb'
-import { episodeKey, localTodayISO } from '../lib/watchHelpers'
+import { localTodayISO } from '../lib/watchHelpers'
 import { fetchWatchedEpisodes } from '../lib/watchedEpisodes'
 import {
   hideTrackedShow,
@@ -13,25 +13,34 @@ import { patchShowDetailState } from '../lib/detailCache'
 import { clearWatchingCache, removeWatchingShow } from '../lib/watchingCache'
 import { reportDataError, withTimeout } from '../lib/dataLoading'
 import StatsAllPreview from '../components/StatsAllPreview'
+import GenreOrbit from '../components/GenreOrbit'
 import StatsAllShows from './StatsAllShows'
 import {
   filterVisibleStatsRows,
   removeShowFromStatsState,
   toggleStatsActionSheet,
 } from '../lib/showState'
+import {
+  buildComputedStatsShow,
+  buildFallbackStatsShow,
+} from '../lib/insights/statsAnalytics'
+import { buildGenreDistribution } from '../lib/insights/genreDistribution'
+import {
+  buildAnalyticsFingerprint,
+  buildViewingInsightCandidates,
+  clearInsightHistory,
+  selectStoredDailyInsight,
+} from '../lib/insights/viewingInsights'
 
 // v1: { shows, totalMinutes, insights }. Stale-while-revalidate, same pattern
 // as Watching.jsx — the underlying TMDB season data is already localStorage-
 // cached, so a revisit paints instantly and refreshes in the background.
-// v2: one-time cache-bust so the Settings bulk-mark-watched writes are picked
-// up — old v1 entries are simply never matched and a fresh Supabase fetch runs.
-const CACHE_KEY = 'stats_cache:v3'
-
-// When neither an episode's own runtime nor the show's average typical runtime
-// is known, assume this many minutes per episode. This is the single flat
-// fallback for the time banner — search DEFAULT_EPISODE_RUNTIME_MINUTES to
-// adjust it if it ever proves too rough.
-const DEFAULT_EPISODE_RUNTIME_MINUTES = 45
+// v2/v3 were one-time data refreshes. v4 retains compact per-show analytics
+// for Genre Orbit and structured insights. Generated copy and distributions
+// are derived from the cached shows rather than persisted.
+export const STATS_CACHE_KEY = 'stats_cache:v4'
+const STATS_CACHE_VERSION = 4
+const LEGACY_STATS_CACHE_KEYS = ['stats_cache:v3']
 
 const MINUTES_PER_HOUR = 60
 const MINUTES_PER_DAY = 60 * 24
@@ -41,10 +50,20 @@ const DAYS_PER_MONTH = 30
 
 function loadCache() {
   try {
-    const raw = localStorage.getItem(CACHE_KEY)
+    const raw = localStorage.getItem(STATS_CACHE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : null
+    if (
+      !parsed ||
+      parsed.version !== STATS_CACHE_VERSION ||
+      !Array.isArray(parsed.shows) ||
+      !Array.isArray(parsed.watchedRows) ||
+      !Number.isFinite(parsed.totalMinutes) ||
+      !parsed.shows.every((show) => Array.isArray(show.watchedEpisodeRuntimes))
+    ) {
+      return null
+    }
+    return parsed
   } catch {
     return null
   }
@@ -52,7 +71,10 @@ function loadCache() {
 
 function saveCache(payload) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
+    localStorage.setItem(
+      STATS_CACHE_KEY,
+      JSON.stringify({ version: STATS_CACHE_VERSION, ...payload }),
+    )
   } catch {
     // ignore quota/serialization errors, cache is best-effort
   }
@@ -63,27 +85,12 @@ function saveCache(payload) {
 // the next owner signs in and repopulates it from Supabase.
 export function clearStatsCache() {
   try {
-    localStorage.removeItem(CACHE_KEY)
+    localStorage.removeItem(STATS_CACHE_KEY)
+    for (const key of LEGACY_STATS_CACHE_KEYS) localStorage.removeItem(key)
   } catch {
     // ignore
   }
-}
-
-// Runtime in minutes for a single watched episode, applying the documented
-// fallback chain: the episode's own runtime → the show's average typical
-// runtime → a flat default.
-function episodeRuntimeMinutes(ownRuntime, showRunTimeAvg) {
-  if (typeof ownRuntime === 'number' && ownRuntime > 0) return ownRuntime
-  if (showRunTimeAvg != null) return showRunTimeAvg
-  return DEFAULT_EPISODE_RUNTIME_MINUTES
-}
-
-// Average of TMDB's episode_run_time array (a show can list a few typical
-// runtimes), or null if the show has none.
-function averageRunTime(episodeRunTime) {
-  const values = (episodeRunTime ?? []).filter((n) => typeof n === 'number' && n > 0)
-  if (values.length === 0) return null
-  return values.reduce((sum, n) => sum + n, 0) / values.length
+  clearInsightHistory()
 }
 
 // Total watched minutes → a "X months Y days" style human string.
@@ -104,150 +111,35 @@ function formatWatchTime(totalMinutes) {
   return `${monthPart} ${days} day${days === 1 ? '' : 's'}`
 }
 
-// Small deterministic string hash — used to turn today's date into a stable
-// index so the insight is the same all day and rotates the next.
-function hashString(str) {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash * 31 + str.charCodeAt(i)) | 0
-  }
-  return Math.abs(hash)
-}
-
-// Build the pool of eligible insight sentences. Only insights whose data is
-// substantial enough to read sensibly are included, so the daily pick never
-// lands on something empty or nonsensical.
-function buildInsights({ shows, watchedRows, totalWatchedEpisodes, totalMinutes }) {
-  const insights = []
-  const showCount = shows.length
-  if (showCount === 0 || totalWatchedEpisodes === 0) return insights
-
-  const showById = new Map(shows.map((show) => [show.tmdb_id, show]))
-
-  // Per-show rollups derived once from the raw watched rows: which distinct
-  // seasons were touched, and the most recent watch timestamp.
-  const seasonsByShow = new Map()
-  const latestWatchByShow = new Map()
-  for (const row of watchedRows) {
-    if (!seasonsByShow.has(row.tmdb_show_id)) {
-      seasonsByShow.set(row.tmdb_show_id, new Set())
-    }
-    seasonsByShow.get(row.tmdb_show_id).add(row.season_number)
-
-    const ts = new Date(row.watched_at).getTime()
-    if (!Number.isNaN(ts) && ts > (latestWatchByShow.get(row.tmdb_show_id) ?? -Infinity)) {
-      latestWatchByShow.set(row.tmdb_show_id, ts)
-    }
-  }
-
-  // A simple summary — always valid once anything's been watched.
-  insights.push(
-    `You've watched ${totalWatchedEpisodes} episode${totalWatchedEpisodes === 1 ? '' : 's'} across ${showCount} show${showCount === 1 ? '' : 's'}.`,
-  )
-
-  // Total distinct shows — only interesting once there's more than one.
-  if (showCount >= 2) {
-    insights.push(`You've dipped into ${showCount} different shows so far.`)
-  }
-
-  // Most-watched network — tally each show's watched count against its primary
-  // (first-listed) network to avoid double-counting sibling networks.
-  const networkTotals = new Map()
-  for (const show of shows) {
-    const primary = show.networks?.[0]
-    if (!primary) continue
-    networkTotals.set(primary, (networkTotals.get(primary) ?? 0) + show.watched)
-  }
-  let topNetwork = null
-  let topNetworkCount = 0
-  for (const [name, count] of networkTotals) {
-    if (count > topNetworkCount) {
-      topNetwork = name
-      topNetworkCount = count
-    }
-  }
-  if (topNetwork && topNetworkCount > 0) {
-    insights.push(`${topNetwork} has been your most-watched network lately.`)
-  }
-
-  // Distinct networks watched across — only reads as an insight once there's
-  // real spread, so gate on at least a couple of different primary networks.
-  const distinctNetworks = networkTotals.size
-  if (distinctNetworks >= 2) {
-    insights.push(`Your watching spans ${distinctNetworks} different networks.`)
-  }
-
-  // Biggest watch by episode count — needs a few episodes to be worth calling out.
-  let biggest = null
-  for (const show of shows) {
-    if (!biggest || show.watched > biggest.watched) biggest = show
-  }
-  if (biggest && biggest.watched >= 3) {
-    insights.push(
-      `You're ${biggest.watched} episodes deep into ${biggest.name} — your biggest watch yet.`,
-    )
-  }
-
-  // Show spanning the most seasons — skip unless the leader is genuinely
-  // multi-season, otherwise "most seasons" is a meaningless tie at one apiece.
-  let mostSeasonsShowId = null
-  let mostSeasonsCount = 0
-  for (const [showId, seasons] of seasonsByShow) {
-    if (seasons.size > mostSeasonsCount) {
-      mostSeasonsShowId = showId
-      mostSeasonsCount = seasons.size
-    }
-  }
-  const mostSeasonsShow = showById.get(mostSeasonsShowId)
-  if (mostSeasonsShow && mostSeasonsCount >= 2) {
-    insights.push(
-      `You've watched ${mostSeasonsCount} seasons of ${mostSeasonsShow.name} — more than any other show.`,
-    )
-  }
-
-  // Most recently finished show — a show counts as finished only when every
-  // episode we know about is watched. Needs at least one such show.
-  let latestFinishedShow = null
-  let latestFinishedAt = -Infinity
-  for (const show of shows) {
-    if (show.total <= 0 || show.watched < show.total) continue
-    const finishedAt = latestWatchByShow.get(show.tmdb_id) ?? -Infinity
-    if (finishedAt > latestFinishedAt) {
-      latestFinishedAt = finishedAt
-      latestFinishedShow = show
-    }
-  }
-  if (latestFinishedShow) {
-    insights.push(`${latestFinishedShow.name} was the last show you finished off.`)
-  }
-
-  // Average episode runtime across everything watched — a friendly round
-  // figure, only worth showing once there's a decent sample of episodes.
-  if (totalWatchedEpisodes >= 5 && totalMinutes > 0) {
-    const avgMinutes = Math.round(totalMinutes / totalWatchedEpisodes)
-    insights.push(`Your average episode runs about ${avgMinutes} minutes.`)
-  }
-
-  return insights
-}
-
 function buildVisibleStatsState(shows, watchedRows) {
   const totalMinutes = shows.reduce((sum, show) => sum + show.minutes, 0)
-  const insights = buildInsights({
+  const genreDistribution = buildGenreDistribution(shows)
+  const candidates = buildViewingInsightCandidates({
     shows,
-    watchedRows,
-    totalWatchedEpisodes: watchedRows.length,
     totalMinutes,
+    genreDistribution,
   })
-  return { shows, watchedRows, totalMinutes, insights }
+  const fingerprint = buildAnalyticsFingerprint(shows)
+  const insight = selectStoredDailyInsight({
+    candidates,
+    date: localTodayISO(),
+    fingerprint,
+  })
+  return { shows, watchedRows, totalMinutes, genreDistribution, insight }
 }
 
 export default function Stats() {
   const [cached] = useState(() => loadCache())
-  const [shows, setShows] = useState(() => cached?.shows ?? [])
-  const [watchedRows, setWatchedRows] = useState(() => cached?.watchedRows ?? [])
-  const [totalMinutes, setTotalMinutes] = useState(() => cached?.totalMinutes ?? 0)
-  const [insights, setInsights] = useState(() => cached?.insights ?? [])
+  const [statsState, setStatsState] = useState(() =>
+    buildVisibleStatsState(cached?.shows ?? [], cached?.watchedRows ?? []),
+  )
+  const {
+    shows,
+    watchedRows,
+    totalMinutes,
+    genreDistribution,
+    insight,
+  } = statsState
   const [loading, setLoading] = useState(() => cached === null)
   const [error, setError] = useState(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
@@ -280,11 +172,9 @@ export default function Stats() {
         const rows = watchedRows ?? []
         if (rows.length === 0) {
           if (!ignore) {
-            setShows([])
-            setWatchedRows([])
-            setTotalMinutes(0)
-            setInsights([])
-            saveCache({ shows: [], watchedRows: [], totalMinutes: 0, insights: [] })
+            const next = buildVisibleStatsState([], [])
+            setStatsState(next)
+            saveCache({ shows: [], watchedRows: [], totalMinutes: 0 })
           }
           return
         }
@@ -349,52 +239,22 @@ export default function Stats() {
 
               // Map every real episode (seasons > 0) → its runtime, matching
               // ShowDetail's header which counts across the loaded seasons.
-              const runtimeByKey = new Map()
-              seasons.forEach((season, i) => {
-                for (const ep of episodesArrays[i].episodes) {
-                  runtimeByKey.set(episodeKey(season.season_number, ep.episode_number), ep.runtime)
-                }
+              return buildComputedStatsShow({
+                showId,
+                tracked,
+                details,
+                watchedRows: showWatchedRows,
+                seasons,
+                episodesArrays,
               })
-
-              const showRunTimeAvg = averageRunTime(details.episode_run_time)
-
-              // Sum runtime over every watched episode of this show.
-              let minutes = 0
-              for (const row of showWatchedRows) {
-                const key = episodeKey(row.season_number, row.episode_number)
-                minutes += episodeRuntimeMinutes(runtimeByKey.get(key), showRunTimeAvg)
-              }
-
-              const total = runtimeByKey.size
-              const watched = showWatchedRows.filter((row) =>
-                runtimeByKey.has(episodeKey(row.season_number, row.episode_number)),
-              ).length
-
-              return {
-                tmdb_id: showId,
-                name: tracked?.name ?? details.name ?? 'Unknown show',
-                poster_path: tracked?.poster_path ?? details.poster_path ?? null,
-                finished_at: tracked?.finished_at ?? null,
-                hidden_at: tracked?.hidden_at ?? null,
-                watched,
-                total,
-                networks: details.networks ?? [],
-                minutes,
-              }
             } catch {
               // TMDB fetch failed for this show — degrade gracefully rather than
               // dropping it: count each watched row at the flat default runtime.
-              return {
-                tmdb_id: showId,
-                name: tracked?.name ?? 'Unknown show',
-                poster_path: tracked?.poster_path ?? null,
-                finished_at: tracked?.finished_at ?? null,
-                hidden_at: tracked?.hidden_at ?? null,
-                watched: showWatchedRows.length,
-                total: showWatchedRows.length,
-                networks: [],
-                minutes: showWatchedRows.length * DEFAULT_EPISODE_RUNTIME_MINUTES,
-              }
+              return buildFallbackStatsShow({
+                showId,
+                tracked,
+                watchedRows: showWatchedRows,
+              })
             }
           }),
         )
@@ -407,28 +267,16 @@ export default function Stats() {
           isRepresentedInStats(show, visibleWatchedByShowId.get(show.tmdb_id)),
         )
 
-        const totalRuntimeMinutes = represented.reduce((sum, show) => sum + show.minutes, 0)
-
         represented.sort((a, b) =>
           a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
         )
 
-        const nextInsights = buildInsights({
-          shows: represented,
-          watchedRows: visibleRows,
-          totalWatchedEpisodes: visibleRows.length,
-          totalMinutes: totalRuntimeMinutes,
-        })
-
-        setShows(represented)
-        setWatchedRows(visibleRows)
-        setTotalMinutes(totalRuntimeMinutes)
-        setInsights(nextInsights)
+        const next = buildVisibleStatsState(represented, visibleRows)
+        setStatsState(next)
         saveCache({
           shows: represented,
           watchedRows: visibleRows,
-          totalMinutes: totalRuntimeMinutes,
-          insights: nextInsights,
+          totalMinutes: next.totalMinutes,
         })
       } catch (loadFailure) {
         const diagnostic = reportDataError(loadFailure, {
@@ -452,15 +300,11 @@ export default function Stats() {
 
   function commitStatsState(nextShows, nextWatchedRows) {
     const next = buildVisibleStatsState(nextShows, nextWatchedRows)
-    setShows(next.shows)
-    setWatchedRows(next.watchedRows)
-    setTotalMinutes(next.totalMinutes)
-    setInsights(next.insights)
+    setStatsState(next)
     saveCache({
       shows: next.shows,
       watchedRows: next.watchedRows,
       totalMinutes: next.totalMinutes,
-      insights: next.insights,
     })
   }
 
@@ -519,12 +363,6 @@ export default function Stats() {
     }
   }
 
-  // Pick one insight for the whole day, deterministically from today's date.
-  // Deriving it at render (rather than storing the chosen string) means a cache
-  // written yesterday still surfaces today's insight without a refetch.
-  const insight =
-    insights.length > 0 ? insights[hashString(localTodayISO()) % insights.length] : null
-
   const hasData = shows.length > 0
 
   function handleRetry() {
@@ -549,6 +387,7 @@ export default function Stats() {
             hasData={hasData}
             totalMinutes={totalMinutes}
             insight={insight}
+            genreDistribution={genreDistribution}
             shows={shows}
             onRetry={handleRetry}
           />
@@ -583,7 +422,16 @@ export default function Stats() {
 // The main compact Insights view — summary, personal insight, and the
 // All(n) collection preview. Kept inline (rather than split into its own
 // file) so this file still visibly owns the "app-page" main-tab layout.
-function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, onRetry }) {
+function StatsMainView({
+  loading,
+  error,
+  hasData,
+  totalMinutes,
+  insight,
+  genreDistribution,
+  shows,
+  onRetry,
+}) {
   return (
     <div className="stats-page app-page px-4 pb-4">
       <header className="stats-page__header">
@@ -594,6 +442,7 @@ function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, 
         <div className="stats-loading" aria-label="Loading insights" role="status">
           <div className="stats-loading__summary skeleton-block" />
           <div className="stats-loading__insight skeleton-block" />
+          <div className="stats-loading__orbit skeleton-block" />
           <div className="stats-loading__label skeleton-block" />
           <div className="stats-loading__archive skeleton-block" />
         </div>
@@ -632,9 +481,13 @@ function StatsMainView({ loading, error, hasData, totalMinutes, insight, shows, 
 
           {insight && (
             <section className="stats-insight content-surface" aria-label="Personal insight">
-              <p className="stats-insight__copy type-body text-(--color-text-secondary)">{insight}</p>
+              <p className="stats-insight__copy type-body text-(--color-text-secondary)">
+                {insight.text}
+              </p>
             </section>
           )}
+
+          <GenreOrbit distribution={genreDistribution} />
 
           <StatsAllPreview shows={shows} />
         </>
