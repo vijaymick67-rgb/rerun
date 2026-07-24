@@ -70,6 +70,39 @@ function watchedRow(tmdbId, season, episode) {
   return { tmdb_show_id: tmdbId, season_number: season, episode_number: episode, watched_at: '2026-01-01T00:00:00Z' }
 }
 
+function cachedShow(tmdbId, name, genre = 'Drama') {
+  return {
+    tmdb_id: tmdbId,
+    name,
+    poster_path: null,
+    finished_at: null,
+    hidden_at: null,
+    watched: 1,
+    total: 1,
+    totalKnownEpisodeCount: 1,
+    watchedEpisodeCount: 1,
+    watchedEpisodeRuntimes: [40],
+    distinctWatchedSeasons: 1,
+    networks: [],
+    genres: [genre],
+    minutes: 40,
+    metadataComplete: true,
+    completionRatio: 1,
+  }
+}
+
+function seedStatsCache() {
+  localStorage.setItem('stats_cache:v4', JSON.stringify({
+    version: 4,
+    shows: [
+      cachedShow(501, 'Alpha Show', 'Drama'),
+      cachedShow(502, 'Beta Show', 'Comedy'),
+    ],
+    watchedRows: [watchedRow(501, 1, 1), watchedRow(502, 1, 1)],
+    totalMinutes: 80,
+  }))
+}
+
 let container = null
 let root = null
 
@@ -107,7 +140,7 @@ beforeEach(() => {
     error: null,
   }
   getShowDetails.mockResolvedValue({
-    name: 'Show', poster_path: null, seasons: [{ season_number: 1 }], episode_run_time: [40], networks: [],
+    name: 'Show', poster_path: null, seasons: [{ season_number: 1 }], episode_run_time: [40], networks: [], genres: ['Drama'],
   })
   getSeasonEpisodes.mockResolvedValue({ episodes: [{ episode_number: 1, runtime: 40 }] })
   localStorage.clear()
@@ -126,6 +159,24 @@ function insightsTab() {
 }
 
 describe('Stats + StatsAllShows integration — shared state, no second loader', () => {
+  it('renders Genre Orbit between the daily insight and All preview', async () => {
+    await mount(['/stats'])
+    const insight = container.querySelector('.stats-insight')
+    const orbit = container.querySelector('.genre-orbit')
+    const preview = container.querySelector('.stats-archive-preview')
+    expect(insight).not.toBeNull()
+    expect(orbit).not.toBeNull()
+    expect(preview).not.toBeNull()
+    expect(
+      insight.compareDocumentPosition(orbit) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      orbit.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(container.textContent).toContain('Drama')
+    expect(container.textContent).toContain('100%')
+  })
+
   it('loads once, renders All(4) on the main page, and does not refetch TMDB/Supabase when entering /stats/all', async () => {
     // The preview's chevron/more-link only renders once a history actually
     // clips (4+ shows) — bump past the 2-show default fixture so there's a
@@ -177,20 +228,43 @@ describe('Stats + StatsAllShows integration — shared state, no second loader',
 
   it('direct reload at /stats/all paints instantly from the Stats cache — no skeleton, no blank screen', async () => {
     // Seed the same cache Stats itself writes, simulating a prior /stats visit.
-    localStorage.setItem('stats_cache:v3', JSON.stringify({
-      shows: [
-        { tmdb_id: 501, name: 'Alpha Show', poster_path: null, finished_at: null, hidden_at: null, watched: 1, total: 1, networks: [], minutes: 40 },
-        { tmdb_id: 502, name: 'Beta Show', poster_path: null, finished_at: null, hidden_at: null, watched: 1, total: 1, networks: [], minutes: 40 },
-      ],
-      watchedRows: [watchedRow(501, 1, 1), watchedRow(502, 1, 1)],
-      totalMinutes: 80,
-      insights: [],
-    }))
+    seedStatsCache()
 
     await mount(['/stats/all'])
     expect(container.querySelectorAll('.skeleton-block').length).toBe(0)
     expect(container.textContent).toContain('Alpha Show')
     expect(container.textContent).toContain('Beta Show')
+  })
+
+  it('keeps cached insight and Genre Orbit visible when background refresh fails', async () => {
+    seedStatsCache()
+    watchedEpisodesResult = {
+      data: null,
+      error: { message: 'offline' },
+    }
+
+    await mount(['/stats'])
+    expect(container.textContent).toContain('Couldn')
+    expect(container.querySelector('.stats-insight')).not.toBeNull()
+    expect(container.querySelector('.genre-orbit')).not.toBeNull()
+    expect(container.textContent).toContain('All(2)')
+  })
+
+  it('ignores the legacy generic-insight cache and writes the v4 computed shape', async () => {
+    localStorage.setItem('stats_cache:v3', JSON.stringify({
+      shows: [cachedShow(999, 'Stale Show')],
+      watchedRows: [watchedRow(999, 1, 1)],
+      totalMinutes: 40,
+      insights: ['A stale generic sentence.'],
+    }))
+
+    await mount(['/stats'])
+    expect(container.textContent).not.toContain('A stale generic sentence.')
+    expect(getShowDetails).toHaveBeenCalled()
+    const nextCache = JSON.parse(localStorage.getItem('stats_cache:v4'))
+    expect(nextCache.version).toBe(4)
+    expect(nextCache).not.toHaveProperty('insights')
+    expect(nextCache).not.toHaveProperty('genreDistribution')
   })
 })
 
@@ -258,8 +332,10 @@ describe('Stats + StatsAllShows integration — actions update shared state', ()
 describe('Stats cache export is unaffected by the routing refactor', () => {
   it('clearStatsCache still clears the same cache key', async () => {
     await mount(['/stats'])
-    expect(localStorage.getItem('stats_cache:v3')).not.toBeNull()
+    expect(localStorage.getItem('stats_cache:v4')).not.toBeNull()
+    expect(localStorage.getItem('stats_insight_history:v1')).not.toBeNull()
     clearStatsCache()
-    expect(localStorage.getItem('stats_cache:v3')).toBeNull()
+    expect(localStorage.getItem('stats_cache:v4')).toBeNull()
+    expect(localStorage.getItem('stats_insight_history:v1')).toBeNull()
   })
 })
